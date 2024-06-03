@@ -3,8 +3,6 @@
 
 from typing import List, Optional
 
-import fire
-
 from llama import Llama, Dialog
 
 
@@ -101,4 +99,4 @@ If a question does not make any sense, or is not factually coherent, explain why
 
 
 if __name__ == "__main__":
-    fire.Fire(main)
+    main(ckpt_dir = "llama-2-7b-chat", tokenizer_path = "tokenizer.model")
