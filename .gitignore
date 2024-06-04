@@ -1,5 +1,6 @@
 # 模型权重
 *.pth
+*.pt
 *.bin
 
 .vscode
