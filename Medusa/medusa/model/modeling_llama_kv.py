@@ -864,10 +864,13 @@ class LlamaModel(LlamaPreTrainedModel):
         past_key_values_length = 0
 
         if past_key_values is not None:
+            # 获取KVCache的current_length
             past_key_values_length = past_key_values[0][0].shape[2]
+            # 包括当前推理序列的总seq_length
             seq_length_with_past = seq_length_with_past + past_key_values_length
 
         if position_ids is None:
+            # 生成待推理新序列的position_ids
             device = input_ids.device if input_ids is not None else inputs_embeds.device
             position_ids = torch.arange(
                 past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
@@ -879,6 +882,7 @@ class LlamaModel(LlamaPreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
         # embed positions
+        # prefilling 推理步骤的时候attention_mask为None
         if attention_mask is None:
             attention_mask = torch.ones(
                 (batch_size, seq_length_with_past), dtype=torch.bool, device=inputs_embeds.device
@@ -890,6 +894,7 @@ class LlamaModel(LlamaPreTrainedModel):
             else:
                 padding_mask = None
 
+        # decoding推理步骤的时候为medusa tree attention mask
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
         )
@@ -911,6 +916,7 @@ class LlamaModel(LlamaPreTrainedModel):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = () if use_cache else None
 
+        # 遍历所有decoder层
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -930,6 +936,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids
                 )
             else:
+                # 带着past_key_value进行decoding阶段计算
                 layer_outputs = decoder_layer(
                     hidden_states,
                     attention_mask=attention_mask,
@@ -942,6 +949,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
             hidden_states = layer_outputs[0]
 
+            # 收集新产生的KVCache
             if use_cache:
                 next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
 

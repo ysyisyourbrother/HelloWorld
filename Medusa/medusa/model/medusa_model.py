@@ -201,6 +201,7 @@ class MedusaModelABC(nn.Module):
             )
         with torch.inference_mode():
             # Pass input through the base model
+            # 注意：执行的是LlamaModel.forward(),不是LlamaForCausalLM.forward()
             outputs = self.base_model.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -277,6 +278,7 @@ class MedusaModelABC(nn.Module):
             medusa_buffers = self.medusa_buffers
         else:
             # Initialize the medusa buffer
+            # 参考：https://github.com/FasterDecoding/Medusa/blob/main/notebooks/medusa_configuration_explained.ipynb
             medusa_buffers = generate_medusa_buffers(
                 medusa_choices, device=self.base_model.device
             )
@@ -290,7 +292,7 @@ class MedusaModelABC(nn.Module):
             current_length_data = self.current_length_data
             # Reset the past key and value states
             current_length_data.zero_()
-        else:
+        else: # 为每一个decoder层都创建KVCache存储
             (
                 past_key_values,
                 past_key_values_data,
@@ -304,6 +306,7 @@ class MedusaModelABC(nn.Module):
 
         reset_medusa_mode(self)
         # Initialize tree attention mask and process prefill tokens
+        # 处理prefilling的tokens，同时生成初始medusa_logits
         medusa_logits, logits = initialize_medusa(
             input_ids, self, medusa_buffers["medusa_attn_mask"], past_key_values
         )
@@ -311,6 +314,7 @@ class MedusaModelABC(nn.Module):
         new_token = 0
         last_round_token = 0
 
+        # 使用medusa_logits生成投机采样的多个candidates
         for idx in range(max_steps):
             # Generate candidates with topk predictions from Medusa heads
             candidates, tree_candidates = generate_candidates(
@@ -326,6 +330,7 @@ class MedusaModelABC(nn.Module):
                 fast=fast,
             )
 
+            # 将token tree输入model再次执行前向传播，验证candidate的可行性
             # Use tree attention to verify the candidates and get predictions
             medusa_logits, logits, outputs = tree_decoding(
                 self,
@@ -337,11 +342,13 @@ class MedusaModelABC(nn.Module):
             )
 
             # Evaluate the posterior of the candidates to select the accepted candidate prefix
+            # 选择最终被接受的tokens
             best_candidate, accept_length = evaluate_posterior(
                 logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
             )
 
             # Update the input_ids and logits
+            # 使用上一轮采样产生的medusa logits用来下一轮的token candidate生成
             input_ids, logits, medusa_logits, new_token = update_inference_inputs(
                 input_ids,
                 candidates,
@@ -356,6 +363,7 @@ class MedusaModelABC(nn.Module):
                 current_length_data,
             )
 
+            # 返回generator用来返回推理结果
             yield {
                 "text": self.tokenizer.decode(
                     input_ids[0, input_len:],
