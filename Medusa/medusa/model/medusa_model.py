@@ -201,6 +201,7 @@ class MedusaModelABC(nn.Module):
             )
         with torch.inference_mode():
             # Pass input through the base model
+            # self.base_model 是 MedusaModelLlama,包含model(LlamaModel), lm_head(Linear),medusa_head(5xResBlock)
             # 注意：执行的是LlamaModel.forward(),不是LlamaForCausalLM.forward()
             outputs = self.base_model.model(
                 input_ids=input_ids,
@@ -209,7 +210,7 @@ class MedusaModelABC(nn.Module):
                 position_ids=position_ids,
                 **kwargs,
             )
-            if output_orig:
+            if output_orig: # 这里指的是LlamaForCausalLM的结果, 经过model(LlamaModel) + lm_head(Linear)
                 orig = self.base_model.lm_head(outputs[0])
         # Clone the output hidden states
         hidden_states = outputs[0].clone()
@@ -220,6 +221,7 @@ class MedusaModelABC(nn.Module):
         if output_orig:
             return torch.stack(medusa_logits, dim=0), outputs, orig
         return torch.stack(medusa_logits, dim=0)
+    
     def get_medusa_choice(self, model_name):
         if 'vicuna' in model_name:
             if '7b' in model_name:
@@ -310,7 +312,6 @@ class MedusaModelABC(nn.Module):
         medusa_logits, logits = initialize_medusa(
             input_ids, self, medusa_buffers["medusa_attn_mask"], past_key_values
         )
-
         new_token = 0
         last_round_token = 0
 
@@ -329,7 +330,6 @@ class MedusaModelABC(nn.Module):
                 sampling=sampling,
                 fast=fast,
             )
-
             # 将token tree输入model再次执行前向传播，验证candidate的可行性
             # Use tree attention to verify the candidates and get predictions
             medusa_logits, logits, outputs = tree_decoding(
@@ -340,7 +340,6 @@ class MedusaModelABC(nn.Module):
                 input_ids,
                 medusa_buffers["retrieve_indices"],
             )
-
             # Evaluate the posterior of the candidates to select the accepted candidate prefix
             # 选择最终被接受的tokens
             best_candidate, accept_length = evaluate_posterior(
@@ -362,7 +361,6 @@ class MedusaModelABC(nn.Module):
                 past_key_values_data,
                 current_length_data,
             )
-
             # 返回generator用来返回推理结果
             yield {
                 "text": self.tokenizer.decode(

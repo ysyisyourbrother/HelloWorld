@@ -19,6 +19,7 @@ def main(args):
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
         model.base_model.device
     )
+    
     output_stream = model.medusa_generate(
         input_ids,
         temperature=args.temperature,
