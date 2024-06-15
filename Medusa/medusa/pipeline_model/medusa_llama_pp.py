@@ -505,38 +505,35 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
     def generate_candidates(
         self,
         medusa_logits, 
-        logits, 
-        temperature = 0, 
-        posterior_threshold=0.3, 
-        posterior_alpha = 0.09, 
-        top_p=0.8, 
-        sampling = 'typical', 
-        fast = True):
-            assert self.config.is_first_stage
+        logits, ):
+            assert self.config.is_last_stage
             candidates, tree_candidates = generate_candidates(
                     medusa_logits,
                     logits,
                     self.medusa_buffers["tree_indices"],
                     self.medusa_buffers["retrieve_indices"],
-                    temperature=temperature,
-                    posterior_alpha=posterior_alpha,
-                    posterior_threshold=posterior_threshold,
-                    top_p=top_p,
-                    sampling=sampling,
-                    fast=fast,
+                    temperature=self.config.temperature,
+                    posterior_alpha=self.config.posterior_alpha,
+                    posterior_threshold=self.config.posterior_threshold,
+                    top_p=self.config.top_p,
+                    sampling=self.config.sampling,
+                    fast=self.config.fast,
                 )
             return candidates, tree_candidates
     def evaluate_posterior(self,
                            logits,
                            candidates,        
-                           temperature=0.0, 
-                           posterior_threshold=0.09,
-                           posterior_alpha=0.3,top_p=0.8,
-                           sampling = 'typical', 
-                           fast = True):
-        assert  self.config.is_first_stage
+):
+        assert  self.config.is_last_stage
         best_candidate, accept_length = evaluate_posterior(
-                        logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
+                    logits, 
+                    candidates, 
+                    temperature=self.config.temperature,
+                    posterior_alpha=self.config.posterior_alpha,
+                    posterior_threshold=self.config.posterior_threshold,
+                    top_p=self.config.top_p,
+                    sampling=self.config.sampling,
+                    fast=self.config.fast,
                     )
         return best_candidate, accept_length
     def update_inference_inputs(
@@ -549,8 +546,8 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             medusa_logits,
             new_token,
     ):
-        assert  self.config.is_first_stage
-        input_ids, logits, medusa_logits, new_token = update_inference_inputs(
+        assert  self.config.is_last_stage
+        input_ids, logits, medusa_logits, new_token ,select_indices= update_inference_inputs(
                 input_ids,
                 candidates,
                 best_candidate,
@@ -563,8 +560,19 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 self.past_key_values_data,
                 self.current_length_data,
             )
-        return input_ids, logits, medusa_logits, new_token
+        return input_ids, logits, medusa_logits, new_token,select_indices
+    def update_kv_cache(self,input_ids, select_indices):
+        assert not self.config.is_last_stage
+        prev_input_len = input_ids.shape[1] 
+        tgt = self.past_key_values_data[..., select_indices, :]
+        dst =  self.past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
+        dst.copy_(tgt, non_blocking=True)
+        self.current_length_data.fill_(prev_input_len + tgt.shape[-2])
+
+
+
         
+
     def medusa_generate(
         self,
         input_ids,

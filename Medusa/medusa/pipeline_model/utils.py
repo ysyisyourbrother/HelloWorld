@@ -589,5 +589,4 @@ def update_inference_inputs(
     ]
     # Update the new token counter
     new_token += accept_length + 1
-
-    return input_ids, logits, medusa_logits, new_token
+    return input_ids, logits, medusa_logits, new_token,select_indices

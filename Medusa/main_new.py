@@ -20,7 +20,7 @@ def main(args):
     print(model.dtype)
     tokenizer = model.get_tokenizer()
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 
-        detailed, and polite answers to the user's questions. USER: hello I like apple. ASSISTANT:"""
+        detailed, and polite answers to the user's questions. USER: What is Jupiter? ASSISTANT:"""
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
             model.device
         )

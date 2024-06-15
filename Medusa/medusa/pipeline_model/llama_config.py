@@ -165,6 +165,14 @@ class LlamaConfig(PretrainedConfig):
         self.attention_bias = attention_bias
         self.attention_dropout = attention_dropout
         self.mlp_bias = mlp_bias
+        # generation config
+        self.max_steps = 512
+        self.temperature = 0.7
+        self.posterior_threshold = 0.09
+        self.posterior_alpha = 0.3
+        self.top_p = 0.8
+        self.sampling = 'typical'
+        self.fast = True
         # medusa configuration
         self.medusa_num_heads =5
         self.medusa_num_layers = 1

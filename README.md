@@ -63,3 +63,5 @@ CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 0
 CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 1
 
 ```
+
+修改 `stage_num_hidden_layers_list` 和 `--world` 参数,支持不同数量 stage

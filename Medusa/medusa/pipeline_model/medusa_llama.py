@@ -284,7 +284,7 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel):
             )
             # Update the input_ids and logits
             # 使用上一轮采样产生的medusa logits用来下一轮的token candidate生成
-            input_ids, logits, medusa_logits, new_token = update_inference_inputs(
+            input_ids, logits, medusa_logits, new_token,_ = update_inference_inputs(
                 input_ids,
                 candidates,
                 best_candidate,
