@@ -28,12 +28,18 @@
   "top_p":0.8,
   "sampling": "typical",
   "fast":true,
+
   "medusa_num_heads": 5,
   "medusa_num_layers": 1,
-  "medusa_head_path": "./medusa-vicuna-7b-v1.3",
-  "base_model_name_or_path": "./vicuna-7b-v1.3",
+  "medusa_head_path": "./model/medusa-vicuna-7b-v1.3",
+  "base_model_name_or_path": "./model/vicuna-7b-v1.3",
 
-  "init_method":"tcp://127.0.0.1:23000"     ,
-    "distributed_backend":"gloo",
-    "stage_num_hidden_layers_list":[ 16,16]
+  "stage": 1,
+  "is_first_stage": false,
+  "is_last_stage": true,
+  "total_stage": 2,
+  "pre_rank": 0,
+  "init_method":"tcp://127.0.0.1:23000",
+  "distributed_backend":"gloo",
+  "stage_num_hidden_layers_list":[16,16]
 }

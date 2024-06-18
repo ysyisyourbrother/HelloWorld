@@ -379,9 +379,11 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         if output_orig:
             return torch.stack(medusa_logits, dim=0), outputs, orig
         return torch.stack(medusa_logits, dim=0)
+
     def reset_medusa_mode(self):
         self.medusa_mask = None
         self.medusa_mode = None
+
     def prefilling(
         self,
         input_ids,
@@ -536,6 +538,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                     fast=self.config.fast,
                     )
         return best_candidate, accept_length
+
     def update_inference_inputs(
         self,
             input_ids,
@@ -561,6 +564,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 self.current_length_data,
             )
         return input_ids, logits, medusa_logits, new_token,select_indices
+
     def update_kv_cache(self,input_ids, select_indices):
         assert not self.config.is_last_stage
         prev_input_len = input_ids.shape[1] 
@@ -568,10 +572,6 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         dst =  self.past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
         dst.copy_(tgt, non_blocking=True)
         self.current_length_data.fill_(prev_input_len + tgt.shape[-2])
-
-
-
-        
 
     def medusa_generate(
         self,
@@ -700,8 +700,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 best_candidate,
                 accept_length,
                 medusa_buffers["retrieve_indices"],
-                # outputs, outputs 实际上没用上
-                None,
+                None, # outputs, outputs 实际上没用上
                 logits,
                 medusa_logits,
                 new_token,

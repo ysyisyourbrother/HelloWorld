@@ -174,14 +174,14 @@ class LlamaConfig(PretrainedConfig):
         self.sampling = 'typical'
         self.fast = True
         # medusa configuration
-        self.medusa_num_heads =5
+        self.medusa_num_heads = 5
         self.medusa_num_layers = 1
-        self.medusa_head_path = "./medusa-vicuna-7b-v1.3"
-        self.base_model_name_or_path="./vicuna-7b-v1.3",
+        self.medusa_head_path = "./model/medusa-vicuna-7b-v1.3"
+        self.base_model_name_or_path="./model/vicuna-7b-v1.3",
         # distributed configuration
-        self.init_method = "tcp://127.0.0.1:23000"                         # torch.dist.init_process_group中使用的master device    
-        self.distributed_backend = "gloo"
-        self.stage_num_hidden_layers_list = [16,16]
+        self.init_method = None                         # torch.dist.init_process_group中使用的master device    
+        self.distributed_backend = None
+        self.stage_num_hidden_layers_list = None 
         # Pipeline Configuration
         self.stage = None
         self.total_stage = None
@@ -217,24 +217,14 @@ class LlamaConfig(PretrainedConfig):
             )
         if rope_scaling_factor is None or not isinstance(rope_scaling_factor, float) or rope_scaling_factor <= 1.0:
             raise ValueError(f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}")
+
     def print_config(self):
             for k,v in self.__dict__.items():
                 print(k,v)
                 
     def update_pp_stage_config(self   ):
-        self.stage = get_rank()
-        self.total_stage = get_world_size()
-        # if self.total_stage==1:
-        #     raise ValueError("total_stage should > 1")
         assert self.stage < self.total_stage
         assert sum(self.stage_num_hidden_layers_list) == self.num_hidden_layers
         if self.total_stage != len(self.stage_num_hidden_layers_list):
             raise ValueError("total_stage != len(stage_num_hidden_layers_list)")
         self.num_pp_hidden_layers = self.stage_num_hidden_layers_list[self.stage]
-        self.pre_rank = None if self.stage == 0 else self.stage - 1
-        self.next_rank = None if self.stage  == self.total_stage -1 else self.stage + 1
-        self.is_first_stage = (self.stage ==0)  # 第一个需要过embedding
-        self.is_last_stage =  (self.stage  ==  self.total_stage - 1)   #最后一层需要过 pool和lm_head
-        print("="*20)
-        print("stage={}\n total_stage={}\n num_pp_hidden_layers={}".format(self.stage, self.total_stage, self.num_pp_hidden_layers))
-        print("="*20)
