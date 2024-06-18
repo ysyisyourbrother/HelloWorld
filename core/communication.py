@@ -7,7 +7,7 @@ import threading
 import torch
 import torch.distributed as dist
 
-from . import threadsafe_counter,threadsafe_queue
+from . import threadsafe_queue
 
 class CommunicationHandler():
     """ Handles communication between stages. """
@@ -16,9 +16,11 @@ class CommunicationHandler():
         self.world_size = config.total_stage
         self.next_rank = config.next_rank
         self.pre_rank = config.pre_rank
-        self.if_first_rank =  config.is_first_stage
-        self.if_last_rank =  config.is_last_stage
+        self.if_first_rank = config.is_first_stage
+        self.if_last_rank = config.is_last_stage
         self.tensor_tag = {"forward": 0}
+        # TODO: 解决sequence length可变问题
+        # 在执行下面_recv方法的时候，先recv一个shape的长度，然后再创建接收的tensor = torch.zeros(shape)
         self.tensor_shape = {"forward": (1, 47, config.hidden_size), 
                              }  
         self.setup_queue()
