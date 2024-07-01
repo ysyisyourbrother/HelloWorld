@@ -7,7 +7,7 @@ from medusa.pipeline_model.medusa_llama_pp import PPMedusaLlamaForCausalLM
 from medusa.pipeline_model.llama_config import LlamaConfig
 from medusa.pipeline_model.dis_utils import initialize_distributed,get_stage_state_dict,get_medusa_model_state_dict
 
-from core.schedules import PrefillingPipeline
+from medusa.pipeline_model.PrefillingPipeline import PrefillingPipeline
 
 def main(args):
     config = LlamaConfig.from_pretrained(f"./config_{args.rank}.json")
