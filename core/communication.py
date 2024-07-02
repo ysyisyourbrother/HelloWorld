@@ -20,8 +20,7 @@ class CommunicationHandler():
         self.if_last_rank = config.is_last_stage
         self.tensor_tag = {"forward": 0}
         # TODO: 解决sequence length可变问题
-        # 在执行下面_recv方法的时候，先recv一个shape的长度，然后再创建接收的tensor = torch.zeros(shape)
-        self.tensor_shape = {"forward": (1, 47, config.hidden_size), 
+        self.tensor_shape = {"forward": (1, config.max_sub_sequence_len, config.hidden_size), 
                              }  
         self.setup_queue()
         self.start_helper_threads()

@@ -1,5 +1,5 @@
 from core.schedules import PipelineRuntime
-
+import torch
 class PrefillingPipeline(PipelineRuntime):
     def __init__(self, stage_model, config, args):
         super().__init__(stage_model, config, args)
@@ -13,7 +13,7 @@ class PrefillingPipeline(PipelineRuntime):
 
         if self.config.is_first_stage:  # 第一个stage
             if not self.config.is_last_stage: # world > 1
-                hidden_states = self.stage_model.prefilling(input_ids=input_ids, inputs_embeds=None, temperature=self.config.temperature)
+                hidden_states = self.stage_model.prefilling(input_ids=input_ids, inputs_embeds=None )
                 self.send_activation_forward(hidden_states)
             else: # world == 1
                 raise NotImplementedError("暂不支持单机推理")
@@ -21,22 +21,93 @@ class PrefillingPipeline(PipelineRuntime):
             hidden_states = self.receive_activation_forward()
             hidden_states = hidden_states.cuda()
             if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
-                hidden_states = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states, temperature=self.config.temperature)
+                hidden_states = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states )
                 self.send_activation_forward(hidden_states)
             else: # 最后一个stage
-                medusa_logits, logits = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states, temperature=self.config.temperature)
+                medusa_logits, logits = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states )
                 print("finish prefilling")
                 return medusa_logits, logits
+    def split_tensor_along_dim(self,tensor, num_splits, dim=1):
+        shape = list(tensor.size())
+        assert dim < len(shape), "Dimension out of range for the tensor"
+        split_size = shape[dim] // num_splits
+        remainder = shape[dim] % num_splits   
+        assert split_size +1 <= self.config.max_sub_sequence_len # +1是一个要拼接sub_seq length的信息
+        assert remainder +1 <= self.config.max_sub_sequence_len
+        # 划分张量
+        splits = []
+        start = 0
+        for i in range(num_splits):
+            length = split_size + 1 if i < remainder else split_size
+            splits.append(tensor.narrow(dim, start, length))
+            start += length
+        
+        return splits
+    
+    def padding_before_send(self,tensor):
+        # 原本的tensor为 [1,sub_len,hidden_size], padding为 [1,sub_len+1,hidden_size]
+        # tensor[0][0][0] = sub_len
+        shape = tensor.size()
+        sub_len = shape[1]
+        zero_part = torch.zeros(shape[0], 1, shape[2], dtype=tensor.dtype, device=tensor.device)
+        modified_tensor = torch.cat((zero_part, tensor), dim=1)
+        sub_len = torch.tensor(sub_len).to(modified_tensor.dtype)
 
-    def pipeline_forward_sub_sequences(self):
-        # TODO: 实现此函数
+        modified_tensor[0][0][0] =  sub_len
+        return modified_tensor
 
+
+    def cliping_after_recv(self,tensor):
+        sub_len = int(tensor[0, 0, 0]) 
+        print("sub_len", sub_len)
+        return tensor[:,1:sub_len+1,:]
+    def pipeline_sub_forward(self, sub_input_ids = None):
+        # 对llamamodel forward (不包括head)
+        if self.config.is_first_stage:
+            if not self.config.is_last_stage:
+                hidden_states = self.stage_model.forward_sub_sequences(input_ids=sub_input_ids, inputs_embeds=None )
+                self.send_activation_forward(self.padding_before_send(hidden_states))
+            else:
+                raise NotImplementedError("暂不支持单机推理")
+        else:
+            hidden_states = self.receive_activation_forward()
+            hidden_states = self.cliping_after_recv(hidden_states)
+            hidden_states = hidden_states.cuda()    
+            if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
+                hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states )
+                self.send_activation_forward(self.padding_before_send(hidden_states))
+            else:#最后一个stage
+                hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states )
+                return hidden_states
+
+    def pipeline_with_sequence_slicing(self ,input_ids = None):
+        if self.config.is_first_stage:
+            bs,_ = input_ids.shape
+            assert bs == 1
+        # Step 0 : init prefilling (init kv cache)
+        self.stage_model.prefilling_init()
         # Step1: 划分原本的sequence为多个sub-sequence
-        # Step2: 同时注入多个sub_sequence进入pipeline: 
-            # for sub_seq in xxx:
-            #     self.pipeline_forward()
-        # Step3: 实现不同sub_sequence长度不同下的通信能力，在core.communication 23行
-        # Step4: 处理不同sub_sequence推理过程中的kv cache关系
-        pass
+        if self.config.is_first_stage:
+            assert input_ids is not None
+            sub_sequences = self.split_tensor_along_dim(input_ids, self.config.num_sub_sequences, dim=1)
+        for i in range (self.config.num_sub_sequences):
+            if self.config.is_first_stage:
+                sub_input_ids = sub_sequences[i]
+                self.pipeline_sub_forward(sub_input_ids)
+            else:
+                # 最后一个stage 得到hidden_states
+                if self.config.is_last_stage:
+                    hidden_states = self.pipeline_sub_forward( None)
+                else:
+                    self.pipeline_sub_forward( None)
+        # 所有sub_seq完成后，最后一个stage用hidden_states计算medusa_logits,logits
+        if self.config.is_last_stage:
+            # Step2: 得到medusa_logits和logits
+            medusa_logits,logits = self.stage_model.prefilling_finish(hidden_states) 
+            print("finish prefilling")
+            return medusa_logits, logits
+        else:
+            self.stage_model.prefilling_finish( )
+            print("finish prefilling")
 
         

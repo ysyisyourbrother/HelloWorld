@@ -1,16 +1,16 @@
 import argparse
-
+import time
 import torch
 import torch.distributed as dist
 
 from medusa.pipeline_model.medusa_llama_pp import PPMedusaLlamaForCausalLM
 from medusa.pipeline_model.llama_config import LlamaConfig
-from medusa.pipeline_model.dis_utils import initialize_distributed,get_stage_state_dict,get_medusa_model_state_dict
+from medusa.pipeline_model.dis_utils import initialize_distributed,get_stage_state_dict 
 
 from medusa.pipeline_model.PrefillingPipeline import PrefillingPipeline
 
 def main(args):
-    config = LlamaConfig.from_pretrained(f"./config_{args.rank}.json")
+    config = LlamaConfig.from_pretrained(f"./config.json")
     initialize_distributed(config, args)
     stage_state_dict = get_stage_state_dict(
         config.base_model_name_or_path,
@@ -18,7 +18,7 @@ def main(args):
         config.stage_num_hidden_layers_list,
         args.rank
     )
-    config.update_pp_stage_config()
+    config.update_pp_stage_config(args)
     model = PPMedusaLlamaForCausalLM.from_pretrained(
                     pretrained_model_name_or_path=None,
                     config=config, 
@@ -29,19 +29,20 @@ def main(args):
     tokenizer = model.get_tokenizer()
 
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 
-        detailed, and polite answers to the user's questions. USER: What is Jupiter? ASSISTANT:"""
+        detailed, and polite answers to the user's questions. USER: Tell me what do you know about Jupiter? . ASSISTANT:"""
     #TODO: 或许应该第一个stage广播prompt
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to("cuda")
-
-
+    start = time.time()
     # Pipelined Prefilling Stage
     runtime = PrefillingPipeline(model, config, args)
     if config.is_last_stage:    # last stage会产生medusa logits供decoding阶段使用
-        medusa_logits, logits = runtime.pipeline_forward(input_ids)
+        medusa_logits, logits = runtime.pipeline_with_sequence_slicing( )
     else:
-        runtime.pipeline_forward(input_ids)
-
-
+        runtime.pipeline_with_sequence_slicing(input_ids)
+    # if config.is_last_stage:    # last stage会产生medusa logits供decoding阶段使用
+    #     medusa_logits, logits = runtime.pipeline_forward(input_ids)
+    # else:
+    #     runtime.pipeline_forward(input_ids)
     # Decoding stage 
     # generate_candidates
     new_token=0
@@ -160,7 +161,8 @@ def main(args):
             print("\n")
             print("finish decoding")
             break
-
+    end = time.time()
+    print("time", end - start)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -175,4 +177,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     #TODO: config里增加device和 dtype
 
-    main(args)
+    main(args)  

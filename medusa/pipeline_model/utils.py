@@ -331,7 +331,6 @@ def tree_decoding(
 
     # Compute new position IDs by adding the Medusa position IDs to the length of the input sequence.
     position_ids = medusa_position_ids + input_ids.shape[1]
-
     # Use the model to decode the tree candidates. 
     # The model is expected to return logits for the Medusa structure, original logits, and possibly other outputs.
     tree_medusa_logits, outputs, tree_logits = model(

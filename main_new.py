@@ -2,11 +2,10 @@ import torch
 import argparse
 from medusa.pipeline_model.medusa_llama import MedusaLlamaForCausalLM
 from medusa.pipeline_model.llama_config import LlamaConfig
-from medusa.pipeline_model.dis_utils import initialize_distributed
-from   medusa.pipeline_model.dis_utils  import   get_medusa_model_state_dict
+from medusa.pipeline_model.dis_utils  import   get_medusa_model_state_dict
 
 def main(args):
-    config = LlamaConfig.from_pretrained( args.base_model_path ) # 包含vicuna-7b-v1.3 config和medusa head config
+    config = LlamaConfig.from_pretrained( args.base_model_path ) # 包含vicuna-7b-v1.3 config和medusa head config的内容
     all_state_dict = get_medusa_model_state_dict(args.base_model_path, args.medusa_head_path)    
     model = MedusaLlamaForCausalLM.from_pretrained(
                     pretrained_model_name_or_path=  None,
@@ -20,7 +19,7 @@ def main(args):
     print(model.dtype)
     tokenizer = model.get_tokenizer()
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 
-        detailed, and polite answers to the user's questions. USER: What is Jupiter? ASSISTANT:"""
+        detailed, and polite answers to the user's questions. USER: Tell me what do you know about Jupiter? . ASSISTANT:"""
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
             model.device
         )
@@ -46,8 +45,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base_model_path", type=str, default="vicuna-7b-v1.3", help="Model name or path.")
-    parser.add_argument("--medusa_head_path", type=str, default="medusa-vicuna-7b-v1.3", help="Model name or path.")
+    parser.add_argument("--base_model_path", type=str, default="model/vicuna-7b-v1.3", help="Model name or path.")
+    parser.add_argument("--medusa_head_path", type=str, default="model/medusa-vicuna-7b-v1.3", help="Model name or path.")
 
     parser.add_argument(
         "--load-in-8bit", action="store_true", help="Use 8-bit quantization"

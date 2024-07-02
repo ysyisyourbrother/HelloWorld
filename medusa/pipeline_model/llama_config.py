@@ -190,6 +190,9 @@ class LlamaConfig(PretrainedConfig):
         self.is_first_stage = None
         self.is_last_stage = None
         self.num_pp_hidden_layers = None 
+        # Subsequence pipeline configuration
+        self.num_sub_sequences = 5 #TODO:设置多少合适
+        self.max_sub_sequence_len = 128  #TODO:设置多少合适
         super().__init__(
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,
@@ -222,9 +225,18 @@ class LlamaConfig(PretrainedConfig):
             for k,v in self.__dict__.items():
                 print(k,v)
                 
-    def update_pp_stage_config(self   ):
+
+    def update_pp_stage_config(self, args):
+        self.stage = args.rank
+        self.total_stage =args.world 
+        if self.total_stage==1:
+            raise ValueError("暂不支持单机推理")
         assert self.stage < self.total_stage
         assert sum(self.stage_num_hidden_layers_list) == self.num_hidden_layers
         if self.total_stage != len(self.stage_num_hidden_layers_list):
             raise ValueError("total_stage != len(stage_num_hidden_layers_list)")
         self.num_pp_hidden_layers = self.stage_num_hidden_layers_list[self.stage]
+        self.pre_rank = None if self.stage == 0 else self.stage - 1
+        self.next_rank = None if self.stage  == self.total_stage -1 else self.stage + 1
+        self.is_first_stage = (self.stage ==0) 
+        self.is_last_stage =  (self.stage  ==  self.total_stage - 1)

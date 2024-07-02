@@ -50,12 +50,11 @@ MedusaLlamaForCausalLM(
 
 参数意义:
 
-- rank
-- world
-- config_file: `medusa/pipeline_model/config.json`
-  - 模型参数( `medusa_head_path`和 `base_model_name_or_path`)
-  - pipeline 参数: `stage_num_hidden_layers_list`
-  - 分布式参数: `init_method` `distributed_backend`
+config_file: `./config.json`
+
+- 模型参数( `medusa_head_path`和 `base_model_name_or_path`)
+- pipeline 参数: `stage_num_hidden_layers_list`
+- 分布式参数: `init_method` `distributed_backend`
 
 ```
 CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 0
@@ -64,4 +63,14 @@ CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 1
 
 ```
 
-修改 `stage_num_hidden_layers_list` 和 `--world` 参数,支持不同数量 stage
+修改 config_file 参数 `stage_num_hidden_layers_list` 和 `--world` 参数,支持不同数量 stage
+这样只需要一个 config 文件
+
+例如：划分 3 个 stage, 修改`stage_num_hidden_layers_list` = [10,10,12]
+
+```
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 0
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 1
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 2
+
+```

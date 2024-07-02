@@ -383,23 +383,82 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
     def reset_medusa_mode(self):
         self.medusa_mask = None
         self.medusa_mode = None
+    def prefilling_init(self,medusa_choices=None):
+        if medusa_choices is None:
+            medusa_choices = self.get_medusa_choice(self.config.base_model_name_or_path)
+        # Cache medusa buffers (the fixed patterns for tree attention)
+        if medusa_choices is None:
+            medusa_choices = self.get_medusa_choice(self.config.base_model_name_or_path)
+
+        if hasattr(self, "medusa_choices") and self.medusa_choices == medusa_choices:
+            # Load the cached medusa buffer
+            medusa_buffers = self.medusa_buffers
+        else:
+            # Initialize the medusa buffer
+            # 参考：https://github.com/FasterDecoding/Medusa/blob/main/notebooks/medusa_configuration_explained.ipynb
+            medusa_buffers = generate_medusa_buffers(
+                medusa_choices, device=self.base_model.device
+            )
+        self.medusa_buffers = medusa_buffers
+        self.medusa_choices = medusa_choices
+        
+        # Initialize the past key and value states
+        if hasattr(self, "past_key_values"):
+            past_key_values = self.past_key_values
+            past_key_values_data = self.past_key_values_data
+            current_length_data = self.current_length_data
+            # Reset the past key and value states
+            current_length_data.zero_()
+        else: # 为每一个decoder层都创建KVCache存储
+            (
+                past_key_values,
+                past_key_values_data,
+                current_length_data,
+            ) = initialize_past_key_values(self)
+            self.past_key_values = past_key_values
+            self.past_key_values_data = past_key_values_data
+            self.current_length_data = current_length_data
+        reset_medusa_mode(self) 
+    def prefilling_finish(self,hidden_states =None,output_orig=True):
+        self.model.medusa_mask =  self.medusa_buffers["medusa_attn_mask"]
+        if self.config.is_last_stage:
+            with torch.inference_mode():
+                orig = self.lm_head(hidden_states)
+                medusa_logits = []
+                for i in range(self.config.medusa_num_heads):
+                    medusa_logits.append(self.medusa_head[i](hidden_states))
+                if output_orig:
+                    return torch.stack(medusa_logits, dim=0),  orig
+                return torch.stack(medusa_logits, dim=0)
+    def forward_sub_sequences(        
+        self,
+        input_ids=None,
+        inputs_embeds=None,
+        attention_mask=None,
+        position_ids=None,
+        **kwargs,) ->BaseModelOutputWithPast:
+        
+        with torch.inference_mode():
+            # 注意：执行的是LlamaModel.forward(),不是LlamaForCausalLM.forward()
+            outputs = self.model(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                past_key_values=self.past_key_values,
+                position_ids=position_ids,
+                **kwargs,
+            )
+            hidden_states = outputs[0].clone()
+            return hidden_states
 
     def prefilling(
         self,
         input_ids,
         inputs_embeds=None,
-        attention_mask=None,
-        temperature=0.0,
-        max_steps=512,
         # The hyperparameters below are for the Medusa
         # top-1 prediciton for the next token, top-7 predictions for the next token, top-6 predictions for the next next token.
         medusa_choices=None,
-        posterior_threshold=0.09,  # threshold validation of Medusa output
         # another threshold hyperparameter, recommended to be sqrt(posterior_threshold)
-        posterior_alpha=0.3,
-        top_p=0.8, 
-        sampling = 'typical', 
-        fast = True
     ): 
         if self.config.is_first_stage: # 第一个stage，输入的是input_ids [1,seq]
             assert input_ids != None
@@ -443,8 +502,8 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             self.past_key_values = past_key_values
             self.past_key_values_data = past_key_values_data
             self.current_length_data = current_length_data
-        #TODO: self.past_key_values  作为模型属性，pipline的时候 不同输入的past_key_values不同 
-        
+        #TODO: self.past_key_values  作为模型属性，pipline的时候 不同输入的past_key_values不同 (sot情况下)
+        print(past_key_values[0][0].shape)
         reset_medusa_mode(self) #TODO:
         # Initialize tree attention mask and process prefill tokens
         # 处理prefilling的tokens，同时生成初始medusa_logits
@@ -452,21 +511,21 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             medusa_logits, _, logits = self(
                 input_ids=input_ids,
                 inputs_embeds=inputs_embeds, # None
-                past_key_values=past_key_values, 
+                past_key_values=self.past_key_values, 
                 output_orig=True, 
                 medusa_forward=True
             )            
-            self.model.medusa_mask =  medusa_buffers["medusa_attn_mask"] #TODO: 是所有stage吗
+            self.model.medusa_mask =  self.medusa_buffers["medusa_attn_mask"] #TODO: 是所有stage吗
             return medusa_logits, logits # [num_medusa_head.1,seq_len,vocab_size], [1,seq_len,vocab_size]
         else: # 其他stage，只得llama_model的outputs：BaseModelOutputWithPast
             outputs = self(
                 input_ids=input_ids,  # None
                 inputs_embeds=inputs_embeds,
-                past_key_values=past_key_values, 
+                past_key_values=self.past_key_values, 
                 output_orig=True, 
                 medusa_forward=True
             )
-            self.model.medusa_mask =  medusa_buffers["medusa_attn_mask"] #TODO: 是所有stage吗
+            self.model.medusa_mask =  self.medusa_buffers["medusa_attn_mask"] #TODO: 是所有stage吗
             assert isinstance(outputs, BaseModelOutputWithPast)
             hidden_states = outputs.last_hidden_state
             return hidden_states # [1,seq_len,hidden_size] 
