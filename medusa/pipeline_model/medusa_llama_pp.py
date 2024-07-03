@@ -278,9 +278,9 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         self.config = config
         self.model = PPLlamaModel(config)
         self.vocab_size = config.vocab_size
-        # [modified]
+        # [modified] for quantization 其实只有最后一个stage有lm_head
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)  
         if config.is_last_stage:
-            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
             #[modified]
             self.medusa_head = nn.ModuleList(
                 [

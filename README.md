@@ -2,7 +2,19 @@
 
 ```shell
 CUDA_VISIBLE_DEVICES=1 python    main_new.py
+CUDA_VISIBLE_DEVICES=1 python    main_new.py --load_in_8bit
+CUDA_VISIBLE_DEVICES=1 python    main_new.py --load_in_4bit
+
+
 ```
+
+内存占用
+
+| data type |   mem    |
+| :-------- | :------: |
+| fp16      | 15516 MB |
+| int8      | 8771 MB  |
+| int4      | 6316 MB  |
 
 将模型合并且手动 load 权重
 model: `MedusaLlamaForCausalLM`
@@ -44,6 +56,8 @@ MedusaLlamaForCausalLM(
   )
 )
 
+
+
 ```
 
 ## Pipeline
@@ -74,3 +88,18 @@ CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 1
 CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 2
 
 ```
+
+### Quantization
+
+```
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 0 --load_in_8bit
+
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 1 --load_in_8bit
+
+```
+
+| data type | stage 0 | stage 1 |
+| :-------- | :-----: | ------: |
+| fp16      | 7731 MB | 9074 MB |
+| int8      | 4734 MB | 5365 MB |
+| int4      | 3566 MB | 4297 MB |

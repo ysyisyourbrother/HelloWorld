@@ -14,7 +14,7 @@ def main(args):
     tokenizer = model.get_tokenizer()
 
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 
-    detailed, and polite answers to the user's questions. USER: hello ASSISTANT:"""
+        detailed, and polite answers to the user's questions. USER: Tell me what do you know about Jupiter?  ASSISTANT:"""
 
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
         model.base_model.device
@@ -36,10 +36,11 @@ def main(args):
             print(" ".join(output_text[pre:now]), end=" ", flush=True)
             pre = now
     print(" ".join(output_text[pre:]), flush=True)
-
+    max_memory = torch.cuda.max_memory_allocated(device= model.device)
+    print("Max memory:  {} ( {} MB ) ".format( max_memory , max_memory /(1024*1024) ))    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="medusa-vicuna-7b-v1.3", help="Model name or path.")
+    parser.add_argument("--model", type=str, default="model/medusa-vicuna-7b-v1.3", help="Model name or path.")
     parser.add_argument(
         "--load-in-8bit", action="store_true", help="Use 8-bit quantization"
     )

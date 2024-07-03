@@ -1,7 +1,7 @@
 import torch
 import os
 import re
-
+import shutil
 def  initialize_distributed(config, args):
     print("Initializing process group...")
     torch.distributed.init_process_group(
@@ -16,6 +16,21 @@ def get_rank():
     return torch.distributed.get_rank()
 def get_world_size():
     return torch.distributed.get_world_size()
+
+
+def save_state_dict(state_dict, save_path):
+    # Ensure the directory exists or create it
+    print("Saving model to {}".format(save_path))
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    # Remove contents if directory already exists
+    if os.path.exists(save_path):
+        if os.path.isdir(save_path):
+            shutil.rmtree(save_path)
+        else:
+            os.remove(save_path)
+
+    # Save the state_dict to the specified path
+    torch.save(state_dict, save_path)
 def get_medusa_model_state_dict(base_model_path,medusa_head_path):
     pretrained_dict =  {}
     all_files = os.listdir( base_model_path)

@@ -2,11 +2,11 @@ import argparse
 import time
 import torch
 import torch.distributed as dist
-
+import os
 from medusa.pipeline_model.medusa_llama_pp import PPMedusaLlamaForCausalLM
 from medusa.pipeline_model.llama_config import LlamaConfig
-from medusa.pipeline_model.dis_utils import initialize_distributed,get_stage_state_dict 
-
+from medusa.pipeline_model.dis_utils import initialize_distributed,get_stage_state_dict ,save_state_dict
+import shutil
 from medusa.pipeline_model.PrefillingPipeline import PrefillingPipeline
 
 def main(args):
@@ -19,13 +19,28 @@ def main(args):
         args.rank
     )
     config.update_pp_stage_config(args)
-    model = PPMedusaLlamaForCausalLM.from_pretrained(
-                    pretrained_model_name_or_path=None,
-                    config=config, 
-                    state_dict = stage_state_dict, 
-                    use_safetensors=False ,
-                    torch_dtype=torch.float16,
-    ).to("cuda")
+    if args.load_in_8bit or args.load_in_4bit:
+        temp_path = "temp_{}/stage.bin".format(args.rank)
+        save_state_dict(stage_state_dict, temp_path)
+        del stage_state_dict
+        model =  PPMedusaLlamaForCausalLM.from_pretrained(
+                                    pretrained_model_name_or_path=  temp_path,
+                                    config=config, 
+                                    use_safetensors=False ,
+                                    torch_dtype=torch.float16,
+                                    load_in_4bit=args.load_in_4bit,
+                                    load_in_8bit=args.load_in_8bit
+        )
+        folder_path = os.path.dirname(temp_path)
+        shutil.rmtree(folder_path)
+    else:
+        model = PPMedusaLlamaForCausalLM.from_pretrained(
+                        pretrained_model_name_or_path=None,
+                        config=config, 
+                        state_dict = stage_state_dict, 
+                        use_safetensors=False ,
+                        torch_dtype=torch.float16,
+        ).to("cuda")
     tokenizer = model.get_tokenizer()
 
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 
@@ -163,16 +178,19 @@ def main(args):
             break
     end = time.time()
     print("time", end - start)
+    max_memory = torch.cuda.max_memory_allocated(device=  "cuda")
+    print("Max memory:  {} ( {} MB ) ".format( max_memory , max_memory /(1024*1024) ))    
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--rank', default=0, type=int)
     parser.add_argument('--world', default=2, type=int)
     parser.add_argument(
-        "--load-in-8bit", action="store_true", help="Use 8-bit quantization"
+        "--load_in_8bit", action="store_true", help="Use 8-bit quantization"
     )
     parser.add_argument(
-        "--load-in-4bit", action="store_true", help="Use 4-bit quantization"
+        "--load_in_4bit", action="store_true", help="Use 4-bit quantization"
     )
     args = parser.parse_args()
     #TODO: config里增加device和 dtype
