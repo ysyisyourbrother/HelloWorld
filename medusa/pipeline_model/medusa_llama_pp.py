@@ -10,7 +10,7 @@ import warnings
 """ PyTorch LLaMA model."""
 import math
 from typing import List, Optional, Tuple, Union
-
+import inspect
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -19,7 +19,6 @@ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from medusa.model.kv_cache import initialize_past_key_values
 from medusa.model.medusa_choices import *
 from .utils import *
-
 # [MODIFIED] Import from transformer library
 from transformers import AutoTokenizer
 from transformers.activations import ACT2FN
@@ -76,7 +75,6 @@ class PPLlamaModel(LlamaPreTrainedModel):
         if config.is_first_stage:
             self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_pp_hidden_layers)]) # [MODIFIED]
-        # 
         if config.is_last_stage:
             self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -85,10 +83,18 @@ class PPLlamaModel(LlamaPreTrainedModel):
         self.post_init()
 
     def get_input_embeddings(self):
-        return self.embed_tokens
+        # [modified]
+        if self.config.is_first_stage:
+            return self.embed_tokens
+        else:
+            return None
 
     def set_input_embeddings(self, value):
-        self.embed_tokens = value
+        # [modified]
+        if self.config.is_first_stage:
+            self.embed_tokens = value
+        else:
+            pass
 
     # Copied from transformers.models.bart.modeling_bart.BartDecoder._prepare_decoder_attention_mask
     def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
@@ -279,9 +285,9 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         self.model = PPLlamaModel(config)
         self.vocab_size = config.vocab_size
         # [modified] for quantization 其实只有最后一个stage有lm_head
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)  
         if config.is_last_stage:
             #[modified]
+            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)  
             self.medusa_head = nn.ModuleList(
                 [
                     nn.Sequential(
@@ -297,16 +303,32 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         self.post_init()
 
     def get_input_embeddings(self):
-        return self.model.embed_tokens
+        # [modified]
+        if self.config.is_first_stage:
+            return self.model.embed_tokens
+        else:
+            return None
 
     def set_input_embeddings(self, value):
-        self.model.embed_tokens = value
+        # [modified]
+        if self.config.is_first_stage:
+            self.model.embed_tokens = value
+        else:
+            pass
 
     def get_output_embeddings(self):
-        return self.lm_head
+        # [modified]
+        if self.config.is_last_stage:
+            return self.lm_head
+        else:
+            return None
 
     def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
+        # [modified]
+        if self.config.is_last_stage:
+            self.lm_head = new_embeddings
+        else:
+            pass
 
     def set_decoder(self, decoder):
         self.model = decoder
@@ -373,7 +395,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         # Clone the output hidden states
         hidden_states = outputs[0].clone()
         medusa_logits = []
-         # TODO: Consider parallelizing this loop for efficiency?
+        # TODO: Consider parallelizing this loop for efficiency?
         for i in range(self.config.medusa_num_heads):
             medusa_logits.append(self.medusa_head[i](hidden_states))
         if output_orig:
@@ -419,17 +441,23 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             self.past_key_values_data = past_key_values_data
             self.current_length_data = current_length_data
         reset_medusa_mode(self) 
+        
     def prefilling_finish(self,hidden_states =None,output_orig=True):
         self.model.medusa_mask =  self.medusa_buffers["medusa_attn_mask"]
+        print(f"{inspect.currentframe().f_code.co_filename} line {inspect.currentframe().f_lineno} prefilling_finish function Max memory allocated: { torch.cuda.max_memory_allocated( ) / (1024 * 1024)}")
+
         if self.config.is_last_stage:
             with torch.inference_mode():
                 orig = self.lm_head(hidden_states)
                 medusa_logits = []
                 for i in range(self.config.medusa_num_heads):
                     medusa_logits.append(self.medusa_head[i](hidden_states))
+                print(f"{inspect.currentframe().f_code.co_filename} line {inspect.currentframe().f_lineno} prefilling_finish function Max memory allocated: { torch.cuda.max_memory_allocated( ) / (1024 * 1024)}")
+
                 if output_orig:
                     return torch.stack(medusa_logits, dim=0),  orig
                 return torch.stack(medusa_logits, dim=0)
+
     def forward_sub_sequences(        
         self,
         input_ids=None,
@@ -547,8 +575,9 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                     position_ids=position_ids,  # can not be none !
                     medusa_forward=True,
                 )
-            logits = tree_logits[0, self.medusa_buffers["retrieve_indices"]]
-            medusa_logits = tree_medusa_logits[:, 0, self.medusa_buffers["retrieve_indices"]]
+            retrieve_indices = self.medusa_buffers["retrieve_indices"].to(tree_logits.device)  # Move indices to the same device as tree_logits
+            logits = tree_logits[0, retrieve_indices]
+            medusa_logits = tree_medusa_logits[:, 0, retrieve_indices]
             return  medusa_logits, logits 
         else:
             outputs = self(

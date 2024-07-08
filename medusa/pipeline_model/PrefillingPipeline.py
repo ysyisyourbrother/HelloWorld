@@ -1,5 +1,6 @@
 from core.schedules import PipelineRuntime
 import torch
+import inspect
 class PrefillingPipeline(PipelineRuntime):
     def __init__(self, stage_model, config, args):
         super().__init__(stage_model, config, args)
@@ -8,8 +9,9 @@ class PrefillingPipeline(PipelineRuntime):
         """ Forward pass of prefilling stage.
         """
         # bs == 1, seq_len == 47
-        bs,seq_len = input_ids.shape
-        assert bs == 1
+        if self.config.is_first_stage:
+            bs,seq_len = input_ids.shape
+            assert bs == 1
 
         if self.config.is_first_stage:  # 第一个stage
             if not self.config.is_last_stage: # world > 1
@@ -19,7 +21,6 @@ class PrefillingPipeline(PipelineRuntime):
                 raise NotImplementedError("暂不支持单机推理")
         else:
             hidden_states = self.receive_activation_forward()
-            hidden_states = hidden_states.cuda()
             if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
                 hidden_states = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states )
                 self.send_activation_forward(hidden_states)
@@ -46,7 +47,7 @@ class PrefillingPipeline(PipelineRuntime):
     
     def padding_before_send(self,tensor):
         # 原本的tensor为 [1,sub_len,hidden_size], padding为 [1,sub_len+1,hidden_size]
-        # tensor[0][0][0] = sub_len
+        # 其中tensor[0][0][0] = sub_len
         shape = tensor.size()
         sub_len = shape[1]
         zero_part = torch.zeros(shape[0], 1, shape[2], dtype=tensor.dtype, device=tensor.device)
@@ -72,7 +73,6 @@ class PrefillingPipeline(PipelineRuntime):
         else:
             hidden_states = self.receive_activation_forward()
             hidden_states = self.cliping_after_recv(hidden_states)
-            hidden_states = hidden_states.cuda()    
             if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
                 hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states )
                 self.send_activation_forward(self.padding_before_send(hidden_states))
@@ -100,7 +100,6 @@ class PrefillingPipeline(PipelineRuntime):
                     hidden_states = self.pipeline_sub_forward( None)
                 else:
                     self.pipeline_sub_forward( None)
-        # 所有sub_seq完成后，最后一个stage用hidden_states计算medusa_logits,logits
         if self.config.is_last_stage:
             # Step2: 得到medusa_logits和logits
             medusa_logits,logits = self.stage_model.prefilling_finish(hidden_states) 
@@ -109,5 +108,6 @@ class PrefillingPipeline(PipelineRuntime):
         else:
             self.stage_model.prefilling_finish( )
             print("finish prefilling")
-
-        
+            
+            
+            

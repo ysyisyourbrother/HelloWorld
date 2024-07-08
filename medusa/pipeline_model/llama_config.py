@@ -23,7 +23,7 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 import json
 import os
-
+import torch
 
 
 logger = logging.get_logger(__name__)
@@ -165,8 +165,11 @@ class LlamaConfig(PretrainedConfig):
         self.attention_bias = attention_bias
         self.attention_dropout = attention_dropout
         self.mlp_bias = mlp_bias
+        # device
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.torch_dtype = torch.bfloat16 
         # generation config
-        self.max_steps = 512
+        self.max_steps =  512
         self.temperature = 0.7
         self.posterior_threshold = 0.09
         self.posterior_alpha = 0.3
@@ -193,6 +196,8 @@ class LlamaConfig(PretrainedConfig):
         # Subsequence pipeline configuration
         self.num_sub_sequences = 5 #TODO:设置多少合适
         self.max_sub_sequence_len = 128  #TODO:设置多少合适
+        # KC cahce length 控制存储空间
+        self.max_kv_cache_length =  256 #TODO:设置多少合适
         super().__init__(
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,
@@ -240,3 +245,4 @@ class LlamaConfig(PretrainedConfig):
         self.next_rank = None if self.stage  == self.total_stage -1 else self.stage + 1
         self.is_first_stage = (self.stage ==0) 
         self.is_last_stage =  (self.stage  ==  self.total_stage - 1)
+    

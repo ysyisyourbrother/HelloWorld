@@ -16,12 +16,11 @@
   "pad_token_id": 0,
   "rms_norm_eps": 1e-06,
   "tie_word_embeddings": false,
-  "torch_dtype": "float16",
   "transformers_version": "4.28.1",
   "use_cache": true,
   "vocab_size": 32000,
   "do_sample":true,
-  "max_steps":512,
+  "max_steps":10,
   "temperature": 0.7,
   "posterior_threshold": 0.09,
   "posterior_alpha":0.3,
@@ -34,8 +33,13 @@
   "medusa_head_path": "./model/medusa-vicuna-7b-v1.3",
   "base_model_name_or_path": "./model/vicuna-7b-v1.3",
 
-   
   "init_method":"tcp://127.0.0.1:23000",
   "distributed_backend":"gloo",
-  "stage_num_hidden_layers_list":[ 16,16]
+  "stage_num_hidden_layers_list":[   8,9,9,6],
+  "device":"cuda",
+  "torch_dtype": "bfloat16",
+  "num_sub_sequences":5,
+  "sub_sequence_length":128,
+  "max_kv_cache_length":256
+
 }

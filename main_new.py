@@ -6,33 +6,38 @@ from medusa.pipeline_model.dis_utils  import   get_medusa_model_state_dict,save_
 import os
 def main(args):
     config = LlamaConfig.from_pretrained( args.base_model_path ) # 包含vicuna-7b-v1.3 config和medusa head config的内容
-    all_state_dict = get_medusa_model_state_dict(args.base_model_path, args.medusa_head_path)    
+    all_state_dict = get_medusa_model_state_dict(args.base_model_path, args.medusa_head_path)   
+    mem_before = torch.cuda.memory_allocated() 
     if args.load_in_8bit or args.load_in_4bit:
         temp_path = "temp/stage.bin"
         save_state_dict(all_state_dict, temp_path)
         with torch.device("cuda"):
             del all_state_dict
             model =  MedusaLlamaForCausalLM.from_pretrained(
-                                        pretrained_model_name_or_path=  temp_path,
-                                                config=config, 
-                                                use_safetensors=False ,
-                                                torch_dtype=torch.float16,
-                                                    load_in_4bit=args.load_in_4bit,
-                                                        load_in_8bit=args.load_in_8bit
+                pretrained_model_name_or_path=  temp_path,
+                config=config, 
+                use_safetensors=False ,
+                torch_dtype=config.torch_dtype,
+                load_in_4bit=args.load_in_4bit,
+                load_in_8bit=args.load_in_8bit
             )
             os.remove(temp_path)
-
-            
     else:
         model = MedusaLlamaForCausalLM.from_pretrained(
                         pretrained_model_name_or_path=  None,
                         config=config, 
                         state_dict = all_state_dict, 
                         use_safetensors=False ,
-                        torch_dtype=torch.float16,
+                        torch_dtype=config.torch_dtype,
         )
         model.to("cuda")
     print(model)
+    mem_after = torch.cuda.memory_allocated()
+    print("after load model: {}".format((mem_after - mem_before)/1024/1024)  )
+    total_params = sum(p.numel() for p in model.parameters())
+    print("total_params", total_params)
+    print(total_params*2 /(1024*1024))
+    print( "model memory footprint",  model.get_memory_footprint()/(1024*1024))
     print(model.dtype)
     tokenizer = model.get_tokenizer()
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 
@@ -72,6 +77,6 @@ if __name__ == "__main__":
         "--load_in_4bit", action="store_true", help="Use 4-bit quantization"
     )
     parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--max-steps", type=int, default=512)
+    parser.add_argument("--max-steps", type=int, default=5)
     args = parser.parse_args()
     main(args)

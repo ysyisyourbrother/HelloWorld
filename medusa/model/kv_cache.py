@@ -87,15 +87,25 @@ def initialize_past_key_values(model):
     # Initializing the batch size to 1, this can be modified if different batch sizes are required
     batch_size = 1
     # Initializing a tensor to store past keys and values for all layers
+    if hasattr(config, "num_pp_hidden_layers") and config.num_pp_hidden_layers != None:
+        # [modified]
+        config.num_hidden_layers = config.num_pp_hidden_layers
+    if hasattr(config, "max_kv_cache_length"):
+        max_length = config.max_kv_cache_length
+    else:
+        max_length = config.max_position_embeddings
     past_key_values_data = torch.zeros(
-        config.num_hidden_layers * 2, #TODO: 这里分配的最大空间，如果pipline，用config.num_pp_hidden_layers 也可以
-        batch_size,
-        config.num_key_value_heads,
-        config.max_position_embeddings,
-        config.hidden_size // config.num_attention_heads,
-        device=model.device,
-        dtype=model.dtype,
-    )
+            config.num_hidden_layers * 2, 
+            batch_size,
+            config.num_key_value_heads,
+            max_length, # [modified]
+            config.hidden_size // config.num_attention_heads,
+            device=model.device,
+            dtype=model.dtype,
+        )
+ 
+        
+    print("kv cache mem",past_key_values_data.element_size() * past_key_values_data.numel()/(1024*1024))
     # Initialize tensor to store the current length of the cached data for all layers.
     # [IMPORTANT] It needs to be kept on CPU for quick access and updates.
     current_length_data = torch.zeros(

@@ -2,6 +2,24 @@ import torch
 import os
 import re
 import shutil
+import inspect
+import psutil
+
+def get_max_memory(config): 
+    if config.device == 'cuda':
+        max_memory = torch.cuda.max_memory_allocated(device= config.device)
+        return max_memory
+    else:
+        process = psutil.Process()
+        max_memory = process.memory_info().rss  # 获取当前进程的实际内存使用量，单位字节
+        return max_memory 
+def get_module_memory(module):
+    for param in module.parameters():
+        print(f'Parameter element size: {param.element_size()}')
+        break
+    mem = sum(param.nelement() * param.element_size() for param in module.parameters())
+    return mem
+
 def  initialize_distributed(config, args):
     print("Initializing process group...")
     torch.distributed.init_process_group(
@@ -60,7 +78,10 @@ def get_layer_dicts(all_state_dict,total_layer_num):
     print("len(layer_dicts)", len(layer_dicts))
     print("len(layer_dicts[0])", len(layer_dicts[0]))
     return not_layer_dict,layer_dicts
-def get_stage_state_dict( base_model_path,medusa_head_path,stage_num_hidden_layers_list, rank):
+def get_stage_state_dict( base_model_path,
+                         medusa_head_path,
+                         stage_num_hidden_layers_list,
+                         rank):
     all_state_dict = get_medusa_model_state_dict(base_model_path,medusa_head_path)
     not_layer_dict,layer_dicts = get_layer_dicts(all_state_dict, sum(stage_num_hidden_layers_list))
     print("len(not_layer_dict)", len(not_layer_dict))

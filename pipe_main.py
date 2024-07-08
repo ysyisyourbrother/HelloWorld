@@ -3,85 +3,109 @@ import time
 import torch
 import torch.distributed as dist
 import os
+import inspect
 from medusa.pipeline_model.medusa_llama_pp import PPMedusaLlamaForCausalLM
 from medusa.pipeline_model.llama_config import LlamaConfig
-from medusa.pipeline_model.dis_utils import initialize_distributed,get_stage_state_dict ,save_state_dict
-import shutil
+from medusa.pipeline_model.dis_utils import initialize_distributed,get_module_memory,get_max_memory
 from medusa.pipeline_model.PrefillingPipeline import PrefillingPipeline
 
 def main(args):
     config = LlamaConfig.from_pretrained(f"./config.json")
     initialize_distributed(config, args)
-    stage_state_dict = get_stage_state_dict(
-        config.base_model_name_or_path,
-        config.medusa_head_path,
-        config.stage_num_hidden_layers_list,
-        args.rank
-    )
     config.update_pp_stage_config(args)
-    if args.load_in_8bit or args.load_in_4bit:
-        temp_path = "temp_{}/stage.bin".format(args.rank)
-        save_state_dict(stage_state_dict, temp_path)
-        del stage_state_dict
-        model =  PPMedusaLlamaForCausalLM.from_pretrained(
-                                    pretrained_model_name_or_path=  temp_path,
-                                    config=config, 
-                                    use_safetensors=False ,
-                                    torch_dtype=torch.float16,
-                                    load_in_4bit=args.load_in_4bit,
-                                    load_in_8bit=args.load_in_8bit
-        )
-        folder_path = os.path.dirname(temp_path)
-        shutil.rmtree(folder_path)
+    temp_path = "temp_{}/stage.bin".format(args.rank)
+    start = time.time()
+    mem_before =  get_max_memory(config)
+    if config.device == "cuda":
+        with torch.device("cuda"):
+            model =  PPMedusaLlamaForCausalLM.from_pretrained(
+                                        pretrained_model_name_or_path=  temp_path,
+                                        config=config, 
+                                        use_safetensors=False ,
+                                        torch_dtype= config.torch_dtype,
+                                        load_in_4bit=args.load_in_4bit,
+                                        load_in_8bit=args.load_in_8bit
+            )
     else:
-        model = PPMedusaLlamaForCausalLM.from_pretrained(
-                        pretrained_model_name_or_path=None,
-                        config=config, 
-                        state_dict = stage_state_dict, 
-                        use_safetensors=False ,
-                        torch_dtype=torch.float16,
-        ).to("cuda")
+        model =  PPMedusaLlamaForCausalLM.from_pretrained(
+                                        pretrained_model_name_or_path=  temp_path,
+                                        config=config, 
+                                        use_safetensors=False ,
+                                        torch_dtype= config.torch_dtype,
+                                        load_in_4bit=args.load_in_4bit,
+                                        load_in_8bit=args.load_in_8bit
+            ) 
+    mem_after =  get_max_memory(config)
+    model.eval()
+    print("model device:", model.device)
+    print("load time:", time.time() - start)
+    print("after load model: {}".format((mem_after - mem_before)/1024/1024)  )
+    print( "Model   memory footprint",  model.get_memory_footprint()/(1024*1024))
+
+
+    if config.is_last_stage: 
+        print( "medusa head mem", get_module_memory(model.medusa_head)/1024/1024)
+        print( "one medusa head mem", get_module_memory(model.medusa_head[0])/1024/1024)
+        print("lm_head mem", get_module_memory(model.lm_head)/1024/1024)
+    if config.is_first_stage:
+        print("embedding mem", get_module_memory(model.model.embed_tokens)/1024/1024)
+    print(model.model.layers[0].self_attn.q_proj.weight.dtype)
+    if config.is_last_stage:
+        print("model.lm_head.weight.dtype", model.lm_head.weight.dtype)
+        print("model.medusa_head[0][0].linear.weight.dtype", model.medusa_head[0][0].linear.weight.dtype)
+
     tokenizer = model.get_tokenizer()
+    
 
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 
         detailed, and polite answers to the user's questions. USER: Tell me what do you know about Jupiter? . ASSISTANT:"""
-    #TODO: 或许应该第一个stage广播prompt
-    input_ids = tokenizer.encode(prompt, return_tensors="pt").to("cuda")
+    input_ids = tokenizer.encode(prompt, return_tensors="pt") 
+    if config.device == "cuda":
+        input_ids = input_ids.cuda()
     start = time.time()
+    ######################################################################
     # Pipelined Prefilling Stage
+    start = time.time()
     runtime = PrefillingPipeline(model, config, args)
+
     if config.is_last_stage:    # last stage会产生medusa logits供decoding阶段使用
         medusa_logits, logits = runtime.pipeline_with_sequence_slicing( )
     else:
-        runtime.pipeline_with_sequence_slicing(input_ids)
-    # if config.is_last_stage:    # last stage会产生medusa logits供decoding阶段使用
-    #     medusa_logits, logits = runtime.pipeline_forward(input_ids)
-    # else:
-    #     runtime.pipeline_forward(input_ids)
+        if config.is_first_stage:
+            runtime.pipeline_with_sequence_slicing(input_ids) # or use runtime.pipeline_forward
+        else:
+            runtime.pipeline_with_sequence_slicing()
+
+
+
+
+    print("prefilling time:", time.time() - start)
+    ######################################################################
     # Decoding stage 
-    # generate_candidates
     new_token=0
-    for idx in range(config.max_steps):
-        # 在最后一个stage生成candidates
+    start = time.time()
+    for idx in range( config.max_steps):
+        # Step 1 : generate_candidates
         if config.is_last_stage:
             candidates, tree_candidates = model.generate_candidates(
                     medusa_logits, 
                     logits, 
             )
-
-        # last stage 将 tree_candidates 传给first stage, TODO:tree_candidates torch.Size([1, 64]) 可能和不同medusa choice 有关
         if config.total_stage > 1:
             if config.is_first_stage:
                 recv_tensor = torch.zeros(1, 64, dtype=torch.int64) # int
                 dist.recv(tensor=recv_tensor, src= config.total_stage-1, tag=1) 
-                tree_candidates = recv_tensor.to("cuda")
-                # print("Stage {} revecive {} from Stage {}".format( config.stage,tree_candidates.shape,config.total_stage-1 ))
+                if config.device == "cuda":
+                    tree_candidates = recv_tensor.to("cuda")
+                else:   
+                    tree_candidates = recv_tensor
             if config.is_last_stage:
-                send_tensor = tree_candidates.cpu()
+                if config.device == "cuda":
+                    send_tensor = tree_candidates.cpu()
+                else:
+                    send_tensor = tree_candidates
                 dist.send(tensor= send_tensor, dst=0, tag=1)
-                # print("Stage {} send {} to Stage {}".format( config.stage,tree_candidates.shape,0))
-
-        # tree decoding
+        # Step 2 tree decoding
         # TODO:tree_decoding所有stage 都需要 input_ids, 需要广播input_ids, 每一次decoding都会修改inputs_ids
         # TODO: 是否需要用到inputs_ids，还是只需要用到input_ids.shape[1]?
         if config.is_first_stage:
@@ -94,15 +118,16 @@ def main(args):
                 # 不是最后一个stage就要往前传播数据
                 send_tensor = hidden_states.cpu()
                 dist.send(tensor= send_tensor, dst= config.next_rank, tag=1)
-                # print("send to next stage", config.next_rank)
             else: # world == 1
                 raise NotImplementedError("暂不支持单机推理")
         else:
             # TODO:candidates:torch.Size([42, 5]) tree_candidates torch.Size([1, 64]) Size可能和不同medusa choice 有关
-            recv_tensor = torch.zeros(1,  64, config.hidden_size, dtype=torch.float16)
+            recv_tensor = torch.zeros(1,  64, config.hidden_size, dtype= config.torch_dtype)
             dist.recv(tensor=recv_tensor, src= config.pre_rank, tag=1) 
-            # print( "receive from previous stage", config.pre_rank)
-            hidden_states = recv_tensor.to("cuda")
+            if config.device == "cuda":
+                hidden_states = recv_tensor.to("cuda")
+            else:
+                hidden_states = recv_tensor
             if not config.is_last_stage:
                 hidden_states = model.tree_decoding(
                     tree_candidates = None,
@@ -111,20 +136,17 @@ def main(args):
                 )
                 send_tensor = hidden_states.cpu()
                 dist.send(tensor= send_tensor, dst= config.next_rank, tag=1)
-                # print("send to next stage", config.next_rank)
             else:
                 medusa_logits, logits  = model.tree_decoding(
                     tree_candidates = None,
                     tree_candidates_embeds = hidden_states,
                     input_ids = input_ids
                 )
-                
         # 完成decoding阶段的前向传播推理后，我们在最后一个stage进行evaluate_posterior 和 update_inference_inputs
-        # 这个过程会选择出best candidate作为采样的结果，同时更新inputs_ids
+        # Step 3: 选择出best candidate作为采样的结果，同时更新inputs_ids
         if config.is_last_stage:
             best_candidate, accept_length = model.evaluate_posterior(logits,
                             candidates)
-            # print("best_candidate {} accept_length {}".format(best_candidate, accept_length ))
             input_ids, logits, medusa_logits, new_token , select_indices= model.update_inference_inputs(
                 input_ids,
                 candidates,
@@ -141,9 +163,7 @@ def main(args):
                         spaces_between_special_tokens=False,
                         clean_up_tokenization_spaces=True,
                     ) )
-
-        # 前面model.update_inference_inputs 调用更新了最后一个stage的kvcache
-        # 现在同步decoding的结果，并更新其他stage的kv cache和inputs_ids
+        # Step 4: 前面model.update_inference_inputs 调用更新了最后一个stage的kvcache,现在同步decoding的结果，并更新其他stage的kv cache和inputs_ids
         if config.total_stage > 1:
             if  config.is_last_stage: #scatter new_token_len
                 new_token_len =  torch.tensor(select_indices.shape)
@@ -157,14 +177,19 @@ def main(args):
             else:
                 recv_tensor = torch.zeros( 1,   dtype=torch.int64)
                 dist.broadcast(recv_tensor,   src= config.total_stage-1) 
-                new_token_len = recv_tensor.cuda()
+                if config.device == "cuda":
+                    new_token_len = recv_tensor.cuda()
+                else:
+                    new_token_len = recv_tensor
                 select_indices =  torch.zeros( new_token_len ,   dtype=torch.int64)
                 new_input_ids =  torch.zeros( 1,new_token_len ,   dtype=torch.int64)
                 dist.broadcast(select_indices,   src= config.total_stage-1) 
                 dist.broadcast(new_input_ids,   src= config.total_stage-1) 
-                select_indices = select_indices.cuda()
+                if config.device == "cuda":
+                    select_indices = select_indices.cuda()
                 model.update_kv_cache(input_ids,select_indices)
-                new_input_ids = new_input_ids.cuda()
+                if config.device == "cuda":
+                    new_input_ids = new_input_ids.cuda()
                 input_ids = torch.cat([input_ids, new_input_ids], dim=-1    )
                 print(model.tokenizer.decode(
                             new_input_ids[0,  :],
@@ -178,9 +203,13 @@ def main(args):
             break
     end = time.time()
     print("time", end - start)
-    max_memory = torch.cuda.max_memory_allocated(device=  "cuda")
-    print("Max memory:  {} ( {} MB ) ".format( max_memory , max_memory /(1024*1024) ))    
-    
+    print(model.dtype)
+
+
+    total_params = sum(p.numel() for p in model.parameters())
+    print("total_params", total_params)
+    print(f"{inspect.currentframe().f_code.co_filename} line {inspect.currentframe().f_lineno}  Max memory allocated: { get_max_memory(config) / (1024 * 1024)}")
+    print(f"{inspect.currentframe().f_code.co_filename} line {inspect.currentframe().f_lineno} Max memory allocated: {  torch.cuda.max_memory_allocated() / (1024 * 1024)}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -193,6 +222,7 @@ if __name__ == "__main__":
         "--load_in_4bit", action="store_true", help="Use 4-bit quantization"
     )
     args = parser.parse_args()
-    #TODO: config里增加device和 dtype
+    #TODO: config里增加和 dtype
 
     main(args)  
+ #TODO: 修改涉及send rev cpu和cuda 在comminicator里面处理好

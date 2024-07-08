@@ -24,13 +24,14 @@ class PipelineRuntime():
     def receive_activation_forward(self, input_sample = None):
         if self.stage == 0: # 从input_sample获取输入
             if input_sample is not None:
-                tensor = input_sample.cuda()
+                if self.config.device == "cuda":
+                    tensor = input_sample.cuda()
+                else:
+                    tensor = input_sample.cpu()
                 return tensor
             else:
                 raise Exception("Missing input.")
         else: # 从上一台机器接收tensor
             tensor = self.comm_handler.recv()
-            tensor = tensor.cuda()
-
         return tensor
         
