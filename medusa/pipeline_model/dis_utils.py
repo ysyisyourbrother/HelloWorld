@@ -36,6 +36,13 @@ def get_world_size():
     return torch.distributed.get_world_size()
 
 
+def get_model_type(config_name):
+    if 'vicuna' in config_name:
+        return 'vicuna'
+    elif 'zephyr' in  config_name:
+        return 'zephyr'
+    else:
+        raise NotImplementedError
 def save_state_dict(state_dict, save_path):
     # Ensure the directory exists or create it
     print("Saving model to {}".format(save_path))
@@ -49,7 +56,17 @@ def save_state_dict(state_dict, save_path):
 
     # Save the state_dict to the specified path
     torch.save(state_dict, save_path)
+def get_medusa_zephyr_model_state_dict(base_model_path):
+    # for zephyr, weight only in base_model_path
+    pretrained_dict =  {}
+    all_files = os.listdir( base_model_path)
+    weight_file_list =  [os.path.join(   base_model_path, f) for f in all_files if f.endswith('.bin')]
+    for weigt_file in weight_file_list:
+        pretrained_dict1 = torch.load(weigt_file)
+        pretrained_dict = {**pretrained_dict, **pretrained_dict1}
+    return  pretrained_dict
 def get_medusa_model_state_dict(base_model_path,medusa_head_path):
+    # for vicuna, with weight in both base_model_path and medusa_head_path
     pretrained_dict =  {}
     all_files = os.listdir( base_model_path)
     weight_file_list =  [os.path.join(   base_model_path, f) for f in all_files if f.endswith('.bin')]
@@ -82,7 +99,12 @@ def get_stage_state_dict( base_model_path,
                          medusa_head_path,
                          stage_num_hidden_layers_list,
                          rank):
-    all_state_dict = get_medusa_model_state_dict(base_model_path,medusa_head_path)
+    if 'vicuna' in base_model_path:
+        all_state_dict = get_medusa_model_state_dict(base_model_path,medusa_head_path)
+    elif 'zephyr' in base_model_path:
+        all_state_dict = get_medusa_zephyr_model_state_dict(base_model_path)
+    else:
+        raise NotImplementedError("暂不支持该模型")
     not_layer_dict,layer_dicts = get_layer_dicts(all_state_dict, sum(stage_num_hidden_layers_list))
     print("len(not_layer_dict)", len(not_layer_dict))
     print("len(layer_dicts)", len(layer_dicts))

@@ -11,6 +11,8 @@ def main(args):
         load_in_8bit=args.load_in_8bit,
         load_in_4bit=args.load_in_4bit,
     )
+    print(model)
+    print("num of parameters:", sum(p.numel() for p in model.parameters()))
     tokenizer = model.get_tokenizer()
 
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 

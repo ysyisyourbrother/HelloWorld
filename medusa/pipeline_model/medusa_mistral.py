@@ -1,49 +1,25 @@
-import os
-from huggingface_hub import hf_hub_download
-import warnings
-# Source: https://github.com/huggingface/transformers/blob/v4.34-release/src/transformers/models/llama/modeling_llama.py
+# Source: https://github.com/huggingface/transformers/blob/v4.34-release/src/transformers/models/mistral/modeling_mistral.py
 # Modifications are denoted by the symbol: [MODIFIED]
 # There are mainly two modifications:
 # 1. Using preallocated GPU memory for KVCache
 # 2. Modifying attention mask for integration with Medusa
-
-""" PyTorch LLaMA model."""
+""" PyTorch Mistral model."""
+import inspect
 import math
 from typing import List, Optional, Tuple, Union
+import warnings
+from .utils import *
 
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+# [MODIFIED] Import from transformer library
+from medusa.model.modeling_mistral_kv import MistralPreTrainedModel,MistralModel
+from transformers import AutoTokenizer
 from medusa.model.kv_cache import initialize_past_key_values
 from medusa.model.medusa_choices import *
 from .utils import *
-
-# [MODIFIED] Import from transformer library
-from transformers import AutoTokenizer
-from transformers.activations import ACT2FN
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast 
-from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
-from transformers.utils import (
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    # is_flash_attn_available,
-    logging,
-    replace_return_docstrings,
-)
-from  .llama_config import LlamaConfig
-from medusa.model.modeling_llama_kv  import LlamaModel, LlamaRMSNorm, LlamaPreTrainedModel
-
-# if is_flash_attn_available():
-#     from flash_attn import flash_attn_func, flash_attn_varlen_func
-#     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
-
-
-logger = logging.get_logger(__name__)
-
-_CONFIG_FOR_DOC = "LlamaConfig"
 
 class ResBlock(nn.Module):
     def __init__(self, hidden_size):
@@ -55,20 +31,18 @@ class ResBlock(nn.Module):
         self.act = nn.SiLU()
     def forward(self, x):
         return x + self.act(self.linear(x))
-
-ALL_LAYERNORM_LAYERS.append(LlamaRMSNorm)
-
-
-class MedusaLlamaForCausalLM(LlamaPreTrainedModel):
+    
+class MedusaMistralForCausalLM(MistralPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
         super().__init__(config)
-        # [modified]
-        self.config = config
-        self.model = LlamaModel(config)
+        self.model = MistralModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        # Initialize weights and apply final processing
+        self.post_init()
         #[modified]
         self.medusa_head = nn.ModuleList(
             [
@@ -80,9 +54,6 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel):
             ]
         )
         self.tokenizer = AutoTokenizer.from_pretrained(config.base_model_name_or_path)
-
-        # Initialize weights and apply final processing
-        self.post_init()
 
     def get_input_embeddings(self):
         return self.model.embed_tokens
@@ -115,9 +86,6 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel):
             return zephyr_stage2
         warnings.warn('Please specify medusa choice configuration!')
         return mc_sim_7b_63
-    # @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
-    # [mmodified]
     def forward(
         self,
         input_ids=None,
@@ -128,31 +96,19 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel):
         medusa_forward=False,
         **kwargs,
     ):
-        """Forward pass of the MedusaModel.
-
-        Args:
-            input_ids (torch.Tensor, optional): Input token IDs.
-            attention_mask (torch.Tensor, optional): Attention mask.
-            labels (torch.Tensor, optional): Ground truth labels for loss computation.
-            past_key_values (tuple, optional): Tuple containing past key and value states for attention.
-            output_orig (bool, optional): Whether to also output predictions from the original LM head.
-            position_ids (torch.Tensor, optional): Position IDs.
-
-        Returns:
-            torch.Tensor: A tensor containing predictions from all Medusa heads.
-            (Optional) Original predictions from the base model's LM head.
-        """
+        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         with torch.inference_mode():
-            # 注意：执行的是LlamaModel.forward(),不是LlamaForCausalLM.forward()
+            # MistralModel.forward() 
             outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                past_key_values=past_key_values,
                 position_ids=position_ids,
+                past_key_values=past_key_values,
                 **kwargs,
-            )
-            if output_orig: # 这里指的是LlamaForCausalLM的结果, 经过model(LlamaModel) + lm_head(Linear)
+        )
+            if output_orig: # 这里指的是MedusaMistralForCausalLM的结果, 经过model(MistralModel) + lm_head(Linear)
                 orig = self.lm_head(outputs[0])
+        # Clone the output hidden states
         # Clone the output hidden states
         hidden_states = outputs[0].clone()
         medusa_logits = []
@@ -162,44 +118,30 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel):
         if output_orig:
             return torch.stack(medusa_logits, dim=0), outputs, orig
         return torch.stack(medusa_logits, dim=0)
+
     def reset_medusa_mode(self):
         self.medusa_mask = None
         self.medusa_mode = None
     
     def medusa_generate(
-        self,
-        input_ids,
-        attention_mask=None,
-        temperature=0.0,
-        max_steps=512,
-        # The hyperparameters below are for the Medusa
-        # top-1 prediciton for the next token, top-7 predictions for the next token, top-6 predictions for the next next token.
-        medusa_choices=None,
-        posterior_threshold=0.09,  # threshold validation of Medusa output
-        # another threshold hyperparameter, recommended to be sqrt(posterior_threshold)
-        posterior_alpha=0.3,
-        top_p=0.8, 
-        sampling = 'typical', 
-        fast = True
-    ): 
-        """
-        Args:
-            input_ids (torch.Tensor, optional): Input token IDs.
-            attention_mask (torch.Tensor, optional): Attention mask.
-            temperature (float, optional): Temperature for typical acceptance.
-            medusa_choices (list, optional): A list of integers indicating the number of choices for each Medusa head.
-            posterior_threshold (float, optional): Threshold for posterior validation.
-            posterior_alpha (float, optional): Another threshold hyperparameter, recommended to be sqrt(posterior_threshold).
-            top_p (float, optional): Cumulative probability threshold for nucleus sampling. Defaults to 0.8.
-            sampling (str, optional): Defines the sampling strategy ('typical' or 'nucleus'). Defaults to 'typical'.
-            fast (bool, optional): If True, enables faster, deterministic decoding for typical sampling. Defaults to False.
-        Returns:
-            torch.Tensor: Output token IDs.
-
-        Warning: Only support batch size 1 for now!!
-        """
+            self,
+            input_ids,
+            attention_mask=None,
+            temperature=0.0,
+            max_steps=512,
+            # The hyperparameters below are for the Medusa
+            # top-1 prediciton for the next token, top-7 predictions for the next token, top-6 predictions for the next next token.
+            medusa_choices=None,
+            posterior_threshold=0.09,  # threshold validation of Medusa output
+            # another threshold hyperparameter, recommended to be sqrt(posterior_threshold)
+            posterior_alpha=0.3,
+            top_p=0.8, 
+            sampling = 'typical', 
+            fast = True
+        ): 
         assert input_ids.shape[0] == 1, "Only support batch size 1 for now!!"
-        # Avoid modifying the input_ids in-place
+
+      # Avoid modifying the input_ids in-place
         input_ids = input_ids.clone()
         if medusa_choices is None:
             medusa_choices = self.get_medusa_choice(self.config.base_model_name_or_path)
@@ -312,7 +254,6 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 print("\nFinal step: ", idx+1 )
                 break
 
-        
     def prepare_inputs_for_generation(
         self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
     ):
@@ -351,4 +292,6 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past),
             )
         return reordered_past
+
+
  

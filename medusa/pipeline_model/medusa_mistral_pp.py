@@ -1,30 +1,28 @@
-import os
-from huggingface_hub import hf_hub_download
-import warnings
-# Source: https://github.com/huggingface/transformers/blob/v4.34-release/src/transformers/models/llama/modeling_llama.py
+# Source: https://github.com/huggingface/transformers/blob/v4.34-release/src/transformers/models/mistral/modeling_mistral.py
 # Modifications are denoted by the symbol: [MODIFIED]
 # There are mainly two modifications:
 # 1. Using preallocated GPU memory for KVCache
 # 2. Modifying attention mask for integration with Medusa
-
-""" PyTorch LLaMA model."""
+""" PyTorch Mistral model."""
+import inspect
 import math
 from typing import List, Optional, Tuple, Union
-import inspect
+import warnings
+from .utils import *
+
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+# [MODIFIED] Import from transformer library
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
+
+from medusa.model.modeling_mistral_kv import MistralPreTrainedModel, MistralDecoderLayer, MistralRMSNorm,_make_sliding_window_causal_mask,_expand_mask
+from transformers import AutoTokenizer
 from medusa.model.kv_cache import initialize_past_key_values
 from medusa.model.medusa_choices import *
 from .utils import *
-# [MODIFIED] Import from transformer library
-from transformers import AutoTokenizer
-from transformers.activations import ACT2FN
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast 
-from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+from .mistral_config import MistralConfig
 from transformers.utils import (
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
@@ -32,17 +30,7 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from  .llama_config import LlamaConfig
-from medusa.model.modeling_llama_kv  import    LlamaRMSNorm, LlamaPreTrainedModel,LlamaDecoderLayer,_make_causal_mask,_expand_mask
-
-# if is_flash_attn_available():
-#     from flash_attn import flash_attn_func, flash_attn_varlen_func
-#     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
-
-
 logger = logging.get_logger(__name__)
-
-_CONFIG_FOR_DOC = "LlamaConfig"
 
 class ResBlock(nn.Module):
     def __init__(self, hidden_size):
@@ -55,28 +43,24 @@ class ResBlock(nn.Module):
     def forward(self, x):
         return x + self.act(self.linear(x))
 
-ALL_LAYERNORM_LAYERS.append(LlamaRMSNorm)
-
-
- 
-class PPLlamaModel(LlamaPreTrainedModel):
+class PPMistralModel(MistralPreTrainedModel):
     """
-    Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`LlamaDecoderLayer`]
+    Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`MistralDecoderLayer`]
 
     Args:
-        config: LlamaConfig
+        config: MistralConfig
     """
 
-    def __init__(self, config: LlamaConfig):
+    def __init__(self, config: MistralConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         # [modified]
         if config.is_first_stage:
             self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_pp_hidden_layers)]) # [MODIFIED]
+        self.layers = nn.ModuleList([MistralDecoderLayer(config) for _ in range(config.num_pp_hidden_layers)])
         if config.is_last_stage:
-            self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            self.norm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
@@ -96,17 +80,19 @@ class PPLlamaModel(LlamaPreTrainedModel):
         else:
             pass
 
-    # Copied from transformers.models.bart.modeling_bart.BartDecoder._prepare_decoder_attention_mask
-    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
+    def _prepare_decoder_attention_mask(
+        self, attention_mask, input_shape, inputs_embeds, past_key_values_length, sliding_window
+    ):
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         combined_attention_mask = None
         if input_shape[-1] > 1:
-            combined_attention_mask = _make_causal_mask(
+            combined_attention_mask = _make_sliding_window_causal_mask(
                 input_shape,
                 inputs_embeds.dtype,
                 device=inputs_embeds.device,
                 past_key_values_length=past_key_values_length,
+                sliding_window=sliding_window,
             )
 
         if attention_mask is not None:
@@ -137,7 +123,7 @@ class PPLlamaModel(LlamaPreTrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values=None,  # [MODIFIED] past_key_value is KVCache class
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -154,25 +140,22 @@ class PPLlamaModel(LlamaPreTrainedModel):
 
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
         elif input_ids is not None:
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
+            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
         seq_length_with_past = seq_length
         past_key_values_length = 0
 
         if past_key_values is not None:
-            # 获取KVCache的current_length
             past_key_values_length = past_key_values[0][0].shape[2]
-            # 包括当前推理序列的总seq_length
             seq_length_with_past = seq_length_with_past + past_key_values_length
 
         if position_ids is None:
-            # 生成待推理新序列的position_ids
             device = input_ids.device if input_ids is not None else inputs_embeds.device
             position_ids = torch.arange(
                 past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
@@ -183,27 +166,40 @@ class PPLlamaModel(LlamaPreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
+
+        padding_mask = None
+
         # embed positions
-        # prefilling 推理步骤的时候attention_mask为None
         if attention_mask is None:
             attention_mask = torch.ones(
                 (batch_size, seq_length_with_past), dtype=torch.bool, device=inputs_embeds.device
             )
-            padding_mask = None
-        else:
-            if 0 in attention_mask:
-                padding_mask = attention_mask
-            else:
-                padding_mask = None
+        elif 0 in attention_mask:
+            padding_mask = attention_mask
 
-        # decoding推理步骤的时候为medusa tree attention mask
+        if (
+            padding_mask is not None
+            and hasattr(self.config, "_flash_attn_2_enabled")
+            and self.config._flash_attn_2_enabled
+        ):
+            is_padding_right = padding_mask[:, -1].sum().item() != batch_size
+            if is_padding_right:
+                raise ValueError(
+                    "You are attempting to perform batched generation with padding_side='right'"
+                    " this may lead to unexpected behaviour for Flash Attention version of Mistral. Make sure to "
+                    " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
+                )
+
         attention_mask = self._prepare_decoder_attention_mask(
-            attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
+            attention_mask,
+            (batch_size, seq_length),
+            inputs_embeds,
+            past_key_values_length,
+            sliding_window=self.config.sliding_window,
         )
         # [MODIFIED] 
         self.attention_mask = attention_mask
         self.position_ids = position_ids
-
         hidden_states = inputs_embeds
 
         if self.gradient_checkpointing and self.training:
@@ -218,7 +214,6 @@ class PPLlamaModel(LlamaPreTrainedModel):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = () if use_cache else None
 
-        # 遍历所有decoder层
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -235,10 +230,12 @@ class PPLlamaModel(LlamaPreTrainedModel):
                     return custom_forward
 
                 layer_outputs = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids
+                    create_custom_forward(decoder_layer),
+                    hidden_states,
+                    attention_mask,
+                    position_ids,
                 )
             else:
-                # 带着past_key_value进行decoding阶段计算
                 layer_outputs = decoder_layer(
                     hidden_states,
                     attention_mask=attention_mask,
@@ -251,12 +248,12 @@ class PPLlamaModel(LlamaPreTrainedModel):
 
             hidden_states = layer_outputs[0]
 
-            # 收集新产生的KVCache
             if use_cache:
                 next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
+
         # [modified]
         if self.config.is_last_stage:
             hidden_states = self.norm(hidden_states)
@@ -275,19 +272,21 @@ class PPLlamaModel(LlamaPreTrainedModel):
             attentions=all_self_attns,
         )
 
-class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
+class PPMedusaMistralForCausalLM(MistralPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
         super().__init__(config)
         # [modified]
         self.config = config
-        self.model = PPLlamaModel(config)
+        self.model = PPMistralModel(config)
         self.vocab_size = config.vocab_size
-        # [modified]  其实只有最后一个stage有lm_head
+
+        # Initialize weights and apply final processing
+        self.post_init()
+        # [modified]
         if config.is_last_stage:
-            # [modified]
-            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)  
+            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
             self.medusa_head = nn.ModuleList(
                 [
                     nn.Sequential(
@@ -298,9 +297,6 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 ]
             )
         self.tokenizer = AutoTokenizer.from_pretrained(config.base_model_name_or_path)
-
-        # Initialize weights and apply final processing
-        self.post_init()
 
     def get_input_embeddings(self):
         # [modified]
@@ -315,7 +311,6 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             self.model.embed_tokens = value
         else:
             pass
-
     def get_output_embeddings(self):
         # [modified]
         if self.config.is_last_stage:
@@ -349,13 +344,9 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             return zephyr_stage2
         warnings.warn('Please specify medusa choice configuration!')
         return mc_sim_7b_63
-    # @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
-    # [mmodified]
     def forward(
         self,
         input_ids=None,
-        inputs_embeds=None,
         attention_mask=None,
         past_key_values=None,
         output_orig=False,
@@ -363,35 +354,22 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         medusa_forward=False,
         **kwargs,
     ):
-        """Forward pass of the MedusaModel.
-
-        Args:
-            input_ids (torch.Tensor, optional): Input token IDs.
-            attention_mask (torch.Tensor, optional): Attention mask.
-            labels (torch.Tensor, optional): Ground truth labels for loss computation.
-            past_key_values (tuple, optional): Tuple containing past key and value states for attention.
-            output_orig (bool, optional): Whether to also output predictions from the original LM head.
-            position_ids (torch.Tensor, optional): Position IDs.
-
-        Returns:
-            torch.Tensor: A tensor containing predictions from all Medusa heads.
-            (Optional) Original predictions from the base model's LM head.
-        """
+        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         with torch.inference_mode():
-            # 注意：执行的是LlamaModel.forward(),不是LlamaForCausalLM.forward()
+            # MistralModel.forward() 
             outputs = self.model(
                 input_ids=input_ids,
-                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
-                past_key_values=past_key_values,
                 position_ids=position_ids,
+                past_key_values=past_key_values,
                 **kwargs,
-            )
+        )
             # [modified] 不是last stage, 直接返回outputs:BaseModelOutputWithPast
             if not self.config.is_last_stage:
                 return outputs
-            if output_orig: # 这里指的是LlamaForCausalLM的结果, 经过model(LlamaModel) + lm_head(Linear)
+            if output_orig: # 这里指的是MedusaMistralForCausalLM的结果, 经过model(MistralModel) + lm_head(Linear)
                 orig = self.lm_head(outputs[0])
+        # Clone the output hidden states
         # Clone the output hidden states
         hidden_states = outputs[0].clone()
         medusa_logits = []
@@ -457,7 +435,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 if output_orig:
                     return torch.stack(medusa_logits, dim=0),  orig
                 return torch.stack(medusa_logits, dim=0)
-
+            
     def forward_sub_sequences(        
         self,
         input_ids=None,
@@ -478,7 +456,6 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             )
             hidden_states = outputs[0].clone()
             return hidden_states
-
     def prefilling(
         self,
         input_ids,
@@ -557,7 +534,135 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             assert isinstance(outputs, BaseModelOutputWithPast)
             hidden_states = outputs.last_hidden_state
             return hidden_states # [1,seq_len,hidden_size] 
-    
+    def medusa_generate(
+            self,
+            input_ids,
+            attention_mask=None,
+            temperature=0.0,
+            max_steps=512,
+            # The hyperparameters below are for the Medusa
+            # top-1 prediciton for the next token, top-7 predictions for the next token, top-6 predictions for the next next token.
+            medusa_choices=None,
+            posterior_threshold=0.09,  # threshold validation of Medusa output
+            # another threshold hyperparameter, recommended to be sqrt(posterior_threshold)
+            posterior_alpha=0.3,
+            top_p=0.8, 
+            sampling = 'typical', 
+            fast = True
+        ): 
+        assert input_ids.shape[0] == 1, "Only support batch size 1 for now!!"
+
+      # Avoid modifying the input_ids in-place
+        input_ids = input_ids.clone()
+        if medusa_choices is None:
+            medusa_choices = self.get_medusa_choice(self.config.base_model_name_or_path)
+        # Cache medusa buffers (the fixed patterns for tree attention)
+        if medusa_choices is None:
+            medusa_choices = self.get_medusa_choice(self.config.base_model_name_or_path)
+
+        if hasattr(self, "medusa_choices") and self.medusa_choices == medusa_choices:
+            # Load the cached medusa buffer
+            medusa_buffers = self.medusa_buffers
+        else:
+            # Initialize the medusa buffer
+            # 参考：https://github.com/FasterDecoding/Medusa/blob/main/notebooks/medusa_configuration_explained.ipynb
+            medusa_buffers = generate_medusa_buffers(
+                medusa_choices, device=self.base_model.device
+            )
+        self.medusa_buffers = medusa_buffers
+        self.medusa_choices = medusa_choices
+        
+        # Initialize the past key and value states
+        if hasattr(self, "past_key_values"):
+            past_key_values = self.past_key_values
+            past_key_values_data = self.past_key_values_data
+            current_length_data = self.current_length_data
+            # Reset the past key and value states
+            current_length_data.zero_()
+        else: # 为每一个decoder层都创建KVCache存储
+            (
+                past_key_values,
+                past_key_values_data,
+                current_length_data,
+            ) = initialize_past_key_values(self)
+            self.past_key_values = past_key_values
+            self.past_key_values_data = past_key_values_data
+            self.current_length_data = current_length_data
+
+        input_len = input_ids.shape[1]
+        
+        reset_medusa_mode(self) #TODO:
+        # Initialize tree attention mask and process prefill tokens
+        # 处理prefilling的tokens，同时生成初始medusa_logits
+        medusa_logits, logits = initialize_medusa(
+            input_ids, self, self.medusa_buffers["medusa_attn_mask"], past_key_values
+        )
+        new_token = 0
+        last_round_token = 0
+        print("init ")
+        print("medusa_logits.shape: {}, logits.shape: {}".format(medusa_logits.shape, logits.shape))
+        # 使用medusa_logits生成投机采样的多个candidates
+        for idx in range(max_steps):
+            # print("\nstep: ", idx)
+            # print("mdedusa_logits.shape: {}, logits.shape: {}".format(medusa_logits.shape, logits.shape))
+            # Generate candidates with topk predictions from Medusa heads
+            candidates, tree_candidates = generate_candidates(
+                medusa_logits,
+                logits,
+                self.medusa_buffers["tree_indices"],
+                self.medusa_buffers["retrieve_indices"],
+                temperature=temperature,
+                posterior_alpha=posterior_alpha,
+                posterior_threshold=posterior_threshold,
+                top_p=top_p,
+                sampling=sampling,
+                fast=fast,
+            )
+            # print("\ncandidates.shape: {}, tree_candidates.shape: {}".format(candidates.shape, tree_candidates.shape))
+            # print("INPUT OF tree_decoding : mdedusa_logits.shape: {}, logits.shape: {}".format(medusa_logits.shape, logits.shape))
+            # 将token tree输入model再次执行前向传播，验证candidate的可行性
+            # Use tree attention to verify the candidates and get predictions
+            medusa_logits, logits, outputs = tree_decoding(
+                self,   
+                tree_candidates,
+                self.past_key_values, # [modified]
+                self.medusa_buffers["medusa_position_ids"], # [modified]
+                input_ids,
+                self.medusa_buffers["retrieve_indices"], # [modified]
+            )
+            # print("\nafter tree decoding: mdedusa_logits.shape: {}, logits.shape: {}".format(medusa_logits.shape, logits.shape))
+            # 选择最终被接受的tokens
+            best_candidate, accept_length = evaluate_posterior(
+                logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
+            )
+            # Update the input_ids and logits
+            # 使用上一轮采样产生的medusa logits用来下一轮的token candidate生成
+            input_ids, logits, medusa_logits, new_token,_ = update_inference_inputs(
+                input_ids,
+                candidates,
+                best_candidate,
+                accept_length,
+                medusa_buffers["retrieve_indices"],
+                None, # [modified] outputs 实际上没用上
+                logits,
+                medusa_logits,
+                new_token,
+                self.past_key_values_data,
+                self.current_length_data,
+            )
+            
+            # 返回generator用来返回推理结果
+            yield {
+                "text": self.tokenizer.decode(
+                    input_ids[0, input_len:],
+                    skip_special_tokens=True,
+                    spaces_between_special_tokens=False,
+                    clean_up_tokenization_spaces=True,
+                )
+            }
+
+            if self.tokenizer.eos_token_id in input_ids[0, input_len:]:
+                break
     def tree_decoding(self, tree_candidates, tree_candidates_embeds,input_ids):
         if self.config.is_first_stage:
             assert tree_candidates != None
@@ -591,7 +696,6 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             assert isinstance(outputs, BaseModelOutputWithPast)
             hidden_states = outputs.last_hidden_state
             return hidden_states # [1,64,hidden_size]
-            
     def generate_candidates(
         self,
         medusa_logits, 
@@ -660,159 +764,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         dst =  self.past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
         dst.copy_(tgt, non_blocking=True)
         self.current_length_data.fill_(prev_input_len + tgt.shape[-2])
-
-    def medusa_generate(
-        self,
-        input_ids,
-        attention_mask=None,
-        temperature=0.0,
-        max_steps=512,
-        # The hyperparameters below are for the Medusa
-        # top-1 prediciton for the next token, top-7 predictions for the next token, top-6 predictions for the next next token.
-        medusa_choices=None,
-        posterior_threshold=0.09,  # threshold validation of Medusa output
-        # another threshold hyperparameter, recommended to be sqrt(posterior_threshold)
-        posterior_alpha=0.3,
-        top_p=0.8, 
-        sampling = 'typical', 
-        fast = True
-    ): 
-        """
-        Args:
-            input_ids (torch.Tensor, optional): Input token IDs.
-            attention_mask (torch.Tensor, optional): Attention mask.
-            temperature (float, optional): Temperature for typical acceptance.
-            medusa_choices (list, optional): A list of integers indicating the number of choices for each Medusa head.
-            posterior_threshold (float, optional): Threshold for posterior validation.
-            posterior_alpha (float, optional): Another threshold hyperparameter, recommended to be sqrt(posterior_threshold).
-            top_p (float, optional): Cumulative probability threshold for nucleus sampling. Defaults to 0.8.
-            sampling (str, optional): Defines the sampling strategy ('typical' or 'nucleus'). Defaults to 'typical'.
-            fast (bool, optional): If True, enables faster, deterministic decoding for typical sampling. Defaults to False.
-        Returns:
-            torch.Tensor: Output token IDs.
-
-        Warning: Only support batch size 1 for now!!
-        """
-        assert input_ids.shape[0] == 1, "Only support batch size 1 for now!!"
-        # Avoid modifying the input_ids in-place
-        input_ids = input_ids.clone()
-        if medusa_choices is None:
-            medusa_choices = self.get_medusa_choice(self.config.base_model_name_or_path)
-        # Cache medusa buffers (the fixed patterns for tree attention)
-        if medusa_choices is None:
-            medusa_choices = self.get_medusa_choice(self.config.base_model_name_or_path)
-
-        if hasattr(self, "medusa_choices") and self.medusa_choices == medusa_choices:
-            # Load the cached medusa buffer
-            medusa_buffers = self.medusa_buffers
-        else:
-            # Initialize the medusa buffer
-            # 参考：https://github.com/FasterDecoding/Medusa/blob/main/notebooks/medusa_configuration_explained.ipynb
-            medusa_buffers = generate_medusa_buffers(
-                medusa_choices, device=self.base_model.device
-            )
-        self.medusa_buffers = medusa_buffers
-        self.medusa_choices = medusa_choices
-        
-        # Initialize the past key and value states
-        if hasattr(self, "past_key_values"):
-            past_key_values = self.past_key_values
-            past_key_values_data = self.past_key_values_data
-            current_length_data = self.current_length_data
-            # Reset the past key and value states
-            current_length_data.zero_()
-        else: # 为每一个decoder层都创建KVCache存储
-            (
-                past_key_values,
-                past_key_values_data,
-                current_length_data,
-            ) = initialize_past_key_values(self)
-            self.past_key_values = past_key_values
-            self.past_key_values_data = past_key_values_data
-            self.current_length_data = current_length_data
-
-        input_len = input_ids.shape[1]
-        
-        reset_medusa_mode(self) #TODO:
-        # Initialize tree attention mask and process prefill tokens
-        # 处理prefilling的tokens，同时生成初始medusa_logits
-        medusa_logits, logits = initialize_medusa(
-            input_ids, self, medusa_buffers["medusa_attn_mask"], past_key_values
-        )
-        # print("init")
-        # print("mdedusa_logits.shape : {}, logits.shape : {}".format(medusa_logits.shape, logits.shape))
-        new_token = 0
-        last_round_token = 0
-        
-        # 使用medusa_logits生成投机采样的多个candidates
-        for idx in range(max_steps):
-            # print("\nstep: ", idx)
-            # print("mdedusa_logits.shape: {}, logits.shape: {}".format(medusa_logits.shape, logits.shape))
-            # Generate candidates with topk predictions from Medusa heads
-            candidates, tree_candidates = generate_candidates(
-                medusa_logits,
-                logits,
-                medusa_buffers["tree_indices"],
-                medusa_buffers["retrieve_indices"],
-                temperature=temperature,
-                posterior_alpha=posterior_alpha,
-                posterior_threshold=posterior_threshold,
-                top_p=top_p,
-                sampling=sampling,
-                fast=fast,
-            )
-            # print("INPUT OF tree_decoding : mdedusa_logits.shape: {}, logits.shape: {}".format(medusa_logits.shape, logits.shape))
-            # 将token tree输入model再次执行前向传播，验证candidate的可行性
-            # Use tree attention to verify the candidates and get predictions
-            medusa_logits, logits, outputs = tree_decoding(
-                self,
-                tree_candidates,
-                past_key_values,
-                medusa_buffers["medusa_position_ids"],
-                input_ids,
-                medusa_buffers["retrieve_indices"],
-            )
-            # print("After Decoding")
-            # print("mdedusa_logits.shape: {}, logits.shape: {}".format(medusa_logits.shape, logits.shape))
-            # Evaluate the posterior of the candidates to select the accepted candidate prefix
-            # 选择最终被接受的tokens
-            best_candidate, accept_length = evaluate_posterior(
-                logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
-            )
-
-            # Update the input_ids and logits
-            # 使用上一轮采样产生的medusa logits用来下一轮的token candidate生成
-            input_ids, logits, medusa_logits, new_token = update_inference_inputs(
-                input_ids,
-                candidates,
-                best_candidate,
-                accept_length,
-                medusa_buffers["retrieve_indices"],
-                None, # outputs, outputs 实际上没用上
-                logits,
-                medusa_logits,
-                new_token,
-                past_key_values_data,
-                current_length_data,
-            )
-            # print("after update")
-            # print("input_ids: ", input_ids.shape)
-            # print("new_token: ", new_token)
-            # print("mdedusa_logits.shape: {}, logits.shape: {}".format(medusa_logits.shape, logits.shape))
-            # 返回generator用来返回推理结果
-            yield {
-                "text": self.tokenizer.decode(
-                    input_ids[0, input_len:],
-                    skip_special_tokens=True,
-                    spaces_between_special_tokens=False,
-                    clean_up_tokenization_spaces=True,
-                )
-            }
-
-            if self.tokenizer.eos_token_id in input_ids[0, input_len:]:
-                break
-
-        
+    
     def prepare_inputs_for_generation(
         self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
     ):
@@ -851,4 +803,6 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past),
             )
         return reordered_past
+
+
  

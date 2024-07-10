@@ -6,6 +6,8 @@
 .vscode
 model/Medusa-1.3-L2-7B-GGUF
 model/Vicuna-7B-v1.3-GGUF
+model/zephyr-7b-beta
+model/.huggingface/*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -170,3 +172,5 @@ cython_debug/
 #.idea/
 download.py
 1.py
+main_mistral.py
+main_mistral.py

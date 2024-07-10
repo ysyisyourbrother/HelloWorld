@@ -1,36 +1,44 @@
 import torch
 import argparse
-from medusa.pipeline_model.medusa_llama import MedusaLlamaForCausalLM
 from medusa.pipeline_model.llama_config import LlamaConfig
-from medusa.pipeline_model.dis_utils  import   get_medusa_model_state_dict,save_state_dict
+from medusa.pipeline_model.mistral_config import MistralConfig
+
 import os
 def main(args):
-    config = LlamaConfig.from_pretrained( args.base_model_path ) # 包含vicuna-7b-v1.3 config和medusa head config的内容
-    all_state_dict = get_medusa_model_state_dict(args.base_model_path, args.medusa_head_path)   
+    if 'vicuna' in args.config_file:
+        config = LlamaConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
+        model_path = "temp_vicuna_world_1_rank_0/stage.bin"  # 在运行weight_split.py得到的权重路径,要将两个路径权重合并到一个文件
+        from medusa.pipeline_model.medusa_llama import MedusaLlamaForCausalLM as MedusaModel
+    elif 'zephyr' in args.config_file:
+        config = MistralConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
+        model_path = config.base_model_name_or_path # 里面是 zephyr+medusa_head 不需要合并
+        from medusa.pipeline_model.medusa_mistral import  MedusaMistralForCausalLM as MedusaModel
+    else:
+        raise NotImplementedError
+    
     mem_before = torch.cuda.memory_allocated() 
-    if args.load_in_8bit or args.load_in_4bit:
-        temp_path = "temp/stage.bin"
-        save_state_dict(all_state_dict, temp_path)
+    if config.device == "cuda":
         with torch.device("cuda"):
-            del all_state_dict
-            model =  MedusaLlamaForCausalLM.from_pretrained(
-                pretrained_model_name_or_path=  temp_path,
+            model =  MedusaModel.from_pretrained(
+                pretrained_model_name_or_path=  model_path,
+                config=config, 
+                use_safetensors=False ,
+                torch_dtype=config.torch_dtype,
+                load_in_4bit=args.load_in_4bit,
+                load_in_8bit=args.load_in_8bit
+            ) 
+    else:
+        model =  MedusaModel.from_pretrained(
+                pretrained_model_name_or_path=  model_path,
                 config=config, 
                 use_safetensors=False ,
                 torch_dtype=config.torch_dtype,
                 load_in_4bit=args.load_in_4bit,
                 load_in_8bit=args.load_in_8bit
             )
-            os.remove(temp_path)
-    else:
-        model = MedusaLlamaForCausalLM.from_pretrained(
-                        pretrained_model_name_or_path=  None,
-                        config=config, 
-                        state_dict = all_state_dict, 
-                        use_safetensors=False ,
-                        torch_dtype=config.torch_dtype,
-        )
-        model.to("cuda")
+    model.eval()
+    if not args.load_in_8bit and not args.load_in_4bit:
+        model = model.to(config.device)
     print(model)
     mem_after = torch.cuda.memory_allocated()
     print("after load model: {}".format((mem_after - mem_before)/1024/1024)  )
@@ -67,8 +75,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base_model_path", type=str, default="model/vicuna-7b-v1.3", help="Model name or path.")
-    parser.add_argument("--medusa_head_path", type=str, default="model/medusa-vicuna-7b-v1.3", help="Model name or path.")
+    parser.add_argument("--config_file", type=str, default="config/vicuna_7b_config.json", help="Config file path.")
 
     parser.add_argument(
         "--load_in_8bit", action="store_true", help="Use 8-bit quantization"
@@ -77,6 +84,6 @@ if __name__ == "__main__":
         "--load_in_4bit", action="store_true", help="Use 4-bit quantization"
     )
     parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--max-steps", type=int, default=5)
+    parser.add_argument("--max-steps", type=int, default=100)
     args = parser.parse_args()
     main(args)

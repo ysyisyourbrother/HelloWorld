@@ -90,6 +90,7 @@ def initialize_past_key_values(model):
     if hasattr(config, "num_pp_hidden_layers") and config.num_pp_hidden_layers != None:
         # [modified]
         config.num_hidden_layers = config.num_pp_hidden_layers
+    print("num_hidden_layers", config.num_hidden_layers)
     if hasattr(config, "max_kv_cache_length"):
         max_length = config.max_kv_cache_length
     else:

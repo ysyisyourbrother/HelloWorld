@@ -4,21 +4,31 @@ import torch
 import torch.distributed as dist
 import os
 import inspect
-from medusa.pipeline_model.medusa_llama_pp import PPMedusaLlamaForCausalLM
 from medusa.pipeline_model.llama_config import LlamaConfig
-from medusa.pipeline_model.dis_utils import initialize_distributed,get_module_memory,get_max_memory
+from medusa.pipeline_model.mistral_config import MistralConfig
+
+from medusa.pipeline_model.dis_utils import initialize_distributed,get_module_memory,get_max_memory,get_model_type
 from medusa.pipeline_model.PrefillingPipeline import PrefillingPipeline
 
 def main(args):
-    config = LlamaConfig.from_pretrained(f"./config.json")
+    if get_model_type(args.config_file) == 'vicuna':
+        config = LlamaConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
+        temp_path = "temp_vicuna_world_{}_rank_{}/stage.bin".format( args.world,  args.rank)
+        from medusa.pipeline_model.medusa_llama_pp import PPMedusaLlamaForCausalLM as PPMedusaModel
+    elif get_model_type(args.config_file) == 'zephyr':
+        config = MistralConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
+        temp_path = "temp_zephyr_world_{}_rank_{}/stage.bin".format( args.world,  args.rank)
+        from medusa.pipeline_model.medusa_mistral_pp import  PPMedusaMistralForCausalLM as PPMedusaModel
+    else:
+        raise NotImplementedError("暂不支持该模型")
+    print("temp_path:", temp_path)
     initialize_distributed(config, args)
     config.update_pp_stage_config(args)
-    temp_path = "temp_{}/stage.bin".format(args.rank)
     start = time.time()
     mem_before =  get_max_memory(config)
     if config.device == "cuda":
         with torch.device("cuda"):
-            model =  PPMedusaLlamaForCausalLM.from_pretrained(
+            model =  PPMedusaModel.from_pretrained(
                                         pretrained_model_name_or_path=  temp_path,
                                         config=config, 
                                         use_safetensors=False ,
@@ -27,7 +37,7 @@ def main(args):
                                         load_in_8bit=args.load_in_8bit
             )
     else:
-        model =  PPMedusaLlamaForCausalLM.from_pretrained(
+        model =  PPMedusaModel.from_pretrained(
                                         pretrained_model_name_or_path=  temp_path,
                                         config=config, 
                                         use_safetensors=False ,
@@ -35,8 +45,11 @@ def main(args):
                                         load_in_4bit=args.load_in_4bit,
                                         load_in_8bit=args.load_in_8bit
             ) 
-    mem_after =  get_max_memory(config)
     model.eval()
+    print(model)
+    if not args.load_in_8bit and not args.load_in_4bit:
+        model = model.to(config.device)
+    mem_after =  get_max_memory(config)
     print("model device:", model.device)
     print("load time:", time.time() - start)
     print("after load model: {}".format((mem_after - mem_before)/1024/1024)  )
@@ -53,7 +66,6 @@ def main(args):
     if config.is_last_stage:
         print("model.lm_head.weight.dtype", model.lm_head.weight.dtype)
         print("model.medusa_head[0][0].linear.weight.dtype", model.medusa_head[0][0].linear.weight.dtype)
-
     tokenizer = model.get_tokenizer()
     
 
@@ -198,8 +210,8 @@ def main(args):
                             clean_up_tokenization_spaces=True,
                         ) )
         if model.tokenizer.eos_token_id in new_input_ids[0,  :]:
-            print("\n")
-            print("finish decoding")
+            print("Final step: ", idx+1 )
+            print("\nfinish decoding")
             break
     end = time.time()
     print("time", end - start)
@@ -215,6 +227,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--rank', default=0, type=int)
     parser.add_argument('--world', default=2, type=int)
+    parser.add_argument("--config_file", type=str, default="config/vicuna_7b_config.json", help="Model name or path.")
     parser.add_argument(
         "--load_in_8bit", action="store_true", help="Use 8-bit quantization"
     )
@@ -225,4 +238,4 @@ if __name__ == "__main__":
     #TODO: config里增加和 dtype
 
     main(args)  
- #TODO: 修改涉及send rev cpu和cuda 在comminicator里面处理好
+ 
