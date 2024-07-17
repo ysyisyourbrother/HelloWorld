@@ -4,10 +4,15 @@
 *.bin
 *.gguf
 .vscode
+profiler.py
+profile_model/*
+profiler_config/*
 model/Medusa-1.3-L2-7B-GGUF
 model/Vicuna-7B-v1.3-GGUF
 model/zephyr-7b-beta
 model/.huggingface/*
+profile_for_tp.py
+profile_weight_split_tp.py
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -174,3 +179,6 @@ download.py
 1.py
 main_mistral.py
 main_mistral.py
+sync.sh
+exclude-file.txt
+profile_weight_split.py

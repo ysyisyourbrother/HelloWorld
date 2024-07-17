@@ -5,7 +5,7 @@ class PrefillingPipeline(PipelineRuntime):
     def __init__(self, stage_model, config, args):
         super().__init__(stage_model, config, args)
     
-    def pipeline_forward(self, input_ids = None):
+    def pipeline_forward(self, input_ids = None): # 完整句子 pipeline
         """ Forward pass of prefilling stage.
         """
         # bs == 1, seq_len == 47
@@ -16,14 +16,16 @@ class PrefillingPipeline(PipelineRuntime):
         if self.config.is_first_stage:  # 第一个stage
             if not self.config.is_last_stage: # world > 1
                 hidden_states = self.stage_model.prefilling(input_ids=input_ids, inputs_embeds=None )
-                self.send_activation_forward(hidden_states)
+                self.send_activation_forward(self.padding_before_send(hidden_states))
             else: # world == 1
                 raise NotImplementedError("暂不支持单机推理")
         else:
             hidden_states = self.receive_activation_forward()
+            hidden_states = self.cliping_after_recv(hidden_states)
+            print("hidden_states", hidden_states.shape)
             if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
                 hidden_states = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states )
-                self.send_activation_forward(hidden_states)
+                self.send_activation_forward(self.padding_before_send(hidden_states))
             else: # 最后一个stage
                 medusa_logits, logits = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states )
                 print("finish prefilling")
@@ -78,12 +80,15 @@ class PrefillingPipeline(PipelineRuntime):
                 self.send_activation_forward(self.padding_before_send(hidden_states))
             else:#最后一个stage
                 hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states )
+                print("hidden_states", hidden_states.shape)
                 return hidden_states
-
+            
     def pipeline_with_sequence_slicing(self ,input_ids = None):
         if self.config.is_first_stage:
             bs,_ = input_ids.shape
             assert bs == 1
+        if self.config.is_last_stage:
+            sub_hidden_states = []
         # Step 0 : init prefilling (init kv cache)
         self.stage_model.prefilling_init()
         # Step1: 划分原本的sequence为多个sub-sequence
@@ -98,9 +103,12 @@ class PrefillingPipeline(PipelineRuntime):
                 # 最后一个stage 得到hidden_states
                 if self.config.is_last_stage:
                     hidden_states = self.pipeline_sub_forward( None)
+                    sub_hidden_states.append(hidden_states)
                 else:
                     self.pipeline_sub_forward( None)
         if self.config.is_last_stage:
+            # hidden_states = torch.cat(sub_hidden_states, dim=1)
+            print("hidden_states", hidden_states.shape)
             # Step2: 得到medusa_logits和logits
             medusa_logits,logits = self.stage_model.prefilling_finish(hidden_states) 
             print("finish prefilling")

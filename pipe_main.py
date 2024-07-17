@@ -11,9 +11,9 @@ from medusa.pipeline_model.dis_utils import initialize_distributed,get_module_me
 from medusa.pipeline_model.PrefillingPipeline import PrefillingPipeline
 
 def main(args):
-    if get_model_type(args.config_file) == 'vicuna':
+    if get_model_type(args.config_file) == 'vicuna_7b' or get_model_type(args.config_file) == 'vicuna_13b':
         config = LlamaConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
-        temp_path = "temp_vicuna_world_{}_rank_{}/stage.bin".format( args.world,  args.rank)
+        temp_path = "temp_{}_world_{}_rank_{}/stage.bin".format(get_model_type(args.config_file), args.world,  args.rank)
         from medusa.pipeline_model.medusa_llama_pp import PPMedusaLlamaForCausalLM as PPMedusaModel
     elif get_model_type(args.config_file) == 'zephyr':
         config = MistralConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容

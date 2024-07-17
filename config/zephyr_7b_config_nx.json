@@ -39,12 +39,12 @@
   "medusa_num_layers": 1,
   "base_model_name_or_path": "./model/medusa-1.0-zephyr-7b-beta",
 
-  "init_method":"tcp://127.0.0.1:23000",
+  "init_method":"tcp://192.168.123.96:23000",
   "distributed_backend":"gloo",
   "stage_num_hidden_layers_list":[  8,8,8,8],
   "device":"cuda",
   "torch_dtype": "bfloat16",
   "num_sub_sequences":5,
   "sub_sequence_length":128,
-  "max_kv_cache_length": 32768
+  "max_kv_cache_length": 2048
 }

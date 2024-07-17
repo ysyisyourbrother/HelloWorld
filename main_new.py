@@ -7,7 +7,10 @@ import os
 def main(args):
     if 'vicuna' in args.config_file:
         config = LlamaConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
-        model_path = "temp_vicuna_world_1_rank_0/stage.bin"  # 在运行weight_split.py得到的权重路径,要将两个路径权重合并到一个文件
+        if '7b' in args.config_file:
+            model_path = "temp_vicuna_7b_world_1_rank_0/stage.bin"  # 在运行weight_split.py得到的权重路径,要将两个路径权重合并到一个文件
+        else:
+            model_path =  config.base_model_name_or_path # 里面是 vicuna+medusa_head 不需要合并
         from medusa.pipeline_model.medusa_llama import MedusaLlamaForCausalLM as MedusaModel
     elif 'zephyr' in args.config_file:
         config = MistralConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
@@ -15,7 +18,7 @@ def main(args):
         from medusa.pipeline_model.medusa_mistral import  MedusaMistralForCausalLM as MedusaModel
     else:
         raise NotImplementedError
-    
+    model_path= "model/medusa-1.0-vicuna-13b-v1.5"
     mem_before = torch.cuda.memory_allocated() 
     if config.device == "cuda":
         with torch.device("cuda"):

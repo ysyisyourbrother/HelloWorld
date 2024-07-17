@@ -37,8 +37,10 @@ def get_world_size():
 
 
 def get_model_type(config_name):
-    if 'vicuna' in config_name:
-        return 'vicuna'
+    if 'vicuna_7b' in config_name:
+        return 'vicuna_7b'
+    elif 'vicuna_13b' in config_name:
+        return 'vicuna_13b'
     elif 'zephyr' in  config_name:
         return 'zephyr'
     else:
@@ -57,8 +59,9 @@ def save_state_dict(state_dict, save_path):
     # Save the state_dict to the specified path
     torch.save(state_dict, save_path)
 def get_medusa_zephyr_model_state_dict(base_model_path):
-    # for zephyr, weight only in base_model_path
+    # for zephyr and vicuna 13b, weight only in base_model_path
     pretrained_dict =  {}
+    print( base_model_path)
     all_files = os.listdir( base_model_path)
     weight_file_list =  [os.path.join(   base_model_path, f) for f in all_files if f.endswith('.bin')]
     for weigt_file in weight_file_list:
@@ -99,8 +102,11 @@ def get_stage_state_dict( base_model_path,
                          medusa_head_path,
                          stage_num_hidden_layers_list,
                          rank):
-    if 'vicuna' in base_model_path:
+    if   'vicuna-7b'  in base_model_path:
+        print("base_model_path", base_model_path)
         all_state_dict = get_medusa_model_state_dict(base_model_path,medusa_head_path)
+    elif  'vicuna-13b' in base_model_path:
+        all_state_dict = get_medusa_zephyr_model_state_dict(base_model_path)
     elif 'zephyr' in base_model_path:
         all_state_dict = get_medusa_zephyr_model_state_dict(base_model_path)
     else:

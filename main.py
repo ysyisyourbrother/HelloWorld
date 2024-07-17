@@ -50,6 +50,6 @@ if __name__ == "__main__":
         "--load-in-4bit", action="store_true", help="Use 4-bit quantization"
     )
     parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--max-steps", type=int, default=512)
+    parser.add_argument("--max-steps", type=int, default=10)
     args = parser.parse_args()
     main(args)

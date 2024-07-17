@@ -372,6 +372,7 @@ class MedusaModelABC(nn.Module):
             }
 
             if self.tokenizer.eos_token_id in input_ids[0, input_len:]:
+                print("finished step", idx+1)
                 break
 
 

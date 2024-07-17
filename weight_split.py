@@ -8,7 +8,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--config_file", type=str, default="config/vicuna_7b_config.json", help="Config file path.")
 args = parser.parse_args()
 
-if get_model_type(args.config_file) == 'vicuna':
+if get_model_type(args.config_file) == 'vicuna_7b' or get_model_type(args.config_file) == 'vicuna_13b':
     config = LlamaConfig.from_pretrained( args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
 elif get_model_type(args.config_file) == 'zephyr':
     config = MistralConfig.from_pretrained(args.config_file)
@@ -18,14 +18,14 @@ else:
 start=time.time()
 world = len(config.stage_num_hidden_layers_list)
 for rank in range(world ):
-    if 'vicuna' in args.config_file:
+    if 'vicuna_7b' in args.config_file:
         stage_state_dict = get_stage_state_dict(
             config.base_model_name_or_path,
             config.medusa_head_path,
             config.stage_num_hidden_layers_list,
             rank
         )
-    elif 'zephyr' in args.config_file:
+    else :
         stage_state_dict = get_stage_state_dict(
             config.base_model_name_or_path,
             None,

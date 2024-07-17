@@ -297,7 +297,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                     for _ in range(config.medusa_num_heads)
                 ]
             )
-        self.tokenizer = AutoTokenizer.from_pretrained(config.base_model_name_or_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(config.base_model_name_or_path )
 
         # Initialize weights and apply final processing
         self.post_init()

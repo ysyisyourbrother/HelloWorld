@@ -1,6 +1,6 @@
 # Jupiter
 
-## Vicuna
+## Vicuna-7b
 
 权重路径：如果修改路径要修改 config.json 参数`medusa_head_path`,`base_model_name_or_path`
 
@@ -8,8 +8,8 @@
 - `model/medusa-vicuna-7b-v1.3`
 
 1. `config.json`修改`stage_num_hidden_layers_list=[32]`
-2. 运行`weight_split.py`,得到合并的模型参数(vicuna+medusa_head),新的权重在`./temp_vicuna_world_1_rank_0`路径
-3. 运行`main_new.py`,从`./temp_vicuna_world_1_rank_0` load 模型
+2. 运行`python weight_split.py --config_file config/vicuna_7b_config.json `,得到合并的模型参数(vicuna+medusa_head),新的权重在`./temp_vicuna_7b_world_1_rank_0`路径 （json 文件参数`stage_num_hidden_layers_list=32`）
+3. 运行`main_new.py`,从`./temp_vicuna_7b_world_1_rank_0` load 模型
 
 ```shell
 CUDA_VISIBLE_DEVICES=1 python    main_new.py
@@ -133,6 +133,39 @@ data type: bp16
 | int8 | 1957|1957|1904|1904|1904|1904|2388|2270|
 | int4 |1266|1220|1129|1080|1129|1080|1694|1395 |
 
+## Vicuna-13b
+
+权重路径：`.model/medusa-1.0-vicuna-13b-v1.5` 包含 vicuna 和 medusa_head 权重
+
+```
+CUDA_VISIBLE_DEVICES=1 python    main.py  --model model/medusa-1.0-vicuna-13b-v1.5
+CUDA_VISIBLE_DEVICES=1 python    main.py  --model model/medusa-1.0-vicuna-13b-v1.5  --load-in-8bit
+CUDA_VISIBLE_DEVICES=1 python    main.py  --model model/medusa-1.0-vicuna-13b-v1.5  --load-in-4bit
+```
+
+```
+CUDA_VISIBLE_DEVICES=1 python   main_new.py --config_file config/vicuna_13b_config.json
+CUDA_VISIBLE_DEVICES=1 python   main_new.py --config_file config/vicuna_13b_config.json --load_in_8bit
+CUDA_VISIBLE_DEVICES=1 python   main_new.py --config_file config/vicuna_13b_config.json --load_in_4bit
+```
+
+### pipeline
+
+1. 运行`weight_split.py` 划分模型参数,保存到新的文件
+
+```shell
+CUDA_VISIBLE_DEVICES=1  python      weight_split.py  --config_file config/vicuna_13b_config.json
+```
+
+2. 运行`pipe_main.py` 从保存路径中读取权重
+
+```shell
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 0 --config_file config/vicuna_13b_config.json --load_in_4bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1 --config_file config/vicuna_13b_config.json --load_in_4bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2 --config_file config/vicuna_13b_config.json --load_in_4bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3 --config_file config/vicuna_13b_config.json --load_in_4bit
+```
+
 ## zephyr
 
 权重路径: `model/medusa-1.0-zephyr-7b-beta` (包含 zephyr+medusa_head)
@@ -208,9 +241,9 @@ CUDA_VISIBLE_DEVICES=1  python      weight_split.py  --config_file config/zephyr
 
 ```shell
 CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 0  --config_file config/zephyr_7b_config.json
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1    --config_file config/zephyr_7b_config.json
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2    --config_file config/zephyr_7b_config.json
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3   --config_file config/zephyr_7b_config.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1  --config_file config/zephyr_7b_config.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2  --config_file config/zephyr_7b_config.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3  --config_file config/zephyr_7b_config.json
 ```
 
 [8,9,9,6]
