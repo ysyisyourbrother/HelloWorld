@@ -1,18 +1,18 @@
 {
-  "_name_or_path": "/home/ubuntu/model_weights/vicuna-7b-v1.3",
+  "_name_or_path":  "/model/medusa-1.0-vicuna-13b-v1.5",
   "architectures": [
     "LlamaForCausalLM"
   ],
   "bos_token_id": 1,
   "eos_token_id": 2,
   "hidden_act": "silu",
-  "hidden_size": 4096,
+  "hidden_size": 5120,
   "initializer_range": 0.02,
-  "intermediate_size": 11008,
+  "intermediate_size": 13824,
   "max_position_embeddings": 2048,
   "model_type": "llama",
-  "num_attention_heads": 32,
-  "num_hidden_layers": 32,
+  "num_attention_heads": 40,
+  "num_hidden_layers": 40,
   "pad_token_id": 0,
   "rms_norm_eps": 1e-06,
   "tie_word_embeddings": false,
@@ -30,12 +30,11 @@
 
   "medusa_num_heads": 5,
   "medusa_num_layers": 1,
-  "medusa_head_path": "./model/medusa-vicuna-7b-v1.3",
-  "base_model_name_or_path": "./model/vicuna-7b-v1.3",
+  "base_model_name_or_path": "model/medusa-1.0-vicuna-13b-v1.5",
 
   "init_method":"tcp://127.0.0.1:23000",
   "distributed_backend":"gloo",
-  "stage_num_hidden_layers_list":[  32],
+  "stage_num_hidden_layers_list":[10,10,10,10],
   "device":"cuda",
   "torch_dtype": "bfloat16",
   "num_sub_sequences":5,

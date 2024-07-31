@@ -345,7 +345,6 @@ class MedusaModelABC(nn.Module):
             best_candidate, accept_length = evaluate_posterior(
                 logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
             )
-
             # Update the input_ids and logits
             # 使用上一轮采样产生的medusa logits用来下一轮的token candidate生成
             input_ids, logits, medusa_logits, new_token = update_inference_inputs(

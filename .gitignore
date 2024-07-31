@@ -5,6 +5,7 @@
 *.gguf
 .vscode
 profiler.py
+profiler_decoding.py
 profile_model/*
 profiler_config/*
 model/Medusa-1.3-L2-7B-GGUF
@@ -17,7 +18,7 @@ profile_weight_split_tp.py
 __pycache__/
 *.py[cod]
 *$py.class
-
+com.py
 # C extensions
 *.so
 
@@ -182,3 +183,4 @@ main_mistral.py
 sync.sh
 exclude-file.txt
 profile_weight_split.py
+res.txt

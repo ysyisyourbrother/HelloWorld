@@ -2,23 +2,21 @@
 
 ## Vicuna-7b
 
-权重路径：如果修改路径要修改 config.json 参数`medusa_head_path`,`base_model_name_or_path`
+将模型合并: model: `MedusaLlamaForCausalLM`
 
-- `model/vicuna-7b-v1.3`
-- `model/medusa-vicuna-7b-v1.3`
+权重路径：如果修改路径要修改 `config.json` 参数`medusa_head_path`,`base_model_name_or_path`
 
-1. `config.json`修改`stage_num_hidden_layers_list=[32]`
-2. 运行`python weight_split.py --config_file config/vicuna_7b_config.json `,得到合并的模型参数(vicuna+medusa_head),新的权重在`./temp_vicuna_7b_world_1_rank_0`路径 （json 文件参数`stage_num_hidden_layers_list=32`）
-3. 运行`main_new.py`,从`./temp_vicuna_7b_world_1_rank_0` load 模型
+- `model/vicuna-7b-v1.3`: [FasterDecoding/medusa-vicuna-7b-v1.3](https://huggingface.co/FasterDecoding/medusa-vicuna-7b-v1.3)
+- `model/medusa-vicuna-7b-v1.3`: [lmsys/vicuna-7b-v1.3](https://huggingface.co/lmsys/vicuna-7b-v1.3)
+
+1. 运行`python weight_split.py --config_file config/vicuna_7b_config.json `,得到合并的模型参数(vicuna+medusa_head),新的权重在`./temp_vicuna_7b_world_1_rank_0`路径
+2. 运行`main_new.py`,默认从`./temp_vicuna_7b_world_1_rank_0` load 模型
 
 ```shell
 CUDA_VISIBLE_DEVICES=1 python    main_new.py
 CUDA_VISIBLE_DEVICES=1 python    main_new.py --load_in_8bit
 CUDA_VISIBLE_DEVICES=1 python    main_new.py --load_in_4bit
 ```
-
-将模型合并
-model: `MedusaLlamaForCausalLM`
 
 ```
 MedusaLlamaForCausalLM(
@@ -73,11 +71,16 @@ MedusaLlamaForCausalLM(
 ### Pipeline
 
 1. 运行`weight_split.py` 划分模型参数,保存到新的文件
+
+```
+CUDA_VISIBLE_DEVICES=1 python weight_split.py --config_file  config/vicuna_7b_config_pipe.json
+```
+
 2. 运行`pipe_main.py` 从保存路径中读取权重
 
 参数意义:
 
-config_file: `config/vicuna_7b_config.json`
+config_file: `config/vicuna_7b_config_pipe.json`
 
 - 模型参数： `medusa_head_path`, `base_model_name_or_path`
 - pipeline 参数: `stage_num_hidden_layers_list`,`num_sub_sequences`,`sub_sequence_length`
@@ -85,9 +88,10 @@ config_file: `config/vicuna_7b_config.json`
 - KV Cache 参数: `max_kv_cache_length`
 
 ```
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 0
-
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 1
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 0 --config_file config/vicuna_7b_config_pipe.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1 --config_file config/vicuna_7b_config_pipe.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2 --config_file config/vicuna_7b_config_pipe.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3 --config_file config/vicuna_7b_config_pipe.json
 
 ```
 
@@ -97,9 +101,9 @@ CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 1
 例如：划分 3 个 stage, 修改`stage_num_hidden_layers_list` = [10,10,12]
 
 ```
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 0
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 1
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 2
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 0 --config_file config/vicuna_7b_config_pipe.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 1 --config_file config/vicuna_7b_config_pipe.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 2 --config_file config/vicuna_7b_config_pipe.json
 
 ```
 
@@ -111,9 +115,10 @@ CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 3 --rank 2
 - 如果使用`bitsandbytes`量化，不支持 cpu
 
 ```
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 0 --load_in_8bit
-
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 2 --rank 1 --load_in_8bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 0 --config_file config/vicuna_7b_config_pipe.json  --load-in-8bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1 --config_file config/vicuna_7b_config_pipe.json  --load-in-8bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2 --config_file config/vicuna_7b_config_pipe.json  --load-in-8bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3 --config_file config/vicuna_7b_config_pipe.json  --load-in-8bit
 
 ```
 
@@ -135,7 +140,9 @@ data type: bp16
 
 ## Vicuna-13b
 
-权重路径：`.model/medusa-1.0-vicuna-13b-v1.5` 包含 vicuna 和 medusa_head 权重
+权重下载: [FasterDecoding/medusa-1.0-vicuna-13b-v1.5](https://huggingface.co/FasterDecoding/medusa-1.0-vicuna-13b-v1.5)
+
+权重路径：`.model/medusa-1.0-vicuna-13b-v1.5` 已经包含 vicuna 和 medusa_head 权重
 
 ```
 CUDA_VISIBLE_DEVICES=1 python    main.py  --model model/medusa-1.0-vicuna-13b-v1.5
@@ -149,21 +156,31 @@ CUDA_VISIBLE_DEVICES=1 python   main_new.py --config_file config/vicuna_13b_conf
 CUDA_VISIBLE_DEVICES=1 python   main_new.py --config_file config/vicuna_13b_config.json --load_in_4bit
 ```
 
+| para_num    |
+| :---------- |
+| 13966161920 |
+
+| data type | model memory | max memory | kv cache mem |
+| :-------- | :----------: | :--------: | ------------ |
+| bp16      |   26678 MB   |  28599 MB  | 1600 MB      |
+| int8      |   13901 MB   |  15726 MB  | 1600 MB      |
+| int4      |   7168 MB    |  10040 MB  | 1600 MB      |
+
 ### pipeline
 
 1. 运行`weight_split.py` 划分模型参数,保存到新的文件
 
 ```shell
-CUDA_VISIBLE_DEVICES=1  python      weight_split.py  --config_file config/vicuna_13b_config.json
+CUDA_VISIBLE_DEVICES=1  python      weight_split.py  --config_file config/vicuna_13b_config_pipe.json
 ```
 
 2. 运行`pipe_main.py` 从保存路径中读取权重
 
 ```shell
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 0 --config_file config/vicuna_13b_config.json --load_in_4bit
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1 --config_file config/vicuna_13b_config.json --load_in_4bit
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2 --config_file config/vicuna_13b_config.json --load_in_4bit
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3 --config_file config/vicuna_13b_config.json --load_in_4bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 0 --config_file config/vicuna_13b_config_pipe.json  --load_in_8bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1 --config_file config/vicuna_13b_config_pipe.json  --load_in_8bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2 --config_file config/vicuna_13b_config_pipe.json  --load_in_8bit
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3 --config_file config/vicuna_13b_config_pipe.json  --load_in_8bit
 ```
 
 ## zephyr
@@ -234,16 +251,16 @@ MedusaMistralForCausalLM(
 1. 运行`weight_split.py` 划分模型参数,保存到新的文件
 
 ```shell
-CUDA_VISIBLE_DEVICES=1  python      weight_split.py  --config_file config/zephyr_7b_config.json
+CUDA_VISIBLE_DEVICES=1  python      weight_split.py  --config_file config/zephyr_7b_config_pipe.json
 ```
 
 2. 运行`pipe_main.py` 从保存路径中读取权重
 
 ```shell
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 0  --config_file config/zephyr_7b_config.json
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1  --config_file config/zephyr_7b_config.json
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2  --config_file config/zephyr_7b_config.json
-CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3  --config_file config/zephyr_7b_config.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 0  --config_file config/zephyr_7b_config_pipe.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 1  --config_file config/zephyr_7b_config_pipe.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 2  --config_file config/zephyr_7b_config_pipe.json
+CUDA_VISIBLE_DEVICES=1 python    pipe_main.py    --world 4 --rank 3  --config_file config/zephyr_7b_config_pipe.json
 ```
 
 [8,9,9,6]

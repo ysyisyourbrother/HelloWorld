@@ -20,7 +20,7 @@
   "use_cache": true,
   "vocab_size": 32000,
   "do_sample":true,
-  "max_steps":100,
+  "max_steps":5,
   "temperature": 0.7,
   "posterior_threshold": 0.09,
   "posterior_alpha":0.3,
@@ -38,7 +38,7 @@
   "stage_num_hidden_layers_list":[  8,8,8,8],
   "device":"cuda",
   "torch_dtype": "bfloat16",
-  "num_sub_sequences":5,
+  "num_sub_sequences": 8,
   "sub_sequence_length":128,
   "max_kv_cache_length": 2048
 

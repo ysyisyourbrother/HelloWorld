@@ -71,7 +71,7 @@ def main(args):
 
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, 
         detailed, and polite answers to the user's questions. USER: Tell me what do you know about Jupiter? . ASSISTANT:"""
-    input_ids = tokenizer.encode(prompt, return_tensors="pt") 
+    input_ids = tokenizer.encode(prompt, return_tensors="pt")     
     if config.device == "cuda":
         input_ids = input_ids.cuda()
     start = time.time()
@@ -87,10 +87,6 @@ def main(args):
             runtime.pipeline_with_sequence_slicing(input_ids) # or use runtime.pipeline_forward
         else:
             runtime.pipeline_with_sequence_slicing()
-
-
-
-
     print("prefilling time:", time.time() - start)
     ######################################################################
     # Decoding stage 

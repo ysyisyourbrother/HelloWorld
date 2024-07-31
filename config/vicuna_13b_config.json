@@ -34,7 +34,7 @@
 
   "init_method":"tcp://127.0.0.1:23000",
   "distributed_backend":"gloo",
-  "stage_num_hidden_layers_list":[   10,10,10,10],
+  "stage_num_hidden_layers_list":[   40],
   "device":"cuda",
   "torch_dtype": "bfloat16",
   "num_sub_sequences":5,
