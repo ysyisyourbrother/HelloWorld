@@ -65,6 +65,8 @@ class KVCache:
         self.current_length.add_(tensor.shape[dim])
         return torch.narrow(self.data, 2, 0, self.current_length)
 
+    def get_states(self):
+        return torch.narrow(self.data, 2, 0, self.current_length)
 
 def initialize_past_key_values(model):
     """
@@ -122,3 +124,16 @@ def initialize_past_key_values(model):
             ]
         )
     return past_key_values, past_key_values_data, current_length_data
+
+def get_shared_kv_and_point_kv( shared_past_key_value,point_past_key_value):
+    share_key_states = shared_past_key_value[0].get_states()
+    share_value_states  = shared_past_key_value[1].get_states()
+    
+    point_key_states = point_past_key_value[0].get_states()
+    point_value_states  = point_past_key_value[1].get_states()
+    
+    # 按照最后一个维度（seqlen 维度）进行拼接
+    combined_key_states = torch.cat((share_key_states, point_key_states), dim=2)
+    combined_value_states = torch.cat((share_value_states, point_value_states), dim=2)
+    return combined_key_states, combined_value_states
+

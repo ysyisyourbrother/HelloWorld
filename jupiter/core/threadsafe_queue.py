@@ -21,3 +21,9 @@ class Queue:
         tensor = self.queue.pop(0)
         self.cond.release()
         return tensor
+    
+    def len(self):
+        self.cond.acquire()
+        length =  len(self.queue)
+        self.cond.release()
+        return length

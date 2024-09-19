@@ -35,6 +35,7 @@ from transformers.utils import (
 from  .llama_config import LlamaConfig
 from .modeling_llama_kv  import    LlamaRMSNorm, LlamaPreTrainedModel,LlamaDecoderLayer,_make_causal_mask,_expand_mask
 
+import tasks.medusa_llama.outline_decoding_controller   as outline_decoding_controller  #[modified]
 
 logger = logging.get_logger(__name__)
 
@@ -139,6 +140,7 @@ class PPLlamaModel(LlamaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        **kwargs, #[modified]
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -162,11 +164,16 @@ class PPLlamaModel(LlamaPreTrainedModel):
         past_key_values_length = 0
 
         if past_key_values is not None:
-            # 获取KVCache的current_length
+            # 获取KVCache的current_length (仅为 shared_kv_cache leghth)
             past_key_values_length = past_key_values[0][0].shape[2]
             # 包括当前推理序列的总seq_length
             seq_length_with_past = seq_length_with_past + past_key_values_length
-
+            # 获取 point_past_key_values_length
+            if kwargs.get('is_point')==True:
+                point_id = kwargs.get('point_id')
+                point_past_key_values = outline_decoding_controller.controller.get_point_past_key_values(point_id)
+                point_past_key_values_length = point_past_key_values[0][0].shape[2]
+                seq_length_with_past += point_past_key_values_length
         if position_ids is None:
             # 生成待推理新序列的position_ids
             device = input_ids.device if input_ids is not None else inputs_embeds.device
@@ -235,6 +242,7 @@ class PPLlamaModel(LlamaPreTrainedModel):
                 )
             else:
                 # 带着past_key_value进行decoding阶段计算
+                kwargs['layer_id'] =  idx # [modified]
                 layer_outputs = decoder_layer(
                     hidden_states,
                     attention_mask=attention_mask,
@@ -243,6 +251,7 @@ class PPLlamaModel(LlamaPreTrainedModel):
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     padding_mask=padding_mask,
+                    **kwargs, # [modified]
                 )
 
             hidden_states = layer_outputs[0]
@@ -357,7 +366,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         output_orig=False,
         position_ids=None,
         medusa_forward=False,
-        **kwargs,
+        **kwargs, # 
     ):
         """Forward pass of the MedusaModel.
 
@@ -439,7 +448,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
         reset_medusa_mode(self) 
         
     def prefilling_finish(self,hidden_states =None,output_orig=True):
-        self.model.medusa_mask =  self.medusa_buffers["medusa_attn_mask"]
+        self.model.medusa_mask =  self.medusa_buffers["medusa_attn_mask"] # change for decoding
         print(f"{inspect.currentframe().f_code.co_filename} line {inspect.currentframe().f_lineno} prefilling_finish function Max memory allocated: { torch.cuda.max_memory_allocated( ) / (1024 * 1024)}")
 
         if self.config.is_last_stage:
@@ -453,7 +462,8 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
                 if output_orig:
                     return torch.stack(medusa_logits, dim=0),  orig
                 return torch.stack(medusa_logits, dim=0)
-
+    def set_mask_for_medusa_decoding(self):
+        self.model.medusa_mask =  self.medusa_buffers["medusa_attn_mask"] # change for decoding
     def forward_sub_sequences(        
         self,
         input_ids=None,
@@ -553,7 +563,7 @@ class PPMedusaLlamaForCausalLM(LlamaPreTrainedModel):
             assert isinstance(outputs, BaseModelOutputWithPast)
             hidden_states = outputs.last_hidden_state
             return hidden_states # [1,seq_len,hidden_size] 
-    
+
     def tree_decoding(self, tree_candidates, tree_candidates_embeds,input_ids):
         if self.config.is_first_stage:
             assert tree_candidates != None

@@ -27,7 +27,8 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
-
+import tasks.medusa_llama.outline_decoding_controller   as outline_decoding_controller  #[modified]
+from tasks.medusa_llama.kv_cache import get_shared_kv_and_point_kv
 
 # if is_flash_attn_available():
 #     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -313,6 +314,7 @@ class LlamaAttention(nn.Module):
         output_attentions: bool = False,
         use_cache: bool = False,
         padding_mask: Optional[torch.LongTensor] = None,
+        **kwargs, # [modified]
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
@@ -343,8 +345,15 @@ class LlamaAttention(nn.Module):
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
+        if past_key_value is not None: 
             kv_seq_len += past_key_value[0].shape[-2]
+            # [modified]
+            if kwargs.get('is_point'):
+                point_id = kwargs.get('point_id')
+                layer_id = kwargs.get('layer_id')
+                point_past_key_values = outline_decoding_controller.controller.get_point_past_key_values(point_id)
+                point_past_key_value = point_past_key_values[layer_id]
+                kv_seq_len += point_past_key_value[0].shape[-2]
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
@@ -352,8 +361,16 @@ class LlamaAttention(nn.Module):
         # past_key_value is utilized to leverage previously computed key and value states.
         # If past_key_value is available, reuse the states for k, v, and self_attention.
         if past_key_value is not None:
-            key_states = past_key_value[0].cat(key_states, dim=2)
-            value_states = past_key_value[1].cat(value_states, dim=2)
+            if kwargs.get('is_point'):
+                # [MODIFIED] contac point_kv with shared_kv (past_key_value)
+                point_past_key_value[0].cat(key_states, dim=2)
+                point_past_key_value[1].cat(value_states, dim=2)
+                key_states,value_states = get_shared_kv_and_point_kv(past_key_value, point_past_key_value)
+            else:
+                key_states = past_key_value[0].cat(key_states, dim=2)
+                value_states = past_key_value[1].cat(value_states, dim=2)
+
+            
         # Reset past_key_value to avoid return past_key_value.
         past_key_value = None
         key_states = repeat_kv(key_states, self.num_key_value_groups)
@@ -599,6 +616,7 @@ class LlamaDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         padding_mask: Optional[torch.LongTensor] = None,
+        **kwargs, # [modified]
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
@@ -627,6 +645,7 @@ class LlamaDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
             padding_mask=padding_mask,
+             **kwargs,   # [modified]
         )
         hidden_states = residual + hidden_states
 
