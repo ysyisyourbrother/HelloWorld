@@ -1,15 +1,13 @@
 import argparse
 import time
-import inspect
-
 import torch
 import torch.distributed as dist
-
 from tasks.medusa_llama.llama_config import LlamaConfig
 from tools.utils import initialize_distributed,get_max_memory,get_model_type
 from tools.sot import get_skeleton_prompt,get_point_expanding_prompt
-from jupiter.utils import jupiter_prefilling,normal_decoding,jupiter_prefilling_no_finish,point_prefilling
-import tasks.medusa_llama.outline_decoding_controller   as outline_decoding_controller
+from jupiter.utils import jupiter_prefilling,normal_decoding,jupiter_prefilling_no_finish,point_prefilling,outline_based_decoding
+from  tasks.medusa_llama.outline_decoding_controller  import get_controller,OutlineDecodingController,set_controller  #[modified]
+
 def main(args):
     if get_model_type(args.config_file) == 'vicuna_7b' or get_model_type(args.config_file) == 'vicuna_13b':
         config = LlamaConfig.from_pretrained(args.config_file) # 包含vicuna-7b-v1.3 config和medusa head config的内容
@@ -43,38 +41,63 @@ def main(args):
                                         load_in_8bit=args.load_in_8bit
             ) 
     model.eval()
+    print("Data_type:", model.dtype)
     # for quantization
     if not args.load_in_8bit and not args.load_in_4bit:
         model = model.to(config.device)
-    mem_after =  get_max_memory(config)
-    print("Model device:", model.device)
-    print("Load time:", time.time() - start)
-    print("After load model: {}".format((mem_after - mem_before)/1024/1024)  )
-    print( "Model memory footprint",  model.get_memory_footprint()/(1024*1024))
     question = "What are the most effective ways to deal with stress?"
     prompt = get_skeleton_prompt(question)
     # Step 1: prefilling with sequence slicing
     medusa_logits, logits = jupiter_prefilling(prompt,model,config,args)
     dist.barrier()
-    # Step 2: normal decoding
+    # # Step 2: normal decoding
     answer = normal_decoding(prompt,model,config,medusa_logits,logits)
     skeleton = "\n".join([line.lstrip() for line in answer.splitlines()])
-    print("skeleton:\n", skeleton)
+    print("===========================================\n")
+    print("Skeleton:\n", skeleton)
     points,shared_perfix,prompts_for_points = get_point_expanding_prompt(skeleton, question)
-    point_num = len(prompts_for_points)
-    print("point number:", point_num)
-    tokenizer = model.get_tokenizer()
-    input_ids = tokenizer.encode(shared_perfix, return_tensors="pt")     
-    print(input_ids.shape)
+    print("===========================================\n")
+    print("Shared perfix:\n",shared_perfix)
+    print("===========================================\n")
+    tokenizer = model.tokenizer
+    print("prompts_for_points: ")
+    for i in prompts_for_points:
+        print(i)
     # Step 3: shared perfix prefiling
-    jupiter_prefilling_no_finish(shared_perfix ,model,config,args)
+    input_ids_1 = tokenizer.encode( shared_perfix, return_tensors="pt")
+    jupiter_prefilling_no_finish(shared_perfix ,model,config,args,input_ids =input_ids_1 )
     dist.barrier()
-    # Step 4: point request prefiling, and get medusa_logits, logits for every request 
-    outline_decoding_controller.controller=outline_decoding_controller.OutlineDecodingController(point_num,config,model)
-    outline_decoding_controller.controller.prepare_point_kv_cache()
-    point_prefilling(prompts_for_points ,model,config,args)
-    outline_decoding_controller.controller.check()
+    # # Step 4: point request prefiling, and get medusa_logits, logits for every point 
+    set_controller(OutlineDecodingController(points,config,model))
+    print("==============================\n point_prefilling")
+    medusa_logits_list,logits_list = point_prefilling(prompts_for_points ,model,config,args )
     dist.barrier()
+    if config.is_last_stage:
+        logits = logits_list[0]
+        print(logits.shape)
+        print("logits", logits[:,-1,-10:])
+        torch.save(logits,"logits_split.pt")
+        
+    # # prepare reuquets
+    if config.is_last_stage:
+        get_controller().add_requests(medusa_logits_list,logits_list)
+    # prepare inout_ids
+
+    input_ids_for_point=[]
+    for i in range(len(prompts_for_points)): 
+        input_ids_1 = tokenizer.encode( shared_perfix, return_tensors="pt")
+        input_ids_2 = tokenizer.encode(prompts_for_points[i], return_tensors="pt")   
+        input_ids = torch.cat([input_ids_1, input_ids_2[:,2:] ], dim=1)
+        if config.device == "cuda":
+            input_ids = input_ids.cuda()
+        input_ids_for_point.append(input_ids)
+    get_controller().set_up_input_ids_for_point(input_ids_for_point)
+    dist.barrier()
+    # Step 5: jupiter decoding
+    print("==============================\n outline_based_decoding")
+    outline_based_decoding(model,config,args)
+    dist.barrier()
+    get_controller().get_output(tokenizer) 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--rank', default=0, type=int)

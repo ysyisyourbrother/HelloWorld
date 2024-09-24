@@ -5,13 +5,14 @@ import torch
 import copy
 import torch.distributed as dist
 from .core.tag_manager   import Tag
-def jupiter_prefilling(prompt,model,config,args):
+def jupiter_prefilling(prompt,model,config,args,input_ids=None):
     # prefilling with sequence slicing
-    tokenizer = model.get_tokenizer()
-    input_ids = tokenizer.encode(prompt, return_tensors="pt")     
+    if input_ids is None:
+        tokenizer = model.get_tokenizer()
+        input_ids = tokenizer.encode(prompt, return_tensors="pt")     
     if config.device == "cuda":
         input_ids = input_ids.cuda()
-    start = time.time()
+    print("input_ids shape:",input_ids.shape)
     ######################################################################
     # Pipelined Prefilling Stage
     start = time.time()
@@ -29,24 +30,26 @@ def jupiter_prefilling(prompt,model,config,args):
         return medusa_logits, logits
     else:
         return None, None
-def jupiter_prefilling_no_finish(prompt,model,config,args):
+def jupiter_prefilling_no_finish(prompt,model,config,args,input_ids=None):
     # prefilling with sequence slicing
+    
     tokenizer = model.get_tokenizer()
-    input_ids = tokenizer.encode(prompt, return_tensors="pt")     
+    if input_ids is None:
+        input_ids = tokenizer.encode(prompt, return_tensors="pt")     
     if config.device == "cuda":
         input_ids = input_ids.cuda()
     ######################################################################
     runtime = PrefillingPipeline(model, config, args)
-    if config.is_last_stage:    # last stage会产生medusa logits供decoding阶段使用
+    if config.is_last_stage:   
         runtime.pipeline_with_sequence_slicing_no_finish( )
     else:
         if config.is_first_stage:
-            runtime.pipeline_with_sequence_slicing_no_finish(input_ids) # or use runtime.pipeline_forward
+            runtime.pipeline_with_sequence_slicing_no_finish(input_ids)  
         else:
             runtime.pipeline_with_sequence_slicing_no_finish()
     runtime.comm_handler.stop_helper_threads()
 
-def point_prefilling(points,model,config,args):
+def point_prefilling(points,model,config,args,input_ids=None):
     '''
     prefiling points for every request,
     e.g.  
@@ -56,12 +59,13 @@ def point_prefilling(points,model,config,args):
     '''
     tokenizer = model.get_tokenizer()
     runtime = PrefillingPipeline(model, config, args)
-    points_input_ids = []
-    for point in points:
-        input_ids = tokenizer.encode(point, return_tensors="pt")     
-        if config.device == "cuda":
-            input_ids = input_ids.cuda()
-        points_input_ids.append(input_ids)
+    if input_ids==None:
+        points_input_ids = [tokenizer.encode(point, return_tensors="pt") for point in  points]
+        points_input_ids = [point[:,2:] for point in points_input_ids]
+    else:
+        points_input_ids = input_ids
+    if config.device == "cuda":
+        points_input_ids = [p.cuda() for p in points_input_ids ]
     if config.is_last_stage: 
         medusa_logits_list,logits_list = runtime.points_saturation(points_input_ids)
     else:
@@ -71,7 +75,7 @@ def point_prefilling(points,model,config,args):
         return medusa_logits_list,logits_list
     else:
         return None ,None
-def normal_decoding(prompt,model,config,medusa_logits=None,logits=None):
+def normal_decoding(prompt,model,config,medusa_logits=None,logits=None,input_ids=None):
     # normal decoding, no pipeline
     tag_manager = Tag()
     tensor_tag = {"tree_decoding":  tag_manager.get_next_tag(),
@@ -84,19 +88,25 @@ def normal_decoding(prompt,model,config,medusa_logits=None,logits=None):
                     "tree_candidates":torch.int64,
                     "new_token":torch.int64}
     tokenizer = model.get_tokenizer()
-    input_ids = tokenizer.encode(prompt, return_tensors="pt")     
+    if input_ids is None:
+        input_ids = tokenizer.encode(prompt, return_tensors="pt")     
     if config.device == "cuda":
         input_ids = input_ids.cuda()
     input_len = input_ids.shape[1]
     new_token=0
     text = ""
-    for _ in range( config.max_steps):
+    for idx in range( config.max_steps):
         # Step 1 : generate_candidates
+
+
         if config.is_last_stage:
             candidates, tree_candidates = model.generate_candidates(
                     medusa_logits, 
                     logits, 
             )
+            
+            # print("medusa_logits: ", medusa_logits[:,:,-1,-10:])
+            # print("logits", logits[:,-1,-10:])
         if config.is_first_stage:
             recv_tensor = torch.zeros(tensor_shape["tree_candidates"], 
                                     dtype=tensor_type["tree_candidates"]) # int64
@@ -105,12 +115,14 @@ def normal_decoding(prompt,model,config,medusa_logits=None,logits=None):
                 tree_candidates = recv_tensor.to("cuda")
             else:   
                 tree_candidates = recv_tensor
+
         if config.is_last_stage:
             if config.device == "cuda":
                 send_tensor = tree_candidates.cpu()
             else:
                 send_tensor = tree_candidates
             dist.send(tensor= send_tensor, dst=0, tag= tensor_tag["tree_candidates"])
+
         # Step 2 tree decoding
         # TODO:tree_decoding所有stage 都需要 input_ids, 需要广播input_ids, 每一次decoding都会修改inputs_ids
         # TODO: 是否需要用到inputs_ids，还是只需要用到input_ids.shape[1]?
@@ -123,6 +135,7 @@ def normal_decoding(prompt,model,config,medusa_logits=None,logits=None):
                 )
                 # 不是最后一个stage就要往前传播数据
                 send_tensor = hidden_states.cpu()
+
                 dist.send(tensor= send_tensor, dst= config.next_rank, tag= tensor_tag["tree_decoding"])
             else: # world == 1
                 raise NotImplementedError("暂不支持单机推理")
@@ -134,6 +147,7 @@ def normal_decoding(prompt,model,config,medusa_logits=None,logits=None):
                 hidden_states = recv_tensor.to("cuda")
             else:
                 hidden_states = recv_tensor
+
             if not config.is_last_stage:
                 hidden_states = model.tree_decoding(
                     tree_candidates = None,
@@ -148,6 +162,8 @@ def normal_decoding(prompt,model,config,medusa_logits=None,logits=None):
                     tree_candidates_embeds = hidden_states,
                     input_ids = input_ids
                 )
+
+
         # 完成decoding阶段的前向传播推理后，我们在最后一个stage进行evaluate_posterior 和 update_inference_inputs
         # Step 3: 选择出best candidate作为采样的结果，同时更新inputs_ids
         if config.is_last_stage:
@@ -200,16 +216,7 @@ def normal_decoding(prompt,model,config,medusa_logits=None,logits=None):
         if model.tokenizer.eos_token_id in input_ids[0, input_len:]:
             break
     return text
-def outline_based_decoding(prompt,model,config,args,medusa_logits=None,logits=None):
-    # outline based decoding
-    tokenizer = model.get_tokenizer()
-    input_ids = tokenizer.encode(prompt, return_tensors="pt")     
-    if config.device == "cuda":
-        input_ids = input_ids.cuda()
-    # Decoding stage 
-    decoding_runtime = DecodingPipeline(model, config, args)
-    if config.is_last_stage:
-        ans = decoding_runtime.decoding_pipeline(input_ids, medusa_logits, logits)
-    else:
-        ans = decoding_runtime.decoding_pipeline(input_ids, None, None)
-    return ans
+def outline_based_decoding( model,config,args ):
+    model.set_mask_for_medusa_decoding()
+    runtime = DecodingPipeline(model, config, args)
+    runtime.jupiter_decoding_pipeline()

@@ -64,7 +64,7 @@ class KVCache:
         dst.copy_(tensor)
         self.current_length.add_(tensor.shape[dim])
         return torch.narrow(self.data, 2, 0, self.current_length)
-
+    # [modified]
     def get_states(self):
         return torch.narrow(self.data, 2, 0, self.current_length)
 
@@ -128,6 +128,7 @@ def initialize_past_key_values(model):
 def get_shared_kv_and_point_kv( shared_past_key_value,point_past_key_value):
     share_key_states = shared_past_key_value[0].get_states()
     share_value_states  = shared_past_key_value[1].get_states()
+    
     
     point_key_states = point_past_key_value[0].get_states()
     point_value_states  = point_past_key_value[1].get_states()

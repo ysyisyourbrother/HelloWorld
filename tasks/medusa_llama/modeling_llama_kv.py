@@ -27,7 +27,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
-import tasks.medusa_llama.outline_decoding_controller   as outline_decoding_controller  #[modified]
+from  tasks.medusa_llama.outline_decoding_controller  import get_controller   #[modified]
 from tasks.medusa_llama.kv_cache import get_shared_kv_and_point_kv
 
 # if is_flash_attn_available():
@@ -317,7 +317,7 @@ class LlamaAttention(nn.Module):
         **kwargs, # [modified]
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
-
+        # print("q_len", q_len)
         if self.config.pretraining_tp > 1:
             key_value_slicing = (self.num_key_value_heads * self.head_dim) // self.config.pretraining_tp
             query_slices = self.q_proj.weight.split(
@@ -339,24 +339,31 @@ class LlamaAttention(nn.Module):
             query_states = self.q_proj(hidden_states)
             key_states = self.k_proj(hidden_states)
             value_states = self.v_proj(hidden_states)
-
+            # print("query_states", query_states[:,-1,-10:])
+            # print("key_states", key_states[:,-1,-10:])
+            # print("value_states", value_states[:,-1,-10:])
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-
+        
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None: 
+            # print("prelen",past_key_value[0].shape[-2])
             kv_seq_len += past_key_value[0].shape[-2]
+            
             # [modified]
             if kwargs.get('is_point'):
                 point_id = kwargs.get('point_id')
                 layer_id = kwargs.get('layer_id')
-                point_past_key_values = outline_decoding_controller.controller.get_point_past_key_values(point_id)
+                point_past_key_values = get_controller().get_point_past_key_values(point_id)
                 point_past_key_value = point_past_key_values[layer_id]
+                # new_len = point_past_key_value[0].shape[-2]
                 kv_seq_len += point_past_key_value[0].shape[-2]
+             
+
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
-
+        
         # [MODIFIED] Using KVCache mechanism for preallocated GPU memory optimization
         # past_key_value is utilized to leverage previously computed key and value states.
         # If past_key_value is available, reuse the states for k, v, and self_attention.
@@ -369,14 +376,19 @@ class LlamaAttention(nn.Module):
             else:
                 key_states = past_key_value[0].cat(key_states, dim=2)
                 value_states = past_key_value[1].cat(value_states, dim=2)
-
+                
             
         # Reset past_key_value to avoid return past_key_value.
         past_key_value = None
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
-
+        # print("key_states repeat_kv", key_states[0,0,0,-10:])
+        # print("value_states repeat_kv", value_states[0,0,0,-10:])
+        
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        # print("attn_weights,shape", attn_weights.shape)
+        # print("attn_weights", attn_weights[0,0,-1,-10:])
+
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
                 f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
@@ -389,6 +401,7 @@ class LlamaAttention(nn.Module):
                     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
                 )
             attn_weights = attn_weights + attention_mask
+            
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
@@ -635,7 +648,7 @@ class LlamaDecoderLayer(nn.Module):
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
-
+        # print("att in.",hidden_states[:,-1,-10:])
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
@@ -647,14 +660,15 @@ class LlamaDecoderLayer(nn.Module):
             padding_mask=padding_mask,
              **kwargs,   # [modified]
         )
+        # print("att out.",hidden_states[:,-1,-10:])
         hidden_states = residual + hidden_states
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
-
         outputs = (hidden_states,)
 
         if output_attentions:
@@ -917,7 +931,7 @@ class LlamaModel(LlamaPreTrainedModel):
         # [MODIFIED] 
         self.attention_mask = attention_mask
         self.position_ids = position_ids
-
+ 
         hidden_states = inputs_embeds
 
         if self.gradient_checkpointing and self.training:

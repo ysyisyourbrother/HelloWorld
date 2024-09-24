@@ -11,18 +11,24 @@ class PrefillingPipeline(PipelineRuntime):
         """
         # bs == 1, seq_len == 47
         if self.config.is_first_stage:
-            bs,seq_len = input_ids.shape
+            bs,_ = input_ids.shape
             assert bs == 1
 
         if self.config.is_first_stage:  # 第一个stage
             if not self.config.is_last_stage: # world > 1
                 hidden_states = self.stage_model.prefilling(input_ids=input_ids, inputs_embeds=None )
-                self.send_activation_forward(self.padding_before_send(hidden_states))
+                # self.send_activation_forward(self.padding_before_send(hidden_states))
+                seq_len = torch.tensor(hidden_states.shape[1])
+                print("seq_len", seq_len)
+                self.send_seq_len(seq_len)
+                self.send_activation_forward(hidden_states)
             else: # world == 1
                 raise NotImplementedError("暂不支持单机推理")
         else:
+            seq_len = self.receive_seq_len().item()
+            print("seq_len", seq_len)
             hidden_states = self.receive_activation_forward()
-            hidden_states = self.cliping_after_recv(hidden_states)
+            hidden_states = hidden_states[:,1:seq_len+1,:]
             if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
                 hidden_states = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states )
                 self.send_activation_forward(self.padding_before_send(hidden_states))
@@ -46,27 +52,9 @@ class PrefillingPipeline(PipelineRuntime):
             length = split_size + 1 if i < remainder else split_size
             splits.append(tensor.narrow(dim, start, length))
             start += length
-        
         return splits
     
     
-    def padding_before_send(self,tensor):
-        # 原本的tensor为 [1,sub_len,hidden_size], padding为 [1,sub_len+1,hidden_size]
-        # 其中tensor[0][0][0] = sub_len
-        shape = tensor.size()
-        sub_len = shape[1]
-        zero_part = torch.zeros(shape[0], 1, shape[2], dtype=tensor.dtype, device=tensor.device)
-        modified_tensor = torch.cat((zero_part, tensor), dim=1)
-        sub_len = torch.tensor(sub_len).to(modified_tensor.dtype)
-
-        modified_tensor[0][0][0] =  sub_len
-        return modified_tensor
-
-
-    def cliping_after_recv(self,tensor):
-        sub_len = int(tensor[0, 0, 0]) 
-        print("sub_len", sub_len)
-        return tensor[:,1:sub_len+1,:]
 
 
     def pipeline_with_sequence_slicing(self ,input_ids = None):
@@ -81,16 +69,24 @@ class PrefillingPipeline(PipelineRuntime):
             sub_sequences = self.split_tensor_along_dim(input_ids, self.config.num_sub_sequences, dim=1)
         for i in range (self.config.num_sub_sequences):
             if self.config.is_first_stage:
-                sub_input_ids = sub_sequences[i]
                 if self.config.is_last_stage:
                     raise NotImplementedError("暂不支持单机推理")
+                sub_input_ids = sub_sequences[i]
+                seq_len = torch.tensor( int (sub_input_ids.shape[1])).reshape(1,1)
+                print("seq_len", seq_len)
+                self.send_seq_len(seq_len)
                 hidden_states = self.stage_model.forward_sub_sequences(input_ids=sub_input_ids, inputs_embeds=None )
-                self.send_activation_forward(self.padding_before_send(hidden_states))            
+                self.send_activation_forward(hidden_states)
             else:
-                hidden_states = self.cliping_after_recv( self.receive_activation_forward())
+                seq_len =  int (self.receive_seq_len().item())
+                print("seq_len", seq_len)
+                hidden_states = self.receive_activation_forward()
+                hidden_states = hidden_states[:,:seq_len,:]
                 hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states )
                 if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
-                    self.send_activation_forward(self.padding_before_send(hidden_states))
+                    seq_len = torch.tensor( int (hidden_states.shape[1])).reshape(1,1)
+                    self.send_seq_len(seq_len)
+                    self.send_activation_forward(hidden_states)
         
         if self.config.is_last_stage:
             # hidden_states = torch.cat(sub_hidden_states, dim=1)
@@ -118,38 +114,57 @@ class PrefillingPipeline(PipelineRuntime):
                 sub_input_ids = sub_sequences[i]
                 if self.config.is_last_stage:
                     raise NotImplementedError("暂不支持单机推理")
+                seq_len = torch.tensor( int (sub_input_ids.shape[1])).reshape(1,1)
+                self.send_seq_len(seq_len)
                 hidden_states = self.stage_model.forward_sub_sequences(input_ids=sub_input_ids, inputs_embeds=None )
-                self.send_activation_forward(self.padding_before_send(hidden_states))            
+                self.send_activation_forward(hidden_states)
             else:
-                hidden_states = self.cliping_after_recv( self.receive_activation_forward())
+                seq_len =  int (self.receive_seq_len().item())
+                hidden_states = self.receive_activation_forward()
+                hidden_states = hidden_states[:,:seq_len,:]
                 hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states )
                 if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
-                    self.send_activation_forward(self.padding_before_send(hidden_states))
+                    seq_len = torch.tensor( int (hidden_states.shape[1])).reshape(1,1)
+                    self.send_seq_len(seq_len)
+                    self.send_activation_forward(hidden_states)
+        
         
     def points_saturation(self,points_input_ids):
         medusa_logits_list = []
         logits_list = []
+        extra_kwargs = {
+            'is_point': True,
+            'point_id':0,
+                    }
         for point_id, input_ids in enumerate(points_input_ids)  :
             if self.config.is_first_stage:
                 if  self.config.is_last_stage:
                     raise NotImplementedError("暂不支持单机推理")
                 # Set is_point = True
-                hidden_states = self.stage_model.forward_sub_sequences(input_ids=input_ids, inputs_embeds=None, is_point=True, point_id=point_id) 
-                self.send_activation_forward(self.padding_before_send(hidden_states))        
+                extra_kwargs["point_id"]=point_id
+                hidden_states = self.stage_model.forward_sub_sequences(input_ids=input_ids, inputs_embeds=None, **extra_kwargs) 
+                seq_len = torch.tensor( int (hidden_states.shape[1])).reshape(1,1)
+                self.send_seq_len(seq_len)    
+                self.send_activation_forward(hidden_states)
             else:
-                hidden_states = self.cliping_after_recv(self.receive_activation_forward())
+                seq_len =  int (self.receive_seq_len().item())
+                hidden_states = self.receive_activation_forward()
+                hidden_states = hidden_states[:,:seq_len,:]
+                extra_kwargs["point_id"]=point_id
+                hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states, **extra_kwargs) 
+
                 if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
-                    hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states, is_point=True, point_id=point_id)
-                    self.send_activation_forward(self.padding_before_send(hidden_states))
+                    seq_len = torch.tensor( int (hidden_states.shape[1])).reshape(1,1)
+                    self.send_seq_len(seq_len)    
+                    self.send_activation_forward(hidden_states)
                 else: #最后一个stage
-                    hidden_states = self.stage_model.forward_sub_sequences(input_ids=None, inputs_embeds=hidden_states, is_point=True, point_id=point_id)
                     medusa_logits = []
                     with torch.inference_mode():
                         logits =  self.stage_model.lm_head(hidden_states)
                         for i in range(self.config.medusa_num_heads):
                             medusa_logits.append(self.stage_model.medusa_head[i](hidden_states))
-                    medusa_logits_list.append( torch.stack(medusa_logits, dim=0))
-                    logits_list.append(logits)
+                        medusa_logits_list.append( torch.stack(medusa_logits, dim=0))
+                        logits_list.append(logits)
                     
         if self.config.is_last_stage:  
             return  medusa_logits_list,logits_list

@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from  tasks.medusa_llama.outline_decoding_controller  import get_controller   #[modified]
 
 TOPK=10 # topk for sparse tree (10 is a placeholder and it is sufficient)
 
@@ -539,6 +540,7 @@ def update_inference_inputs(
     new_token,
     past_key_values_data,
     current_length_data,
+    **kwargs, #[modified]
 ):
     """
     Update the input sequences and relevant tensors based on the selected best candidate from the inference results.
@@ -561,31 +563,60 @@ def update_inference_inputs(
     - new_token (int): Updated counter for the new tokens added.
     """
     # Calculate the starting position for new tokens based on the previous input length
-    prev_input_len = input_ids.shape[1]
-    # Map the best candidate indices to the original indices in the sequence
-    select_indices = (
-        retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
-    )
-    # Append the tokens from the best candidate to the input sequence
-    input_ids = torch.cat(
-        [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1
-    )
-    # Update the past key values based on the selected tokens
-    # Source tensor that contains relevant past information based on the selected candidate
-    tgt = past_key_values_data[..., select_indices, :]
-    # Destination tensor where the relevant past information will be stored
-    dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
-    # Copy relevant past information from the source to the destination
-    dst.copy_(tgt, non_blocking=True)
+    if 'is_point' not in  kwargs:
+        prev_input_len = input_ids.shape[1]
+        # Map the best candidate indices to the original indices in the sequence
+        select_indices = (
+            retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
+        )
+        # Append the tokens from the best candidate to the input sequence
+        input_ids = torch.cat(
+            [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1
+        )
+        # Update the past key values based on the selected tokens
+        # Source tensor that contains relevant past information based on the selected candidate
+        tgt = past_key_values_data[..., select_indices, :]
+        # Destination tensor where the relevant past information will be stored
+        dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
+        # Copy relevant past information from the source to the destination
+        dst.copy_(tgt, non_blocking=True)
 
-    # Update the current length tensor (currently only support batch size is 1)
-    current_length_data.fill_(prev_input_len + tgt.shape[-2])
+        # Update the current length tensor (currently only support batch size is 1)
+        current_length_data.fill_(prev_input_len + tgt.shape[-2])
 
-    # Extract logits and medusa logits for the accepted tokens
-    logits = logits[None, best_candidate, accept_length : accept_length + 1]
-    medusa_logits = medusa_logits[
-        :, None, best_candidate, accept_length : accept_length + 1
-    ]
-    # Update the new token counter
-    new_token += accept_length + 1
-    return input_ids, logits, medusa_logits, new_token,select_indices
+        # Extract logits and medusa logits for the accepted tokens
+        logits = logits[None, best_candidate, accept_length : accept_length + 1]
+        medusa_logits = medusa_logits[
+            :, None, best_candidate, accept_length : accept_length + 1
+        ]
+        # Update the new token counter
+        new_token += accept_length + 1
+        return input_ids, logits, medusa_logits, new_token,select_indices
+    else:
+        point_id = kwargs["point_id"]
+        shared_len = int (current_length_data[0].item()) # shared kv cache length
+        prev_input_len = input_ids.shape[1] - shared_len # point kv cache pre length
+        # 用于修改point_kv_cache 需要减去最初share_kv_cache_len
+        select_indices = (
+            retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
+        )
+        input_ids = torch.cat(
+            [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1
+        )
+
+        # Update the point past key values based on the selected tokens
+        point_past_key_values_data = get_controller().get_point_past_key_values_data(point_id)
+        point_current_length_data = get_controller().get_point_current_length_data(point_id)
+        tgt = point_past_key_values_data[..., select_indices, :]
+        dst = point_past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
+        dst.copy_(tgt, non_blocking=True)
+        # Update the current length tensor (currently only support batch size is 1) for point kv cache
+        point_current_length_data.fill_(prev_input_len + tgt.shape[-2])
+        # Extract logits and medusa logits for the accepted tokens
+        logits = logits[None, best_candidate, accept_length : accept_length + 1]
+        medusa_logits = medusa_logits[
+            :, None, best_candidate, accept_length : accept_length + 1
+        ]
+        # Update the new token counter
+        new_token += accept_length + 1
+        return input_ids, logits, medusa_logits, new_token,select_indices

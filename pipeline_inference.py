@@ -47,7 +47,7 @@ def main(args):
     prompt ="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: Tell me what do you know about Jupiter? . ASSISTANT:"""
     medusa_logits, logits = jupiter_prefilling(prompt,model,config,args)
     answer = normal_decoding(prompt,model,config,medusa_logits,logits)
-    print("=======================\nAnswer:",answer)
+    print("=======================\nAnswer:\n",answer)
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -7,6 +7,8 @@ def get_point_expanding_prompt(skeleton:str, question:str):
     points = skeleton.split("\n")
     prompts_for_points = []
     shared_perfix = """[INST] You're responsible for continuing the writing of one and only one point in the overall answer to the following question.\n\n{question}\n\nThe skeleton of the answer is\n\n{skeleton}\n\n Write it **very shortly** in 1~2 sentence and do not continue with other points! Continue and only continue the writing of point """.format(question=question,skeleton=skeleton)
+    # shared_perfix = """[INST] You're responsible for expanding only the specific point mentioned in the skeleton of the following question.\n\n{question}\n\nThe skeleton of the answer is\n\n{skeleton}\n\n Focus solely on the specified point and **write briefly** in 1~2 sentences without moving to any other points. Continue and only expand the writing of point  """.format(question=question,skeleton=skeleton)
+
     # get  points and prompts for points 
     for idx, i in enumerate(points):
         prompt = "{point}. [/INST]".format(point=idx+1)
