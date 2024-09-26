@@ -3,12 +3,12 @@ from .kv_cache import initialize_past_key_values
 class OutlineDecodingController:
     _instance = None
     '''
-    1. 维护points kv cache
+    1. 维护 points kv cache
         past_key_values_for_point
         past_key_values_data_for_point
         current_length_data_for_point
-    2. 维护points input_ids (每个point的完整内容)
-    3. 记录input_len,用于最终从input_ids截取生成结果 
+    2. 维护 points input_ids (每个point的完整内容)
+    3. 记录 input_len,用于最终从input_ids截取生成结果 
     4. 维护 request 队列：
                     request =     {"point_id": point_id,
                                     "medusa_logits": medusa_logits,
@@ -58,8 +58,8 @@ class OutlineDecodingController:
             self.add_request(medusa_logits_list[point_id],logits_list[point_id], point_id )
     def get_request(self ):
         assert self.config.is_last_stage
-        request = self.request_queue.remove() #TODO:队列结束会一直等待 判断结束 所有都point eos
-        return request # 如何判断结束
+        request = self.request_queue.remove()  
+        return request 
     def prepare_point_kv_cache(self):
         print("=====================\n prepare point kv cache")
         for _ in range(self.point_num):
@@ -81,13 +81,13 @@ class OutlineDecodingController:
         self.input_ids_for_point[point_id] = input_ids
     def get_input_len(self,point_id):
         return self.input_len_for_point[point_id]
-    def set_point_finish(self,point_id):
-        self.is_finish[point_id] = True
-    def check_finish(self):
-        for i in self.is_finish:
-            if i == False:
-                return False
-        return True
+    # def set_point_finish(self,point_id):
+    #     self.is_finish[point_id] = True
+    # def check_finish(self):
+    #     for i in self.is_finish:
+    #         if i == False:
+    #             return False
+    #     return True
 
     def get_output(self ):
         tokenizer = self.model.get_tokenizer()
@@ -100,8 +100,8 @@ class OutlineDecodingController:
                         spaces_between_special_tokens=False,
                         clean_up_tokenization_spaces=True,
                     ) 
-            print("********************\n")
-            print(self.points[i] + text)
+            print("********************\n",flush=True)
+            print(self.points[i] + text,flush=True)
 global controller  
 def get_controller():
     return controller

@@ -51,10 +51,11 @@ class CommunicationHandler():
                             } 
         self.tag_manager = tag_manager.Tag()
         self.tensor_tag = {
-                            "tree_decoding":  self.tag_manager.get_next_tag(), #要和prefiling tag 不一样！  
+                            "tree_decoding":  self.tag_manager.get_next_tag(),  # 获取累加的tag，和其他communication_handler保持tag不一样
                             "tree_candidates":self.tag_manager.get_next_tag(),
-                            "new_token":self.tag_manager.get_next_tag()
+                            "new_token": self.tag_manager.get_next_tag()
                             }
+        
         self.device = config.device
         self.setup_queue()
         # Stop event to signal threads to stop
@@ -138,7 +139,8 @@ class CommunicationHandler():
         
     def stop_helper_threads(self):
         # Signal all helper threads to stop
-        self.stop_event.set()
+        # self.stop_event.set()
+        pass
         
     def flatten_before_send(self,tensor, point_id):
         flattened_tensor = tensor.reshape(1,-1)
@@ -212,6 +214,7 @@ def _broadcast_send(tensor, src_rank ):
     if tensor.device != torch.device("cpu"): # for gloo 
         tensor = tensor.cpu()
     dist.broadcast(tensor=tensor , src=src_rank)
+
 
 def _broadcast_recv(tensor_shape, src_rank,dtype):
     tensor = torch.zeros(tensor_shape, dtype=dtype) 

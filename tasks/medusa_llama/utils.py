@@ -603,7 +603,6 @@ def update_inference_inputs(
         input_ids = torch.cat(
             [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1
         )
-
         # Update the point past key values based on the selected tokens
         point_past_key_values_data = get_controller().get_point_past_key_values_data(point_id)
         point_current_length_data = get_controller().get_point_current_length_data(point_id)

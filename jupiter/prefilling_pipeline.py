@@ -5,39 +5,7 @@ from jupiter.core.schedules import PipelineRuntime
 class PrefillingPipeline(PipelineRuntime):
     def __init__(self, stage_model, config, args):
         super().__init__(stage_model, config, args)
-    
-    def pipeline_forward(self, input_ids = None): # 完整句子 pipeline
-        """ Forward pass of prefilling stage.
-        """
-        # bs == 1, seq_len == 47
-        if self.config.is_first_stage:
-            bs,_ = input_ids.shape
-            assert bs == 1
 
-        if self.config.is_first_stage:  # 第一个stage
-            if not self.config.is_last_stage: # world > 1
-                hidden_states = self.stage_model.prefilling(input_ids=input_ids, inputs_embeds=None )
-                # self.send_activation_forward(self.padding_before_send(hidden_states))
-                seq_len = torch.tensor(hidden_states.shape[1])
-                print("seq_len", seq_len)
-                self.send_seq_len(seq_len)
-                self.send_activation_forward(hidden_states)
-            else: # world == 1
-                raise NotImplementedError("暂不支持单机推理")
-        else:
-            seq_len = self.receive_seq_len().item()
-            print("seq_len", seq_len)
-            hidden_states = self.receive_activation_forward()
-            hidden_states = hidden_states[:,1:seq_len+1,:]
-            if not self.config.is_last_stage:   # 不是第一个也不是最后一个stage
-                hidden_states = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states )
-                self.send_activation_forward(self.padding_before_send(hidden_states))
-            else: # 最后一个stage
-                medusa_logits, logits = self.stage_model.prefilling(input_ids=None, inputs_embeds=hidden_states )
-                print("finish prefilling")
-                return medusa_logits, logits
-
-    
     def split_tensor_along_dim(self,tensor, num_splits, dim=1):
         shape = list(tensor.size())
         assert dim < len(shape), "Dimension out of range for the tensor"

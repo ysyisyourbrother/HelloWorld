@@ -1,3 +1,6 @@
+"""
+sot decoding pipeline
+"""
 import torch
 from jupiter.core.decoding_communication import CommunicationHandler
 import time
@@ -21,7 +24,8 @@ class DecodingPipeline():
         
     def tree_decoding_recv(self):
         assert self.stage != 0
-        return self.comm_handler.recv(tag = self.comm_handler.tensor_tag["tree_decoding"])
+        tensor,point_id= self.comm_handler.recv(tag = self.comm_handler.tensor_tag["tree_decoding"])
+        return tensor,point_id
     
     def tree_candidates_send(self, tensor, point_id):
         assert self.comm_handler.if_last_rank
@@ -29,14 +33,16 @@ class DecodingPipeline():
         
     def tree_candidates_recv(self):
         assert self.comm_handler.if_first_rank
-        return self.comm_handler.recv(tag = self.comm_handler.tensor_tag["tree_candidates"])
+        tensor,point_id= self.comm_handler.recv(tag = self.comm_handler.tensor_tag["tree_candidates"])
+        return tensor,point_id
     
     def new_token_send(self, tensor, point_id):
         assert self.comm_handler.if_last_rank
         self.comm_handler.send(tensor,tag = self.comm_handler.tensor_tag["new_token"], point_id=point_id)
     def new_token_recv(self):
         assert not self.comm_handler.if_last_rank
-        return self.comm_handler.recv(self.comm_handler.tensor_tag["new_token"])
+        tensor,point_id = self.comm_handler.recv(self.comm_handler.tensor_tag["new_token"])
+        return tensor,point_id
     def jupiter_decoding_pipeline(self):
         #use point_id to select point_kv_cache  in forward computation or modify point_kv_cache based on selectd token
         extra_kwargs = {
@@ -44,15 +50,10 @@ class DecodingPipeline():
                 'point_id': 0,
                 } 
         for idx in range(  self.config.max_steps):
-            if  get_controller().check_finish():
-                break #TODO: 停不下来 
-            else:
-                print("not finish ... ")
-                print("=========================================\n")
-                get_controller().get_output( ) 
-                print("=========================================\n")
-            # step 1: get request and generate_candidates
-            new_token=0# no use
+            print("=========================================\n")
+            print("step {}".format(idx),flush=True)
+            # step 1: get request (medusa_logits and logits) from request queue and then generate_candidates
+            new_token=0 # no use
             if self.config.is_last_stage:
                 request = get_controller().get_request()
                 candidates, tree_candidates = self.stage_model.generate_candidates(
@@ -78,7 +79,6 @@ class DecodingPipeline():
                 self.tree_decoding_send(hidden_states,point_id)
             else:
                 hidden_states, point_id = self.tree_decoding_recv()   
-                # print("stage recv hidden_states: ", hidden_states[:,-1,-10:])
                 input_ids = get_controller().get_input_ids(point_id)
                 extra_kwargs["point_id"]=point_id
                 if not self.config.is_last_stage:
@@ -116,13 +116,13 @@ class DecodingPipeline():
                 get_controller().update_input_ids(input_ids,point_id)
                 input_len = get_controller().get_input_len(point_id)
                 if self.stage_model.tokenizer.eos_token_id in input_ids[0, input_len:]:
-                    # set point finish
-                    get_controller().set_point_finish(point_id)
-                    self.comm_handler.stop_helper_threads()
-                    print("Point: {} finish".format(point_id))
-                else:
-                    # update request
-                    get_controller().add_request(medusa_logits,logits,point_id)
+                    print("Point: {} Finish".format(point_id),flush=True)
+                # get_controller().set_point_finish(point_id)
+                # self.comm_handler.stop_helper_threads()
+                #     print("Point: {} finish".format(point_id))
+                # else:
+                #     # update request
+                get_controller().add_request(medusa_logits,logits,point_id)
                 #TODO:判断是否结束
             # Step 4: Step 3 中self.stage_model.update_inference_inputs 调用更新了最后一个stage的kvcache,现在同步decoding的结果，并更新其他stage的kv cache和inputs_ids
             if  self.config.is_last_stage: 
@@ -141,7 +141,5 @@ class DecodingPipeline():
                 get_controller().update_input_ids(input_ids,point_id)
                 input_len = get_controller().get_input_len(point_id)
                 if self.stage_model.tokenizer.eos_token_id in input_ids[0, input_len:]:
-                    # set point finish
-                    get_controller().set_point_finish(point_id)
-                    self.comm_handler.stop_helper_threads()
-                    print("Point: {} finish".format(point_id))
+                    print("Point: {} Finish".format(point_id),flush=True)
+

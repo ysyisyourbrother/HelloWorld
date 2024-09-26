@@ -82,7 +82,8 @@ class CommunicationHandler():
         
     def stop_helper_threads(self):
         # Signal all helper threads to stop
-        self.stop_event.set()
+        # self.stop_event.set()
+        pass
         
     def send(self, tensor, tag):
         if tag == self.tensor_tag["forward"]:
@@ -133,17 +134,15 @@ def send_helper_thread(send_queue, dst_rank, tag, stop_event):
         # 当send_queue为空时，队列阻塞
         tensor = send_queue.remove()
         _send(tensor, dst_rank, tag,)
-#TODO: define backend :gloo,  only support cpu
+#TODO: define backend :gloo, only support cpu
 def _send(tensor, dst_rank, tag ):
     if tensor.device != torch.device("cpu"):
         tensor = tensor.cpu()
     dist.send(tensor=tensor, dst=dst_rank, tag=tag)
-    # print("_send to rank {}, tag {}".format(dst_rank, tag))
 
 
 
 def _recv(tensor_shape, src_rank, tag,dtype):
-    tensor = torch.zeros(tensor_shape, dtype=dtype) #TODO: 由config决定
-    # print("try _recv from rank {}, tag {}".format(src_rank, tag))
+    tensor = torch.zeros(tensor_shape, dtype=dtype) 
     dist.recv(tensor, src=src_rank, tag=tag)
     return tensor

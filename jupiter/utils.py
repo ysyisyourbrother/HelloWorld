@@ -5,12 +5,9 @@ import torch
 import copy
 import torch.distributed as dist
 from .core.tag_manager   import Tag
-def jupiter_prefilling(prompt,model,config,args,input_ids=None):
-    # prefilling with sequence slicing
-    if input_ids is None:
-        tokenizer = model.get_tokenizer()
-        input_ids = tokenizer.encode(prompt, return_tensors="pt")     
-    if config.device == "cuda":
+def jupiter_prefilling(input_ids,model,config,args ):
+    # prefilling with sequence slicing  
+    if config.device == "cuda" and input_ids.device != "cuda":
         input_ids = input_ids.cuda()
     print("input_ids shape:",input_ids.shape)
     ######################################################################
@@ -25,19 +22,19 @@ def jupiter_prefilling(prompt,model,config,args,input_ids=None):
         else:
             runtime.pipeline_with_sequence_slicing()
     print("prefilling time:", time.time() - start)
-    runtime.comm_handler.stop_helper_threads()
+    # runtime.comm_handler.stop_helper_threads()
     if config.is_last_stage:
         return medusa_logits, logits
     else:
         return None, None
-def jupiter_prefilling_no_finish(prompt,model,config,args,input_ids=None):
-    # prefilling with sequence slicing
-    
-    tokenizer = model.get_tokenizer()
-    if input_ids is None:
-        input_ids = tokenizer.encode(prompt, return_tensors="pt")     
-    if config.device == "cuda":
+def jupiter_prefilling_no_finish(input_ids,model,config,args   ):
+    # prefilling with sequence slicing  
+    # 用于share_perfix填充
+    # 最终hidden_states不经过lm_heads,medusa_head
+    # 并且不需要set_mask_for_medusa_decoding
+    if config.device == "cuda" and input_ids.device != "cuda":
         input_ids = input_ids.cuda()
+    print("input_ids shape:",input_ids.shape)
     ######################################################################
     runtime = PrefillingPipeline(model, config, args)
     if config.is_last_stage:   
@@ -47,9 +44,8 @@ def jupiter_prefilling_no_finish(prompt,model,config,args,input_ids=None):
             runtime.pipeline_with_sequence_slicing_no_finish(input_ids)  
         else:
             runtime.pipeline_with_sequence_slicing_no_finish()
-    runtime.comm_handler.stop_helper_threads()
-
-def point_prefilling(points,model,config,args,input_ids=None):
+            
+def point_prefilling(points,model,config,args ):
     '''
     prefiling points for every request,
     e.g.  
@@ -59,18 +55,15 @@ def point_prefilling(points,model,config,args,input_ids=None):
     '''
     tokenizer = model.get_tokenizer()
     runtime = PrefillingPipeline(model, config, args)
-    if input_ids==None:
-        points_input_ids = [tokenizer.encode(point, return_tensors="pt") for point in  points]
-        points_input_ids = [point[:,2:] for point in points_input_ids]
-    else:
-        points_input_ids = input_ids
+    points_input_ids = [tokenizer.encode(point, return_tensors="pt") for point in  points]
+    points_input_ids = [point[:,2:] for point in points_input_ids]
     if config.device == "cuda":
         points_input_ids = [p.cuda() for p in points_input_ids ]
     if config.is_last_stage: 
         medusa_logits_list,logits_list = runtime.points_saturation(points_input_ids)
     else:
         runtime.points_saturation(points_input_ids)
-    runtime.comm_handler.stop_helper_threads()
+    # runtime.comm_handler.stop_helper_threads()
     if config.is_last_stage:
         return medusa_logits_list,logits_list
     else:
@@ -79,8 +72,8 @@ def normal_decoding(prompt,model,config,medusa_logits=None,logits=None,input_ids
     # normal decoding, no pipeline
     tag_manager = Tag()
     tensor_tag = {"tree_decoding":  tag_manager.get_next_tag(),
-                  "tree_candidates": tag_manager.get_next_tag(),
-                  "new_token": tag_manager.get_next_tag()}
+                  "tree_candidates":  tag_manager.get_next_tag(),
+                  "new_token":  tag_manager.get_next_tag()}
     tensor_shape = {"tree_decoding": (1,  64, config.hidden_size), 
                     "tree_candidates": (1,64),
                     "new_token":(1,1+2*config.medusa_num_heads) }  
