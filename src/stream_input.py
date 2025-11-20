@@ -21,9 +21,9 @@ class StreamInput:
         # 从Config对象获取配置
         self.fps = config.stream_fps
         self.video_source = config.stream_video_source
-        self.video_file_path = config.stream_video_path
+        self.video_file_path = config.stream_video_file_path
         
-        self.frame_queue = mp.Queue(maxsize=config.stream_queue_size)
+        self.frame_queue = mp.Queue(maxsize=100)  # 使用默认队列大小
         self.running = False
         
     def initialize_video_source(self):

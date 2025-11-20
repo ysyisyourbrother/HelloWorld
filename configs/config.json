@@ -2,7 +2,7 @@
   "stream_input": {
     "fps": 30,
     "video_source": "camera",
-    "video_file_path": "demo/assets/bicycle.mp4"
+    "video_file_path": "demo/assets/cooking.mp4"
   },
   "frame_vectorizer": {
     "model_type": "ViT",
@@ -19,23 +19,17 @@
     "retrieval_strategy": "similarity",
     "max_memory_size": 10000
   },
-  "api_server_e": {
-    "host": "localhost",
-    "port": 8000,
-    "max_connections": 100
-  },
   "reasoner": {
     "model_type": "VLM",
     "max_tokens": 2048,
     "temperature": 0.7
   },
+  "api_server_e": {
+    "host": "localhost",
+    "port": 8000
+  },
   "api_server_c": {
     "host": "0.0.0.0",
-    "port": 9000,
-    "max_connections": 50
-  },
-  "communication": {
-    "inter_process": "multiprocessing_queue",
-    "external_comm": "http"
+    "port": 9000
   }
 }

@@ -49,11 +49,12 @@ class QueryVectorizer:
         self.config = config
         
         # 从Config对象获取配置
-        self.model_type = config.query_model
+        self.model_type = config.query_model_type
+        self.max_length = config.query_max_length
         
         self.encoder = self._initialize_encoder()
-        self.query_queue = mp.Queue(maxsize=config.query_queue_size)
-        self.vector_queue = mp.Queue(maxsize=config.query_queue_size)
+        self.query_queue = mp.Queue(maxsize=50)  # 使用默认队列大小
+        self.vector_queue = mp.Queue(maxsize=50)  # 使用默认队列大小
         self.running = False
         
     def _initialize_encoder(self):

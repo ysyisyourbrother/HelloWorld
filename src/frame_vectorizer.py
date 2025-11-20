@@ -49,13 +49,14 @@ class FrameVectorizer:
         self.config = config
         
         # 从Config对象获取配置
-        self.model_type = config.frame_model
-        self.extraction_strategy = config.frame_strategy
-        self.frame_interval = config.frame_extract_interval
+        self.model_type = config.frame_model_type
+        self.extraction_strategy = config.frame_extraction_strategy
+        self.frame_interval = config.frame_interval
+        self.use_vlm = config.frame_use_vlm
         
         self.vectorizer = self._initialize_vectorizer()
         self.frame_queue = None
-        self.vector_queue = mp.Queue(maxsize=config.frame_queue_size)
+        self.vector_queue = mp.Queue(maxsize=200)  # 使用默认队列大小
         self.running = False
         self.frame_count = 0
         

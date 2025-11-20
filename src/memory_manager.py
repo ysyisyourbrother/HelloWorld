@@ -94,7 +94,7 @@ class MemoryManager:
         self.config = config
         
         # 从Config对象获取配置
-        self.database_type = config.memory_type
+        self.database_type = config.memory_database_type
         self.retrieval_strategy = config.memory_retrieval_strategy
         self.max_memory_size = config.memory_max_size
         
@@ -103,7 +103,7 @@ class MemoryManager:
         # 两个队列：一个用于接收向量，一个用于接收查询
         self.vector_queue = None
         self.query_queue = None
-        self.result_queue = mp.Queue(maxsize=config.memory_retrieve_queue_size)
+        self.result_queue = mp.Queue(maxsize=100)  # 使用默认队列大小
         
         self.running = False
         
