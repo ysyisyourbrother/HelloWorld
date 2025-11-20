@@ -14,15 +14,22 @@ from memory_manager import MemoryManager
 from api_server_e import APIServerE
 from reasoner import Reasoner
 from api_server_c import APIServerC
+from config import Config
 
 class VideoAnalysisSystem:
-    def __init__(self, config_path="configs/config.json"):
+    def __init__(self, config=None):
         """
         初始化视频分析系统
         协调所有模块的启动和停止
+        
+        Args:
+            config (Config): 配置对象实例
         """
-        self.config_path = config_path
-        self.modules = {}
+        if config is None:
+            config = Config()
+        
+        self.config = config
+        self.modules: dict[str, any] = {}
         self.running = False
         
         # 设置信号处理
@@ -34,11 +41,11 @@ class VideoAnalysisSystem:
         print("初始化客户端模块...")
         
         # 创建客户端模块实例
-        stream_input = StreamInput(self.config_path)
-        frame_vectorizer = FrameVectorizer(self.config_path)
-        query_vectorizer = QueryVectorizer(self.config_path)
-        memory_manager = MemoryManager(self.config_path)
-        api_server_e = APIServerE(self.config_path)
+        stream_input = StreamInput(self.config)
+        frame_vectorizer = FrameVectorizer(self.config)
+        query_vectorizer = QueryVectorizer(self.config)
+        memory_manager = MemoryManager(self.config)
+        api_server_e = APIServerE(self.config)
         
         # 设置模块间的连接
         frame_vectorizer.set_frame_queue(stream_input.get_frame_queue())
@@ -64,8 +71,8 @@ class VideoAnalysisSystem:
         print("初始化服务器端模块...")
         
         # 创建服务器端模块实例
-        reasoner = Reasoner(self.config_path)
-        api_server_c = APIServerC(self.config_path)
+        reasoner = Reasoner(self.config)
+        api_server_c = APIServerC(self.config)
         
         # 设置模块间的连接
         api_server_c.set_reasoner(reasoner)
@@ -132,14 +139,14 @@ class VideoAnalysisSystem:
         
         if mode == 'both':
             print("客户端和服务器端都已启动")
-            print(f"客户端API: http://localhost:8000")
-            print(f"服务器端API: http://localhost:9000")
+            print(f"客户端API: http://{self.config.api_host}:{self.config.api_port}")
+            print(f"服务器端API: http://{self.config.server_host}:{self.config.server_port}")
         elif mode == 'client':
             print("客户端已启动")
-            print(f"客户端API: http://localhost:8000")
+            print(f"客户端API: http://{self.config.api_host}:{self.config.api_port}")
         elif mode == 'server':
             print("服务器端已启动")
-            print(f"服务器端API: http://localhost:9000")
+            print(f"服务器端API: http://{self.config.server_host}:{self.config.server_port}")
     
     def stop(self):
         """停止系统"""
@@ -193,18 +200,19 @@ def main():
     parser = argparse.ArgumentParser(description='视频分析系统')
     parser.add_argument('--mode', choices=['client', 'server', 'both'], 
                        default='both', help='运行模式')
-    parser.add_argument('--config', default='configs/config.json', 
+    parser.add_argument('--config', default=None, 
                        help='配置文件路径')
     
     args = parser.parse_args()
     
-    # 检查配置文件是否存在
-    if not os.path.exists(args.config):
-        print(f"配置文件不存在: {args.config}")
-        return
+    # 创建配置对象
+    if args.config:
+        config = Config(args.config)
+    else:
+        config = Config()
     
     # 创建并运行系统
-    system = VideoAnalysisSystem(args.config)
+    system = VideoAnalysisSystem(config)
     system.run(args.mode)
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 import multiprocessing as mp
 import numpy as np
-import json
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from config import Config
 
 class MemoryBase(ABC):
     """记忆模块基类"""
@@ -80,24 +80,30 @@ class GraphMemory(MemoryBase):
         return [(0.8, node_id, data) for node_id, data in recent_nodes]
 
 class MemoryManager:
-    def __init__(self, config_path="configs/config.json"):
+    def __init__(self, config=None):
         """
         初始化MemoryManager模块
         负责管理记忆模块的存储和检索
-        """
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
         
-        self.database_type = self.config["memory_manager"]["database_type"]
-        self.retrieval_strategy = self.config["memory_manager"]["retrieval_strategy"]
-        self.max_memory_size = self.config["memory_manager"]["max_memory_size"]
+        Args:
+            config (Config): 配置对象实例
+        """
+        if config is None:
+            config = Config()
+        
+        self.config = config
+        
+        # 从Config对象获取配置
+        self.database_type = config.memory_type
+        self.retrieval_strategy = config.memory_retrieval_strategy
+        self.max_memory_size = config.memory_max_size
         
         self.memory = self._initialize_memory()
         
         # 两个队列：一个用于接收向量，一个用于接收查询
         self.vector_queue = None
         self.query_queue = None
-        self.result_queue = mp.Queue(maxsize=100)
+        self.result_queue = mp.Queue(maxsize=config.memory_retrieve_queue_size)
         
         self.running = False
         

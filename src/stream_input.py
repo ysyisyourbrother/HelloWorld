@@ -2,23 +2,28 @@ import cv2
 import numpy as np
 import multiprocessing as mp
 import time
-import json
-import os
+from config import Config
 
 class StreamInput:
-    def __init__(self, config_path="configs/config.json"):
+    def __init__(self, config=None):
         """
         初始化StreamInput模块
         负责从视频流中提取帧，支持摄像头实时视频流或本地视频文件
+        
+        Args:
+            config (Config): 配置对象实例
         """
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
+        if config is None:
+            config = Config()
         
-        self.fps = self.config["stream_input"]["fps"]
-        self.video_source = self.config["stream_input"]["video_source"]
-        self.video_file_path = self.config["stream_input"]["video_file_path"]
+        self.config = config
         
-        self.frame_queue = mp.Queue(maxsize=100)
+        # 从Config对象获取配置
+        self.fps = config.stream_fps
+        self.video_source = config.stream_video_source
+        self.video_file_path = config.stream_video_path
+        
+        self.frame_queue = mp.Queue(maxsize=config.stream_queue_size)
         self.running = False
         
     def initialize_video_source(self):

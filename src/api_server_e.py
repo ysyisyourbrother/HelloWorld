@@ -1,26 +1,31 @@
 import multiprocessing as mp
-import json
 import time
 import requests
 from flask import Flask, request, jsonify
 import threading
+from config import Config
 
 class APIServerE:
-    def __init__(self, config_path="configs/config.json"):
+    def __init__(self, config=None):
         """
         初始化APIServerE模块
         边端API服务器, 提供API接口接收用户请求
-        """
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
         
-        self.host = self.config["api_server_e"]["host"]
-        self.port = self.config["api_server_e"]["port"]
-        self.max_connections = self.config["api_server_e"]["max_connections"]
+        Args:
+            config (Config): 配置对象实例
+        """
+        if config is None:
+            config = Config()
+        
+        self.config = config
+        
+        # 从Config对象获取配置
+        self.host = config.api_host
+        self.port = config.api_port
         
         # 获取云端APIServerC的配置
-        self.cloud_host = self.config["api_server_c"]["host"]
-        self.cloud_port = self.config["api_server_c"]["port"]
+        self.cloud_host = config.server_host
+        self.cloud_port = config.server_port
         self.cloud_url = f"http://{self.cloud_host}:{self.cloud_port}"
         
         self.query_vectorizer = None

@@ -1,7 +1,7 @@
 import multiprocessing as mp
-import json
 import time
 from abc import ABC, abstractmethod
+from config import Config
 
 class ReasonerBase(ABC):
     """推理器基类"""
@@ -67,17 +67,23 @@ class VLMReasoner(ReasonerBase):
         }
 
 class Reasoner:
-    def __init__(self, config_path="configs/config.json"):
+    def __init__(self, config=None):
         """
         初始化Reasoner模块
         负责接收查询数据，使用大型VLM进行推理
-        """
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
         
-        self.model_type = self.config["reasoner"]["model_type"]
-        self.max_tokens = self.config["reasoner"]["max_tokens"]
-        self.temperature = self.config["reasoner"]["temperature"]
+        Args:
+            config (Config): 配置对象实例
+        """
+        if config is None:
+            config = Config()
+        
+        self.config = config
+        
+        # 从Config对象获取配置
+        self.model_type = config.reasoner_model_type
+        self.max_tokens = config.reasoner_max_tokens
+        self.temperature = config.reasoner_temperature
         
         self.reasoner = self._initialize_reasoner()
         self.query_queue = mp.Queue(maxsize=100)

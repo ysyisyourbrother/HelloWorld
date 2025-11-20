@@ -1,8 +1,8 @@
 import multiprocessing as mp
 import numpy as np
-import json
 import time
 from abc import ABC, abstractmethod
+from config import Config
 
 class VectorizerBase(ABC):
     """向量化基类"""
@@ -35,22 +35,27 @@ class VLMVectorizer(VectorizerBase):
         return np.random.rand(1024)
 
 class FrameVectorizer:
-    def __init__(self, config_path="configs/config.json"):
+    def __init__(self, config=None):
         """
         初始化FrameVectorizer模块
         负责把提取到的帧转换为语义向量和时间索引
-        """
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
         
-        self.model_type = self.config["frame_vectorizer"]["model_type"]
-        self.extraction_strategy = self.config["frame_vectorizer"]["extraction_strategy"]
-        self.frame_interval = self.config["frame_vectorizer"]["frame_interval"]
-        self.use_vlm = self.config["frame_vectorizer"]["use_vlm"]
+        Args:
+            config (Config): 配置对象实例
+        """
+        if config is None:
+            config = Config()
+        
+        self.config = config
+        
+        # 从Config对象获取配置
+        self.model_type = config.frame_model
+        self.extraction_strategy = config.frame_strategy
+        self.frame_interval = config.frame_extract_interval
         
         self.vectorizer = self._initialize_vectorizer()
         self.frame_queue = None
-        self.vector_queue = mp.Queue(maxsize=100)
+        self.vector_queue = mp.Queue(maxsize=config.frame_queue_size)
         self.running = False
         self.frame_count = 0
         

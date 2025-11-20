@@ -4,19 +4,25 @@ import time
 from flask import Flask, request, jsonify, Response
 import threading
 import queue
+from config import Config
 
 class APIServerC:
-    def __init__(self, config_path="configs/config.json"):
+    def __init__(self, config=None):
         """
         初始化APIServerC模块
         云端API服务器，负责接收客户端查询并返回推理结果
-        """
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
         
-        self.host = self.config["api_server_c"]["host"]
-        self.port = self.config["api_server_c"]["port"]
-        self.max_connections = self.config["api_server_c"]["max_connections"]
+        Args:
+            config (Config): 配置对象实例
+        """
+        if config is None:
+            config = Config()
+        
+        self.config = config
+        
+        # 从Config对象获取配置
+        self.host = config.server_host
+        self.port = config.server_port
         
         self.reasoner = None
         self.active_streams = {}  # 存储活跃的流式连接

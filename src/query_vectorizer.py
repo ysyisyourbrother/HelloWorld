@@ -1,8 +1,8 @@
 import multiprocessing as mp
 import numpy as np
-import json
 import time
 from abc import ABC, abstractmethod
+from config import Config
 
 class QueryEncoderBase(ABC):
     """查询编码器基类"""
@@ -35,20 +35,25 @@ class SentenceBERTEncoder(QueryEncoderBase):
         return np.random.rand(384)  # Sentence-BERT的输出维度
 
 class QueryVectorizer:
-    def __init__(self, config_path="configs/config.json"):
+    def __init__(self, config=None):
         """
         初始化QueryVectorizer模块
         负责把用户的自然语言查询转换为语义向量
-        """
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
         
-        self.model_type = self.config["query_vectorizer"]["model_type"]
-        self.max_length = self.config["query_vectorizer"]["max_length"]
+        Args:
+            config (Config): 配置对象实例
+        """
+        if config is None:
+            config = Config()
+        
+        self.config = config
+        
+        # 从Config对象获取配置
+        self.model_type = config.query_model
         
         self.encoder = self._initialize_encoder()
-        self.query_queue = mp.Queue(maxsize=100)
-        self.vector_queue = mp.Queue(maxsize=100)
+        self.query_queue = mp.Queue(maxsize=config.query_queue_size)
+        self.vector_queue = mp.Queue(maxsize=config.query_queue_size)
         self.running = False
         
     def _initialize_encoder(self):
