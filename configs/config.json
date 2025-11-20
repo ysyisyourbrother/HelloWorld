@@ -1,9 +1,9 @@
 {
   "stream_input": {
-    "fps": 30,
-    "video_source": "camera",
-    "video_file_path": "demo/assets/cooking.mp4"
-  },
+        "fps": 30,
+        "video_source": "file",
+        "video_file_path": "demo/assets/cooking.mp4"
+    },
   "frame_vectorizer": {
     "model_type": "ViT",
     "extraction_strategy": "every_frame",

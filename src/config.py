@@ -40,7 +40,7 @@ class Config:
                 "model_type": "ViT",
                 "extraction_strategy": "every_frame",
                 "frame_interval": 1,
-                "use_vlm": false
+                "use_vlm": False
             },
             "query_vectorizer": {
                 "model_type": "BERT",
@@ -71,7 +71,7 @@ class Config:
         # Stream Input配置
         stream_config = self._config.get("stream_input", {})
         self.stream_fps = stream_config.get("fps", 30)
-        self.stream_video_source = stream_config.get("video_source", "camera")
+        self.stream_video_source = stream_config.get("video_source", "camera") # "camera" or "file"
         self.stream_video_file_path = stream_config.get("video_file_path", "demo/assets/cooking.mp4")
         
         # Frame Vectorizer配置
