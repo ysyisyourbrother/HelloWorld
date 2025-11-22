@@ -1,8 +1,66 @@
 import multiprocessing as mp
 import numpy as np
+import torch
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional
 from config import Config
+from stream_input import FrameData
+
+@dataclass
+class VectorData:
+    """向量数据结构体, 包含向量张量、时间戳、帧ID、视频来源、视频总帧数和视频FPS"""
+    vec_tensor: torch.Tensor        # 向量张量数据
+    timestamp: float                # 时间戳
+    frame_id: int                   # 帧ID
+    source_path: str                # 视频来源: "camera"或视频文件路径
+    total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
+    video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
+    
+    def __post_init__(self):
+        """初始化后的验证"""
+        if not isinstance(self.vec_tensor, torch.Tensor):
+            raise TypeError("vec_tensor must be a torch.Tensor")
+        if not isinstance(self.timestamp, (int, float)):
+            raise TypeError("timestamp must be a number")
+        if not isinstance(self.frame_id, int):
+            raise TypeError("frame_id must be an integer")
+        if not isinstance(self.source_path, str):
+            raise TypeError("source_path must be a string")
+        if self.total_frames is not None and not isinstance(self.total_frames, int):
+            raise TypeError("total_frames must be an integer or None")
+        if self.video_fps is not None and not isinstance(self.video_fps, (int, float)):
+            raise TypeError("video_fps must be a number or None")
+    
+    @classmethod
+    def from_frame(cls, frame_data: FrameData, vec_tensor: torch.Tensor = None, is_keyframe: bool = False):
+        """
+        从FrameData创建VectorData
+        
+        Args:
+            frame_data: FrameData对象
+            vec_tensor: 向量张量，如果为None则创建一个随机向量张量
+            is_keyframe: 是否为关键帧
+            
+        Returns:
+            VectorData对象
+        """
+        # 如果没有提供vec_tensor，则创建一个默认的向量张量
+        if vec_tensor is None:
+            # 默认创建一个768维的随机向量（ViT-B/16的维度）
+            vec_tensor = torch.rand(768)
+        
+        return cls(
+            vec_tensor=vec_tensor,
+            timestamp=frame_data.timestamp,
+            frame_id=frame_data.frame_id,
+            source_path=frame_data.source_path,
+            total_frames=frame_data.total_frames,
+            video_fps=frame_data.video_fps,
+        )
+
+
 
 class VectorizerBase(ABC):
     """向量化基类"""
@@ -87,15 +145,20 @@ class FrameVectorizer:
                         frame_id = frame_data['frame_id']
                         
                         # 向量化
-                        vector = self.vectorizer.encode(frame)
+                        vector_np = self.vectorizer.encode(frame)
+                        # 转换为torch张量
+                        vector_tensor = torch.from_numpy(vector_np)
                         
-                        # 创建向量数据
-                        vector_data = {
-                            'vector': vector,
-                            'timestamp': timestamp,
-                            'frame_id': frame_id,
-                            'is_keyframe': self._is_keyframe()
-                        }
+                        # 创建VectorData对象
+                        vector_data = VectorData(
+                            vec_tensor=vector_tensor,
+                            timestamp=timestamp,
+                            frame_id=frame_id,
+                            source_path=frame_data.get('source_path', 'unknown'),
+                            total_frames=frame_data.get('total_frames'),
+                            video_fps=frame_data.get('video_fps'),
+                            is_keyframe=self._is_keyframe()
+                        )
                         
                         if not self.vector_queue.full():
                             self.vector_queue.put(vector_data)
