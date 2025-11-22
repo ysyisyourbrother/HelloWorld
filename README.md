@@ -112,6 +112,7 @@ curl -X POST http://localhost:8000/query \
    - 支持可配置FPS
    - 多进程架构，使用队列管理帧数据
    - 提供帧数据给FrameVectorizer
+   - [详细文档](resource/docs/stream_input.md)
 
 2. **FrameVectorizer** (`frame_vectorizer.py`)
    - 将视频帧转换为语义向量
