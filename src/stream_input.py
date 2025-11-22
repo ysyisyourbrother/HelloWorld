@@ -11,11 +11,13 @@ from .config import Config
 
 @dataclass
 class FrameData:
-    """帧数据结构体, 包含帧张量数据、时间戳、帧ID和视频来源"""
+    """帧数据结构体, 包含帧张量数据、时间戳、帧ID、视频来源、视频总帧数和视频FPS"""
     frame_tensor: torch.Tensor      # 帧张量数据
     timestamp: float                # 时间戳
     frame_id: int                   # 帧ID
     source_path: str                # 视频来源: "camera"或视频文件路径
+    total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
+    video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
     
     def __post_init__(self):
         """初始化后的验证"""
@@ -27,6 +29,10 @@ class FrameData:
             raise TypeError("frame_id must be an integer")
         if not isinstance(self.source_path, str):
             raise TypeError("source_path must be a string")
+        if self.total_frames is not None and not isinstance(self.total_frames, int):
+            raise TypeError("total_frames must be an integer or None")
+        if self.video_fps is not None and not isinstance(self.video_fps, (int, float)):
+            raise TypeError("video_fps must be a number or None")
 
 class StreamInput:
     def __init__(self, config=None):
@@ -85,7 +91,7 @@ class StreamInput:
         except Exception as e:
             raise Exception(f"无法使用cv2打开视频文件 {file_path}: {str(e)}")
     
-    def _tensor_to_frame_data(self, frame_tensor, timestamp, frame_index=None, source_path="unknown"):
+    def _tensor_to_frame_data(self, frame_tensor, timestamp, frame_index=None, source_path="unknown", total_frames=None, video_fps=None):
         """
         将torch张量转换为FrameData结构体
         
@@ -94,6 +100,8 @@ class StreamInput:
             timestamp: float, 时间戳
             frame_index: int, 原始视频帧索引（如果有）
             source_path: str, 视频来源路径（"camera"或视频文件路径）
+            total_frames: int, 视频总帧数（仅视频文件模式）
+            video_fps: float, 视频FPS（仅视频文件模式）
             
         Returns:
             FrameData: 帧数据结构体，输出标准CHW格式
@@ -123,7 +131,9 @@ class StreamInput:
             frame_tensor=frame_tensor,
             timestamp=timestamp,
             frame_id=frame_id,
-            source_path=source_path
+            source_path=source_path,
+            total_frames=total_frames,
+            video_fps=video_fps
         )
     
     def _extract_camera_frame(self, current_time):
@@ -191,8 +201,15 @@ class StreamInput:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         # 转换为torch张量 (H, W, C) 格式，值范围[0, 1]
         frame_tensor = torch.from_numpy(frame_rgb).float() / 255.0
-        # 传入原始帧索引作为frame_id和视频文件路径作为source_path
-        frame_data = self._tensor_to_frame_data(frame_tensor, current_time, original_frame_idx, source_path=self.video_file_path)
+        # 传入原始帧索引作为frame_id、视频文件路径作为source_path，以及视频总帧数和FPS
+        frame_data = self._tensor_to_frame_data(
+            frame_tensor, 
+            current_time, 
+            original_frame_idx, 
+            source_path=self.video_file_path,
+            total_frames=self.total_frames,
+            video_fps=self.video_fps
+        )
         
         # 更新下一帧位置
         self.current_frame_idx += frame_skip
