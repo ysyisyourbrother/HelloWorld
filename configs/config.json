@@ -1,18 +1,22 @@
 {
   "stream_input": {
-        "fps": 30,
-        "video_source": "file",
-        "video_file_path": "demo/assets/cooking.mp4"
+    "log_file": "logs/stream_input.log",
+    "video_source": "file",
+    "video_file_path": "demo/assets/cooking.mp4",
+    "reader_type": "cv2"
     },
   "frame_vectorizer": {
-    "model_type": "ViT",
+    "log_file": "logs/frame_vectorizer.log",
+    "model_type": "BGE",
+    "model_path": "/mnt/share/cache/models/BGE-VL-base",
     "extraction_strategy": "every_frame",
     "frame_interval": 1,
     "use_vlm": false
   },
   "query_vectorizer": {
     "model_type": "BERT",
-    "max_length": 512
+    "max_length": 512,
+    "device": "cuda"
   },
   "memory_manager": {
     "database_type": "vector",

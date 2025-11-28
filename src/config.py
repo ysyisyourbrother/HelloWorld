@@ -22,64 +22,28 @@ class Config:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     self._config = json.load(f)
             else:
-                print(f"配置文件 {self.config_path} 不存在，使用默认配置")
-                self._set_default_config()
+                print(f"配置文件 {self.config_path} 不存在")
         except Exception as e:
-            print(f"加载配置文件失败: {e}，使用默认配置")
-            self._set_default_config()
-    
-    def _set_default_config(self):
-        """设置默认配置"""
-        self._config = {
-            "stream_input": {
-                "fps": 30,
-                "video_source": "camera",
-                "video_file_path": "demo/assets/cooking.mp4"
-            },
-            "frame_vectorizer": {
-                "model_type": "ViT",
-                "extraction_strategy": "every_frame",
-                "frame_interval": 1,
-                "use_vlm": False
-            },
-            "query_vectorizer": {
-                "model_type": "BERT",
-                "max_length": 512
-            },
-            "memory_manager": {
-                "database_type": "vector",
-                "retrieval_strategy": "similarity",
-                "max_memory_size": 10000
-            },
-            "reasoner": {
-                "model_type": "VLM",
-                "max_tokens": 2048,
-                "temperature": 0.7
-            },
-            "api_server_e": {
-                "host": "localhost",
-                "port": 8000
-            },
-            "api_server_c": {
-                "host": "0.0.0.0",
-                "port": 9000
-            }
-        }
+            print(f"加载配置文件失败: {e}")
     
     def _set_attributes(self):
         """将配置设置为类属性"""
         # Stream Input配置
         stream_config = self._config.get("stream_input", {})
-        self.stream_fps = stream_config.get("fps", 30)
+        self.stream_log_file = stream_config.get("log_file", "logs/stream_input.log")
         self.stream_video_source = stream_config.get("video_source", "camera") # "camera" or "file"
         self.stream_video_file_path = stream_config.get("video_file_path", "demo/assets/cooking.mp4")
+        self.stream_reader_type = stream_config.get("reader_type", "cv2")  # 视频读取器类型: "cv2" 或 "decord"
         
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})
-        self.frame_model_type = frame_config.get("model_type", "ViT")
+        self.frame_log_file = frame_config.get("log_file", "logs/frame_vectorizer.log")
+        self.frame_model_type = frame_config.get("model_type", "BGE")
         self.frame_extraction_strategy = frame_config.get("extraction_strategy", "every_frame")
         self.frame_interval = frame_config.get("frame_interval", 1)
         self.frame_use_vlm = frame_config.get("use_vlm", False)
+        self.frame_device = frame_config.get("device", "cuda")
+        self.frame_model_path = frame_config.get("model_path", "/mnt/share/cache/models/BGE-VL-base")
         
         # Query Vectorizer配置
         query_config = self._config.get("query_vectorizer", {})
