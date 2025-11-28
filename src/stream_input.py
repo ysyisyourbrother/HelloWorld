@@ -1,38 +1,27 @@
 import cv2
-import threading as mp
+import multiprocessing as mp
 import queue
 import numpy as np
 import time
 import torch
-from PIL import Image
+import logging
+from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
 from typing import Optional
-from .config import Config
+from decord import VideoReader
+
+# 本项目
+from src.config import Config
 
 @dataclass
 class FrameData:
-    """帧数据结构体, 包含帧张量数据、时间戳、帧ID、视频来源、视频总帧数和视频FPS"""
-    frame_tensor: torch.Tensor      # 帧张量数据
-    timestamp: float                # 时间戳
+    """帧数据结构体, 包含帧numpy数组数据、时间戳、帧ID、视频来源、视频总帧数和视频FPS"""
+    frame: np.ndarray               # 帧numpy数组数据
+    timestamp: float                # 时间戳, 用于系统测时
     frame_id: int                   # 帧ID
     source_path: str                # 视频来源: "camera"或视频文件路径
     total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
-    
-    def __post_init__(self):
-        """初始化后的验证"""
-        if not isinstance(self.frame_tensor, torch.Tensor):
-            raise TypeError("frame_tensor must be a torch.Tensor")
-        if not isinstance(self.timestamp, (int, float)):
-            raise TypeError("timestamp must be a number")
-        if not isinstance(self.frame_id, int):
-            raise TypeError("frame_id must be an integer")
-        if not isinstance(self.source_path, str):
-            raise TypeError("source_path must be a string")
-        if self.total_frames is not None and not isinstance(self.total_frames, int):
-            raise TypeError("total_frames must be an integer or None")
-        if self.video_fps is not None and not isinstance(self.video_fps, (int, float)):
-            raise TypeError("video_fps must be a number or None")
 
 class StreamInput:
     def __init__(self, config=None):
@@ -43,92 +32,96 @@ class StreamInput:
         Args:
             config (Config): 配置对象实例
         """
-        self.config = config if config is not None else Config()
-        
+        if config is None:
+            config = Config()
+        self.config = config
+
         # 从Config对象获取配置
-        self.fps = self.config.stream_fps # 决定了系统应该以什么频率从视频源提取和处理帧
         self.video_source = self.config.stream_video_source
         self.video_file_path = self.config.stream_video_file_path
+        # 获取视频读取器类型
+        self.reader_type = self.config.stream_reader_type
         
-        # 队列用于线程间传递帧数据
-        self.frame_queue = queue.Queue(maxsize=100)
+        # 使用multiprocessing.Queue以支持多进程间通信
+        self.frame_queue = mp.Queue(maxsize=100)
         self.running = False
-        self.cap = None  # 视频捕获对象
-        self.current_frame_idx = 0
+        self.cap = None  # cv2视频捕获对象
+        self.vr = None  # decord视频读取器对象
+        self.current_frame_idx = 0 # 读取到的帧索引
         self.total_frames = 0
         self.video_fps = None
         self.video_duration = 0
         
-    def initialize_video_source(self):
+    def _set_logger(self):
+        """设置日志记录器"""
+        log_file = self.config.stream_log_file
+
+        self.logger = logging.getLogger(name='StreamInput')
+        # 配置日志输出到控制台
+        console_handler = logging.StreamHandler()
+        console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(console_formatter)
+        console_handler.setLevel(logging.INFO)
+        self.logger.addHandler(console_handler)
+
+        # 配置日志输出到文件，设置日志回滚
+        file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        file_handler.setLevel(logging.DEBUG)
+        self.logger.addHandler(file_handler)
+        self.logger.propagate = False
+    
+    def _initialize_video_source(self):
         """初始化视频源"""
         if self.video_source == "camera":
-            # TODO: 需要后续适配和开发
-            # 摄像头仍然使用cv2，因为torchvision.io不支持实时流
+            # 摄像头仍然使用cv2，因为decord不支持实时流
+            self.logger.info(f"使用cv2初始化摄像头视频源")
             self.cap = cv2.VideoCapture(0)
             if not self.cap.isOpened():
                 raise Exception(f"无法打开摄像头: {self.video_source}")
+            
         elif self.video_source == "file":
-            if not self._load_video(self.video_file_path):
-                raise Exception(f"无法使用cv2打开视频文件: {self.video_file_path}")
-            
+            self.logger.info(f"使用{self.reader_type}初始化文件视频源")
+            if self.reader_type == 'decord':
+                self._decord_load_video(self.video_file_path)
+            else:
+                self._cv2_load_video(self.video_file_path)
         self.current_frame_idx = 0
-    
-    def _load_video(self, file_path: str) -> bool:
+
+    def _cv2_load_video(self, file_path: str) -> bool:
         """使用cv2加载视频文件"""
-        try:
-            print(f"使用cv2加载视频文件: {file_path}")
-            self.cap = cv2.VideoCapture(file_path)
-            
-            if not self.cap.isOpened():
-                raise Exception(f"无法打开视频文件: {file_path}")
-                
-            self.video_fps = self.cap.get(cv2.CAP_PROP_FPS)
-            self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            self.video_duration = self.total_frames / self.video_fps if self.video_fps and self.video_fps > 0 else 0
-            
-            print(f"视频加载成功: 总帧数 {self.total_frames}, FPS: {self.video_fps}, 时长: {self.video_duration:.2f}s")
-            return True
-        except Exception as e:
-            raise Exception(f"无法使用cv2打开视频文件 {file_path}: {str(e)}")
+        self.cap = cv2.VideoCapture(file_path)
+        
+        self.video_fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.video_duration = self.total_frames / self.video_fps if self.video_fps and self.video_fps > 0 else 0
+        
+        self.logger.info(f"视频加载成功: 总帧数 {self.total_frames}, FPS: {self.video_fps}, 时长: {self.video_duration:.2f}s")
+        return True
     
-    def _tensor_to_frame_data(self, frame_tensor, timestamp, frame_index=None, source_path="unknown", total_frames=None, video_fps=None):
-        """
-        将torch张量转换为FrameData结构体
+    def _decord_load_video(self, file_path: str) -> bool:
+        """使用decord加载视频文件"""
+        # 使用decord的VideoReader加载视频
+        self.vr = VideoReader(file_path)
         
-        Args:
-            frame_tensor: torch.Tensor, shape (H, W, C) 或 (C, H, W)
-            timestamp: float, 时间戳
-            frame_index: int, 原始视频帧索引（如果有）
-            source_path: str, 视频来源路径（"camera"或视频文件路径）
-            total_frames: int, 视频总帧数（仅视频文件模式）
-            video_fps: float, 视频FPS（仅视频文件模式）
-            
-        Returns:
-            FrameData: 帧数据结构体，输出标准CHW格式
-        """
-        # 确保张量格式为 (H, W, C)
-        if frame_tensor.shape[0] in [1, 3]:  # 如果是 (C, H, W) 格式
-            frame_tensor = frame_tensor.permute(1, 2, 0)
+        self.video_fps = self.vr.get_avg_fps()
+        # self.video_fps = float(self.vr.metadata.get('video', {}).get('fps', 30))
+        self.total_frames = len(self.vr)            
+        self.video_duration = self.total_frames / self.video_fps if self.video_fps and self.video_fps > 0 else 0
         
-        # 确保数据类型为float32
-        if frame_tensor.dtype != torch.float32:
-            frame_tensor = frame_tensor.float()
-        
-        # 确保值在[0, 1]范围内
-        if frame_tensor.max() > 1.0:
-            frame_tensor = frame_tensor / 255.0
-        
-        # 转换为标准CHW格式 (C, H, W) - PyTorch标准格式
-        frame_tensor = frame_tensor.permute(2, 0, 1)
-        
+        self.logger.info(f"视频加载成功: 总帧数 {self.total_frames}, FPS: {self.video_fps}, 时长: {self.video_duration:.2f}s")
+        return True
+    
+    def _to_frame_data(self, frame, timestamp, frame_id=None, source_path="unknown", total_frames=None, video_fps=None):
         # 如果提供了帧索引，使用原始帧索引作为frame_id，否则使用时间戳生成
-        if frame_index is not None:
-            frame_id = frame_index
+        if frame_id is not None:
+            frame_id = frame_id
         else:
             frame_id = int(timestamp * 1000)
         
         return FrameData(
-            frame_tensor=frame_tensor,
+            frame=frame,
             timestamp=timestamp,
             frame_id=frame_id,
             source_path=source_path,
@@ -139,71 +132,41 @@ class StreamInput:
     def _extract_camera_frame(self, current_time):
         """
         从摄像头提取帧
-        
-        Args:
-            current_time: float, 当前时间戳
-            
-        Returns:
-            FrameData or None: 帧数据结构体，失败时返回None
         """
         ret, frame = self.cap.read()
         if not ret:
             return None
-        
-        frame_tensor = torch.from_numpy(frame).float() / 255.0
         # 摄像头模式没有原始帧索引，所以不传入frame_index
         # 传入"camera"作为source_path
-        frame_data = self._tensor_to_frame_data(frame_tensor, current_time, source_path="camera")
+        frame_data = self._to_frame_data(frame, current_time, source_path="camera")
         
         return frame_data
     
     def _extract_video_frame(self, current_time):
-        """
-        从视频文件提取帧
-        
-        Args:
-            current_time: float, 当前时间戳
-            
-        Returns:
-            FrameData or None: 帧数据结构体，视频结束时返回None
-        """
-        # 优化：动态调整跳帧间隔，确保队列增长速度
-        if self.video_fps and self.video_fps > 0:
-            # 如果队列较小，减少跳帧数以提高提取速度
-            # 当且仅当视频速度快于系统处理速度时，才需要跳帧
-            if self.frame_queue.qsize() < 30:
-                frame_skip = max(1, int(self.video_fps / (self.fps * 1.5)))  # 提高提取速度
-            else:
-                frame_skip = max(1, int(self.video_fps / self.fps))
-        else:
-            frame_skip = 1
-        
         # 检查是否超出视频范围
         if self.current_frame_idx >= self.total_frames:
             return None
             
-        # 优化：减少set()操作的频率，因为这是一个昂贵的操作
-        if self.current_frame_idx % (frame_skip * 5) == 0:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-        
-        ret, frame = self.cap.read()
-        if not ret:
-            # 尝试重新定位
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-            ret, frame = self.cap.read()
-            if not ret:
-                return None
-        
         # 保存当前帧索引，用于设置frame_id
         original_frame_idx = self.current_frame_idx
+        self.logger.debug(f"正在提取帧 {original_frame_idx}/{self.total_frames}")
         
-        # 转换为RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # 转换为torch张量 (H, W, C) 格式，值范围[0, 1]
-        frame_tensor = torch.from_numpy(frame_rgb).float() / 255.0
+        if self.reader_type == 'decord' and self.vr is not None:
+            frame = self.vr[original_frame_idx].asnumpy() # RGB, [H,W,C], uint8
+        else:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
+            ret, frame = self.cap.read()  # RGB, [H,W,C], uint8
+            if not ret:
+                self.logger.error(f"cv2读取帧失败，返回ret={ret}")
+                return None
+            # 转换为RGB
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        self.logger.debug(f"成功提取帧 {original_frame_idx}, 帧形状: {frame.shape}, 帧数据类型: {frame.dtype}")
+        
         # 传入原始帧索引作为frame_id、视频文件路径作为source_path，以及视频总帧数和FPS
-        frame_data = self._tensor_to_frame_data(
-            frame_tensor, 
+        frame_data = self._to_frame_data(
+            frame, 
             current_time, 
             original_frame_idx, 
             source_path=self.video_file_path,
@@ -211,99 +174,135 @@ class StreamInput:
             video_fps=self.video_fps
         )
         
-        # 更新下一帧位置
-        self.current_frame_idx += frame_skip
+        # 每次只前进一帧
+        self.current_frame_idx += 1
+        self.logger.debug(f"帧索引递增，下一帧索引: {self.current_frame_idx}")
         
         return frame_data
 
     def _extract_frames(self):
-        """提取帧的线程函数"""
-        frame_interval = 1.0 / self.fps
+        """提取帧的线程函数（不跳过任何帧）"""
         frames_processed = 0
-        frames_skipped = 0
         start_time = time.time()
         
-        # 批量读取优化参数
-        batch_size = 5  # 一次尝试处理的帧数
+        # 对于视频文件，使用原始视频的fps来控制帧率
+        # 对于摄像头，使用默认的1/30秒间隔
+        frame_interval = 1.0 / self.video_fps if self.video_source == "file" and self.video_fps and self.video_fps > 0 else 1.0 / 30.0
         
-        while self.running:
-            frame_batch_start = time.time()
-            
-            # 批量处理帧以提高效率
-            for _ in range(batch_size):
-                if not self.running:
-                    break
-                    
-                # 根据视频源类型提取帧
-                if self.video_source == "camera":
-                    frame_data = self._extract_camera_frame(time.time())
-                    if frame_data is None:
-                        # 摄像头读取失败，短暂等待后重试
-                        time.sleep(0.1)
-                        continue
-                else:  # video file
-                    # 优化：直接计算应该读取的帧位置，避免逐帧读取
-                    frame_data = self._extract_video_frame(time.time())
-                    if frame_data is None:
-                        print(f"视频结束，共处理 {frames_processed} 帧，跳过 {frames_skipped} 帧")
-                        return
-                
-                frames_processed += 1
-                
-                # 将帧数据放入队列 - 使用非阻塞方式提高效率
+        if self.video_source == "camera":
+            while self.running_event.is_set():
+                frame_start = time.time()
+                frame_data = self._extract_camera_frame(time.time())
                 try:
-                    # 使用较短的超时时间
-                    self.frame_queue.put(frame_data, timeout=0.1)
-                except:
-                    # 队列满，跳过这一帧
-                    frames_skipped += 1
-                    if frames_processed % 100 == 0:
-                        print(f"队列已满，跳过第 {frame_data.frame_id} 帧")
-                    continue
-            
-            # 每处理100帧打印一次状态
-            if frames_processed % 100 == 0:
-                elapsed = time.time() - start_time
-                print(f"已处理 {frames_processed} 帧，当前队列大小: {self.frame_queue.qsize()}，耗时: {elapsed:.2f}s")
-            
-            # 优化的帧率控制 - 计算批量处理后的睡眠时间
-            batch_elapsed = time.time() - frame_batch_start
-            target_batch_time = batch_size * frame_interval
-            
-            if batch_elapsed < target_batch_time:
-                # 使用更精确的睡眠方式
-                sleep_time = target_batch_time - batch_elapsed
-                # 对于短睡眠，使用较小的时间片来提高精度
-                if sleep_time > 0.005:
-                    time.sleep(sleep_time * 0.9)  # 先睡90%
-                    # 使用自旋等待剩余时间以提高精度
-                    spin_end = time.time() + sleep_time * 0.1
-                    while time.time() < spin_end:
-                        pass
+                    self._put_frame_safely(frame_data, timeout=1.0)
+                    frames_processed += 1
+                    break
+                except Exception as e:
+                    self.logger.error(f"将摄像头帧放入队列时出错: {e}")
+                    # 队列仍然满，继续尝试，不跳过帧
+                if frame_data is None:
+                    # 摄像头读取失败，短暂等待后重试
+                    time.sleep(0.1)
+
+
+        if self.video_source == "file":
+            while self.running_event.is_set():
+                frame_start = time.time()
+                frame_data = self._extract_video_frame(time.time())
+                if frame_data is None:
+                    # 视频读取完毕，跳出循环
+                    self.logger.info(f"帧数据为None, 可能已到达视频末尾, 跳出循环")
+                    break
+                
+                self.logger.debug(f"准备将帧 {frame_data.frame_id} 放入队列")
+                
+                # TODO: 这里可以有两种处理方式：
+                # 1. 确保所有帧都被处理，不跳过任何帧（已经实现）
+                # 2. 模拟视频播放，按视频原始帧率处理帧
+                if True:
+                    # 队列满了就会卡在这里, 这是正常的
+                    self._put_frame_safely(frame_data)
+                    frames_processed += 1
+                    self.logger.info(f"已处理帧数: {frames_processed}")
+                else:
+                    pass
+                
+                # 帧率控制 - 确保不超过视频原始FPS
+                frame_elapsed = time.time() - frame_start
+                if frame_elapsed < frame_interval:
+                    sleep_time = frame_interval - frame_elapsed
+                    time.sleep(sleep_time)
+                else:
+                    additional_wait_time = frame_elapsed - frame_interval
+                    self.logger.info(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
+
+        
+        # 线程结束时打印最终统计信息
+        if frames_processed > 0:
+            elapsed = time.time() - start_time
+            self.logger.info(f"处理完成，共入队列 {frames_processed} 帧，耗时: {elapsed:.2f}s")
     
     def start(self):
-        """启动帧提取线程"""
+        """启动帧提取子进程"""
         self.running = True
-        self.initialize_video_source()
+        
+        # 创建一个共享变量来控制子进程运行
+        self.running_event = mp.Event()
+        self.running_event.set()
         
         # 设置线程为daemon模式，确保主程序退出时线程也会退出
-        self.process = mp.Thread(target=self._extract_frames, daemon=True)
-        # 提高线程优先级（如果系统支持）
+        # 注意：我们将视频源初始化移到子进程内部，确保资源在子进程上下文中正确创建
+        self.process = mp.Process(target=self._process_main, daemon=True)
         if hasattr(self.process, 'name'):
             self.process.name = "StreamInput-Extractor"
-        
         self.process.start()
-        print(f"StreamInput线程已启动, FPS: {self.fps}, 目标队列增长: 高速度模式")
+    
+    def _process_main(self):
+        """子进程主函数，负责初始化视频源和提取帧"""
+        # 注意：在子进程中需要重新初始化logger
+        self._set_logger()
+        self.logger.info(f"子进程启动, 进程ID: {mp.current_process().pid}")
+        self._initialize_video_source()
+        self._extract_frames()
+        # 使用running_event来控制循环，确保可以正确停止
+    
+    def _put_frame_safely(self, frame_data: FrameData, timeout=None):
+        """安全地将帧放入队列"""
+        try:
+            self.logger.debug(f"尝试将帧 {frame_data.frame_id} 放入队列，帧形状: {frame_data.frame.shape}")
+            if timeout is None:
+                self.frame_queue.put(frame_data)
+            else:
+                self.frame_queue.put(frame_data, timeout=timeout)
+            self.logger.debug(f"成功将帧 {frame_data.frame_id} 放入队列")
+        except Exception as e:
+            self.logger.error(f"将帧放入队列时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def start_single_process(self):
+        """启动单线程处理模式"""
+        self.running_event.set()
+        self._initialize_video_source()
+        # 直接调用提取函数，不使用线程
+        self._extract_frames()
     
     def stop(self):
-        """停止帧提取线程"""
-        self.running = False
+        """停止帧提取子进程"""
+        # 使用running_event来停止子进程
+        if hasattr(self, 'running_event'):
+            self.running_event.clear()
+            self.logger.info("已清除running_event标志")
+        # 等待子进程结束
         if hasattr(self, 'process') and self.process.is_alive():
+            self.logger.info("等待子进程结束...")
             self.process.join(timeout=5)
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
-        print("StreamInput线程已停止")
+            self.logger.info("子进程已结束或超时")
+        # 注意：在父进程中不释放视频资源，因为它们在子进程中已经被释放
+        # 重置状态以便可能的重新启动
+        self.cap = None
+        self.vr = None
+        self.logger.info("子进程已停止")
     
     def get_video_info(self):
         """获取视频信息"""
@@ -311,14 +310,14 @@ class StreamInput:
             return {
                 'total_frames': self.total_frames,
                 'video_fps': self.video_fps,
-                'target_fps': self.fps,
                 'duration': self.total_frames / self.video_fps if self.video_fps and self.video_fps > 0 else 0,
-                'source': 'file'
+                'source': 'file',
+                'reader_type': self.reader_type
             }
         elif self.video_source == "camera":
             return {
-                'target_fps': self.fps,
-                'source': 'camera'
+                'source': 'camera',
+                'reader_type': 'cv2'  # 摄像头始终使用cv2
             }
         return None
     
@@ -334,27 +333,51 @@ class StreamInput:
         return self.frame_queue
 
 if __name__ == "__main__":
-    # 测试代码
+    # 测试代码 - 分别测试cv2和decord两种读取器
     config = Config()
-    # 修改配置为摄像头模式进行测试
-    config.stream_video_source = "file"
+    
+    # 创建一个独立的logger用于测试
+    test_logger = logging.getLogger('StreamInputTest')
+    test_logger.setLevel(logging.INFO)
+    
+    # 检查GPU是否可用
+    test_logger.info(f"GPU是否可用: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        test_logger.info(f"当前GPU设备: {torch.cuda.current_device()}")
+        test_logger.info(f"GPU设备名称: {torch.cuda.get_device_name(0)}")
+    
     stream_input = StreamInput(config)
     
     try:
         stream_input.start()
+        test_logger.info(f"视频信息: {stream_input.get_video_info()}")
+        test_logger.info("开始获取帧数据...")
+        
+        # 给线程一些时间来填充队列
+        import time
+        time.sleep(1)
         
         frame_count = 0
-        while frame_count < 10:  # 只读取10帧进行测试
+        max_wait = 5  # 最大等待5秒
+        start_time = time.time()
+        
+        while frame_count < 5 and (time.time() - start_time) < max_wait:
             frame_data = stream_input.get_frame()
             if frame_data:
-                print(f"获取到帧 {frame_count}: ID={frame_data.frame_id}, "
-                      f"时间戳={frame_data.timestamp:.3f}, "
-                      f"张量形状={frame_data.frame_tensor.shape}")
+                test_logger.info(f"获取到帧 {frame_count}: ID={frame_data.frame_id}, "
+                        f"时间戳={frame_data.timestamp:.3f}, "
+                        f"张量形状={frame_data.frame.shape}, "
+                        f"设备={frame_data.frame.device}")
                 frame_count += 1
             else:
-                break
+                test_logger.debug("未获取到帧数据，尝试再次获取...")
+                time.sleep(0.1)
+        
+        if frame_count == 0:
+            test_logger.warning(f"在{max_wait}秒内未获取到任何帧数据")
                 
     except Exception as e:
-        print(f"测试失败: {e}")
+        test_logger.error(f"读取器测试失败: {e}")
     finally:
+        test_logger.info("停止StreamInput线程...")
         stream_input.stop()
