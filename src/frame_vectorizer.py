@@ -1,58 +1,42 @@
 import multiprocessing as mp
 import numpy as np
 import torch
+import logging
+from logging.handlers import RotatingFileHandler
 import time
-from abc import ABC, abstractmethod
+import queue
 from dataclasses import dataclass
 from typing import Optional
-from config import Config
-from stream_input import FrameData
+
+# 本项目
+from src.config import Config
+from src.stream_input import FrameData
+from models.bge.modeling_MMRet_CLIP import CLIPModel
 
 @dataclass
 class VectorData:
     """向量数据结构体, 包含向量张量、时间戳、帧ID、视频来源、视频总帧数和视频FPS"""
-    vec_tensor: torch.Tensor        # 向量张量数据
+    vector: np.ndarray        # 向量张量数据
     timestamp: float                # 时间戳
     frame_id: int                   # 帧ID
     source_path: str                # 视频来源: "camera"或视频文件路径
     total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
     
-    def __post_init__(self):
-        """初始化后的验证"""
-        if not isinstance(self.vec_tensor, torch.Tensor):
-            raise TypeError("vec_tensor must be a torch.Tensor")
-        if not isinstance(self.timestamp, (int, float)):
-            raise TypeError("timestamp must be a number")
-        if not isinstance(self.frame_id, int):
-            raise TypeError("frame_id must be an integer")
-        if not isinstance(self.source_path, str):
-            raise TypeError("source_path must be a string")
-        if self.total_frames is not None and not isinstance(self.total_frames, int):
-            raise TypeError("total_frames must be an integer or None")
-        if self.video_fps is not None and not isinstance(self.video_fps, (int, float)):
-            raise TypeError("video_fps must be a number or None")
-    
     @classmethod
-    def from_frame(cls, frame_data: FrameData, vec_tensor: torch.Tensor = None, is_keyframe: bool = False):
+    def from_frame(cls, frame_data: FrameData, vector: np.ndarray = None):
         """
         从FrameData创建VectorData
         
         Args:
             frame_data: FrameData对象
             vec_tensor: 向量张量，如果为None则创建一个随机向量张量
-            is_keyframe: 是否为关键帧
             
         Returns:
             VectorData对象
         """
-        # 如果没有提供vec_tensor，则创建一个默认的向量张量
-        if vec_tensor is None:
-            # 默认创建一个768维的随机向量（ViT-B/16的维度）
-            vec_tensor = torch.rand(768)
-        
         return cls(
-            vec_tensor=vec_tensor,
+            vector=vector,  
             timestamp=frame_data.timestamp,
             frame_id=frame_data.frame_id,
             source_path=frame_data.source_path,
@@ -60,38 +44,29 @@ class VectorData:
             video_fps=frame_data.video_fps,
         )
 
-
-
-class VectorizerBase(ABC):
-    """向量化基类"""
-    @abstractmethod
-    def encode(self, frame):
-        pass
-
-class ViTVectorizer(VectorizerBase):
-    """ViT向量化器"""
-    def __init__(self):
-        # TODO: 初始化ViT模型
-        self.model = None  # 这里应该加载实际的ViT模型
-        print("ViT向量化器已初始化")
+class BGEVectorizer():
+    """BGE模型向量化器"""
+    def __init__(self, config: Config):
+        # 加载BGE模型到GPU
+        self.device = config.frame_device
+        model_path = config.frame_model_path
+        print(f"正在加载BGE模型, 路径: {model_path}")
+        print(f"使用设备: {self.device}")
+        
+        # 加载CLIPModel
+        self.model = CLIPModel.from_pretrained(model_path).to(self.device)
+        self.model.set_processor(model_path)
+        self.processor = self.model.processor  # 确保processor作为类属性存在
+        self.model.eval()
+        print("BGE模型向量化器已成功初始化")
     
     def encode(self, frame):
-        # TODO: 实现实际的ViT编码
-        # 返回模拟的向量
-        return np.random.rand(768)  # ViT-B/16的输出维度
-
-class VLMVectorizer(VectorizerBase):
-    """VLM向量化器, 提取KV Cache均值"""
-    def __init__(self):
-        # TODO: 初始化VLM模型
-        self.model = None  # 这里应该加载实际的VLM模型
-        print("VLM向量化器已初始化")
+        # 使用processor处理图像
+        img = self.processor(images=frame, return_tensors="pt")['pixel_values'].to(self.device)
+        with torch.no_grad():
+            vector = self.model.encode_image(images=img)
+        return vector
     
-    def encode(self, frame):
-        # TODO: 实现实际的VLM KV Cache提取
-        # 返回模拟的向量
-        return np.random.rand(1024)
-
 class FrameVectorizer:
     def __init__(self, config=None):
         """
@@ -103,104 +78,167 @@ class FrameVectorizer:
         """
         if config is None:
             config = Config()
-        
         self.config = config
         
         # 从Config对象获取配置
         self.model_type = config.frame_model_type
         self.extraction_strategy = config.frame_extraction_strategy
         self.frame_interval = config.frame_interval
-        self.use_vlm = config.frame_use_vlm
         
-        self.vectorizer = self._initialize_vectorizer()
+        self.vectorizer = None
         self.frame_queue = None
-        self.vector_queue = mp.Queue(maxsize=200)  # 使用默认队列大小
+        # 创建向量队列，使用multiprocessing.Queue以支持多进程间通信
+        self.vector_queue = mp.Queue(maxsize=100)
         self.running = False
-        self.frame_count = 0
+        self.vectorized_frame_count = 0
+        self.all_frame_count = 0
         
+    def _set_logger(self):
+        """设置日志记录器"""
+        log_file = self.config.frame_log_file
+
+        self.logger = logging.getLogger(name='FrameVectorizer')
+        # 配置日志输出到控制台
+        console_handler = logging.StreamHandler()
+        console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(console_formatter)
+        console_handler.setLevel(logging.INFO)
+        self.logger.addHandler(console_handler)
+
+        # 配置日志输出到文件，设置日志回滚
+        file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        file_handler.setLevel(logging.DEBUG)
+        self.logger.addHandler(file_handler)
+        self.logger.propagate = False
+
     def _initialize_vectorizer(self):
         """初始化向量化器"""
-        if self.use_vlm:
-            return VLMVectorizer()
+        if self.model_type == "BGE":
+            self.vectorizer = BGEVectorizer(self.config)
         elif self.model_type == "ViT":
-            return ViTVectorizer()
+            # 为了兼容性保留ViT选项，但实际上使用BGE
+            print("注意: 当前配置为ViT: 但将使用BGE模型")
+            self.vectorizer = BGEVectorizer(self.config)
         else:
             raise ValueError(f"不支持的模型类型: {self.model_type}")
     
-    def set_frame_queue(self, frame_queue):
-        """设置帧队列"""
-        self.frame_queue = frame_queue
-    
-    def process_frames(self):
+    def _preprocess_single_frame(self, frame):
+        """
+        处理单帧
+        进来时是[H, W, C]的uint8格式的RGB的numpy的array
+        转换成(待定)
+        """
+        # frame = Image.fromarray(frame)
+        return frame
+
+    def _process_frames(self):
         """处理帧的主循环"""
+        print(f"FrameVectorizer: 开始处理帧")
+        assert self.frame_queue is not None, "请先设置帧队列"
+        print(f"FrameVectorizer: 帧队列对象ID: {id(self.frame_queue)}")
+
         while self.running:
             try:
-                if self.frame_queue and not self.frame_queue.empty():
-                    frame_data = self.frame_queue.get(timeout=1)
+                # 尝试从队列中获取数据，设置超时避免永久阻塞
+                try:
+                    queue_size = self.frame_queue.qsize() if hasattr(self.frame_queue, 'qsize') else 'unknown'
+                    print(f"FrameVectorizer: 尝试从帧队列获取数据... 当前队列大小估计: {queue_size}")
+                except Exception as q_e:
+                    print(f"FrameVectorizer: 获取队列大小出错: {q_e}")
+                
+                frame_data = self.frame_queue.get(timeout=5.0)  # 增加超时时间到5秒
+                print(f"FrameVectorizer: 成功获取帧数据: frame_id={frame_data.frame_id}")
+                
+                try:
+                    # 直接尝试访问FrameData对象的属性
+                    frame = frame_data.frame_tensor
+                    timestamp = frame_data.timestamp
+                    frame_id = frame_data.frame_id
+                    
+                    print(f"FrameVectorizer: 处理帧 {frame_id}, 帧形状: {frame.shape}")
                     
                     # 根据提取策略决定是否处理当前帧
-                    if self._should_process_frame():
-                        frame = frame_data['frame']
-                        timestamp = frame_data['timestamp']
-                        frame_id = frame_data['frame_id']
-                        
+                    if self._should_process_frame(frame_data):
+                        print(f"FrameVectorizer: 帧 {frame_id} 将被向量化")
+                        # 预处理
+                        frame = self._preprocess_single_frame(frame)
                         # 向量化
-                        vector_np = self.vectorizer.encode(frame)
-                        # 转换为torch张量
-                        vector_tensor = torch.from_numpy(vector_np)
-                        
+                        vector_tensor = self.vectorizer.encode(frame)
+                        vector = vector_tensor.cpu().numpy()
+                        print(f"FrameVectorizer: 帧 {frame_id} 向量化完成，向量形状: {vector.shape}")
                         # 创建VectorData对象
                         vector_data = VectorData(
-                            vec_tensor=vector_tensor,
+                            vector=vector,
                             timestamp=timestamp,
                             frame_id=frame_id,
-                            source_path=frame_data.get('source_path', 'unknown'),
-                            total_frames=frame_data.get('total_frames'),
-                            video_fps=frame_data.get('video_fps'),
-                            is_keyframe=self._is_keyframe()
+                            source_path=frame_data.source_path,
+                            total_frames=frame_data.total_frames,
+                            video_fps=frame_data.video_fps
                         )
                         
-                        if not self.vector_queue.full():
-                            self.vector_queue.put(vector_data)
-                        
-                        self.frame_count += 1
-                
-                time.sleep(0.001)
+                        # 放入向量队列
+                        print(f"FrameVectorizer: 尝试将向量放入向量队列...")
+                        self.vector_queue.put(vector_data, timeout=0.5)  # 增加超时时间
+                        print(f"FrameVectorizer: 向量成功放入队列")
+                        self.vectorized_frame_count += 1
+                        print(f"FrameVectorizer: 已向量化 {self.vectorized_frame_count} 帧")
+
+                    self.all_frame_count += 1
+                except Exception as process_error:
+                    print(f"FrameVectorizer: 处理帧时出错: {process_error}")
+                    import traceback
+                    traceback.print_exc()
+            except queue.Empty:
+                print(f"FrameVectorizer: 帧队列为空，等待新帧...")
+                time.sleep(0.1)  # 短暂等待后重试
             except Exception as e:
-                print(f"处理帧时出错: {e}")
-                time.sleep(0.1)
+                print(f"FrameVectorizer: 从队列获取数据时出错: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.1)  # 短暂等待后重试
     
-    def _should_process_frame(self):
+    def _should_process_frame(self, frame_data):
         """根据策略决定是否处理当前帧"""
         if self.extraction_strategy == "every_frame":
             return True
         elif self.extraction_strategy == "interval":
-            return self.frame_count % self.frame_interval == 0
-        elif self.extraction_strategy == "early_exit":
-            # TODO: 实现Early-exit策略
-            return True
+            return self.vectorized_frame_count % self.frame_interval == 0
         else:
             return True
     
     def _is_keyframe(self):
-        """判断是否为关键帧"""
+        """判断是否为关键(该函数还没有使用)"""
         # TODO: 实现关键帧检测逻辑
-        return self.frame_count % (self.frame_interval * 10) == 0
+        is_keyframe = self.vectorized_frame_count % (self.frame_interval * 10) == 0
+        return is_keyframe
     
     def start(self):
         """启动向量化进程"""
         self.running = True
-        self.process = mp.Process(target=self.process_frames)
+        self.process = mp.Process(target=self._process_frames, daemon=True)
+        if hasattr(self.process, 'name'):
+            self.process.name = "FrameVectorizer-Processor"
         self.process.start()
-        print(f"FrameVectorizer进程已启动，模型: {self.model_type}")
+        print(f"FrameVectorizer进程已启动, 模型: {self.model_type}")
     
+    def start_single_process(self):
+        """启动单进程向量化"""
+        self.running = True
+        self._process_frames()
+
     def stop(self):
         """停止向量化进程"""
         self.running = False
-        if hasattr(self, 'process'):
+        if hasattr(self, 'process') and self.process.is_alive():
             self.process.join(timeout=5)
         print("FrameVectorizer进程已停止")
     
+    def set_frame_queue(self, frame_queue):
+        """设置帧队列"""
+        self.frame_queue = frame_queue
+
     def get_vector_queue(self):
         """获取向量队列供MemoryManager使用"""
         return self.vector_queue
