@@ -1,4 +1,6 @@
 import cv2
+import os
+import glob
 import multiprocessing as mp
 import queue
 import numpy as np
@@ -55,7 +57,17 @@ class StreamInput:
         """设置日志记录器"""
         log_file = self.config.stream_log_file
 
+        pattern = log_file.replace(".log", "*")
+        log_files = glob.glob(pattern)
+        for f in log_files:
+            try:
+                os.remove(f)
+            except Exception as e:
+                pass
+
         self.logger = logging.getLogger(name='StreamInput')
+        # 清除旧的处理器，避免重复添加
+        self.logger.handlers.clear()
         # 设置logger本身的级别，确保所有级别日志都能被处理
         self.logger.setLevel(logging.DEBUG)
         # 配置日志输出到控制台
@@ -65,8 +77,7 @@ class StreamInput:
         console_handler.setLevel(logging.INFO)
         self.logger.addHandler(console_handler)
 
-        # 配置日志输出到文件，设置日志回滚
-        file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+        file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5, mode='w')
         file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(logging.DEBUG)
@@ -148,7 +159,6 @@ class StreamInput:
             
         # 保存当前帧索引，用于设置frame_id
         original_frame_idx = self.current_frame_idx
-        self.logger.debug(f"正在提取帧 {original_frame_idx}/{self.total_frames}")
         
         if self.reader_type == 'decord' and self.vr is not None:
             frame = self.vr[original_frame_idx].asnumpy() # RGB, [H,W,C], uint8
@@ -213,8 +223,6 @@ class StreamInput:
                     self.logger.info(f"帧数据为None, 可能已到达视频末尾, 跳出循环")
                     break
                 
-                self.logger.debug(f"准备将帧 {frame_data.frame_id} 放入队列")
-                
                 # TODO: 这里可以有两种处理方式：
                 # 1. 确保所有帧都被处理, 不跳过任何帧, 队列满了就阻塞等待
                 # 2. 模拟视频播放, 按视频原始帧率处理帧, 队列满了就丢包
@@ -234,7 +242,7 @@ class StreamInput:
                     time.sleep(sleep_time)
                 else:
                     additional_wait_time = frame_elapsed - frame_interval
-                    self.logger.info(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
+                    self.logger.debug(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
 
         
         # 线程结束时打印最终统计信息
@@ -271,7 +279,6 @@ class StreamInput:
     def _put_frame_safely(self, frame_data: FrameData, timeout=None):
         """安全地将帧放入队列"""
         try:
-            self.logger.debug(f"尝试将帧 {frame_data.frame_id} 放入队列，帧形状: {frame_data.frame.shape}")
             if timeout is None:
                 self.frame_queue.put(frame_data)
             else:

@@ -7,7 +7,8 @@ import time
 import queue
 from dataclasses import dataclass
 from typing import Optional
-
+import glob
+import os
 # 本项目
 from src.config import Config
 from src.stream_input import FrameData
@@ -96,8 +97,17 @@ class FrameVectorizer:
     def _set_logger(self):
         """设置日志记录器"""
         log_file = self.config.frame_log_file
+        pattern = log_file.replace(".log", "*")
+        log_files = glob.glob(pattern)
+        for f in log_files:
+            try:
+                os.remove(f)
+            except Exception as e:
+                pass
 
         self.logger = logging.getLogger(name='FrameVectorizer')
+        # 设置logger本身的级别，确保所有级别日志都能被处理
+        self.logger.setLevel(logging.DEBUG)
         # 配置日志输出到控制台
         console_handler = logging.StreamHandler()
         console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -133,73 +143,66 @@ class FrameVectorizer:
         # frame = Image.fromarray(frame)
         return frame
 
-    def _process_frames(self):
+    def _vectorize_frames(self):
         """处理帧的主循环"""
-        print(f"FrameVectorizer: 开始处理帧")
-        assert self.frame_queue is not None, "请先设置帧队列"
-        print(f"FrameVectorizer: 帧队列对象ID: {id(self.frame_queue)}")
+        start_time = time.time()
+        last_vectorized_time = start_time
+        while self.running_event.is_set():
+            self.logger.info(f"尝试从帧队列获取数据... 当前队列大小估计: {self.frame_queue.qsize()}")
+            frame_data: FrameData = self.frame_queue.get() 
+            # 直接尝试访问FrameData对象的属性
+            frame = frame_data.frame
+            timestamp = frame_data.timestamp
+            frame_id = frame_data.frame_id
+            
+            # 根据提取策略决定是否处理当前帧
+            if self._should_process_frame(frame_data):
+                self.logger.info(f"处理帧数据: frame_id={frame_id}")
+                # 预处理
+                frame = self._preprocess_single_frame(frame)
+                # 向量化
+                vector_tensor = self.vectorizer.encode(frame)
+                vector = vector_tensor.cpu().numpy()
+                self.logger.debug(f"帧 {frame_id} 向量化完成，向量形状: {vector.shape}")
 
-        while self.running:
-            try:
-                # 尝试从队列中获取数据，设置超时避免永久阻塞
-                try:
-                    queue_size = self.frame_queue.qsize() if hasattr(self.frame_queue, 'qsize') else 'unknown'
-                    print(f"FrameVectorizer: 尝试从帧队列获取数据... 当前队列大小估计: {queue_size}")
-                except Exception as q_e:
-                    print(f"FrameVectorizer: 获取队列大小出错: {q_e}")
+                # 创建VectorData对象
+                vector_data = VectorData(
+                    vector=vector,
+                    timestamp=timestamp,
+                    frame_id=frame_id,
+                    source_path=frame_data.source_path,
+                    total_frames=frame_data.total_frames,
+                    video_fps=frame_data.video_fps
+                )
                 
-                frame_data = self.frame_queue.get(timeout=5.0)  # 增加超时时间到5秒
-                print(f"FrameVectorizer: 成功获取帧数据: frame_id={frame_data.frame_id}")
+                # 放入向量队列
+                self.logger.debug(f"尝试将帧 {frame_id} 的向量化数据放入向量队列...")
+                self.vector_queue.put(vector_data)  # 增加超时时间
+                self.logger.debug(f"帧 {frame_id} 的向量化数据成功放入向量队列")
+                self.vectorized_frame_count += 1
+                # 计算并打印处理速度
+                current_time = time.time()
                 
-                try:
-                    # 直接尝试访问FrameData对象的属性
-                    frame = frame_data.frame_tensor
-                    timestamp = frame_data.timestamp
-                    frame_id = frame_data.frame_id
-                    
-                    print(f"FrameVectorizer: 处理帧 {frame_id}, 帧形状: {frame.shape}")
-                    
-                    # 根据提取策略决定是否处理当前帧
-                    if self._should_process_frame(frame_data):
-                        print(f"FrameVectorizer: 帧 {frame_id} 将被向量化")
-                        # 预处理
-                        frame = self._preprocess_single_frame(frame)
-                        # 向量化
-                        vector_tensor = self.vectorizer.encode(frame)
-                        vector = vector_tensor.cpu().numpy()
-                        print(f"FrameVectorizer: 帧 {frame_id} 向量化完成，向量形状: {vector.shape}")
-                        # 创建VectorData对象
-                        vector_data = VectorData(
-                            vector=vector,
-                            timestamp=timestamp,
-                            frame_id=frame_id,
-                            source_path=frame_data.source_path,
-                            total_frames=frame_data.total_frames,
-                            video_fps=frame_data.video_fps
-                        )
-                        
-                        # 放入向量队列
-                        print(f"FrameVectorizer: 尝试将向量放入向量队列...")
-                        self.vector_queue.put(vector_data, timeout=0.5)  # 增加超时时间
-                        print(f"FrameVectorizer: 向量成功放入队列")
-                        self.vectorized_frame_count += 1
-                        print(f"FrameVectorizer: 已向量化 {self.vectorized_frame_count} 帧")
+                frames_per_second = 1.0 / (current_time - last_vectorized_time)
+                self.logger.debug(f"当前编码速度(FPS): {frames_per_second:.2f} 帧/秒")
+                self.last_vectorized_frame_count = self.vectorized_frame_count
+                last_vectorized_time = current_time
+            else:
+                self.logger.debug(f"跳过帧数据: frame_id={frame_id}")
+            self.all_frame_count += 1
 
-                    self.all_frame_count += 1
-                except Exception as process_error:
-                    print(f"FrameVectorizer: 处理帧时出错: {process_error}")
-                    import traceback
-                    traceback.print_exc()
-            except queue.Empty:
-                print(f"FrameVectorizer: 帧队列为空，等待新帧...")
-                time.sleep(0.1)  # 短暂等待后重试
-            except Exception as e:
-                print(f"FrameVectorizer: 从队列获取数据时出错: {e}")
-                import traceback
-                traceback.print_exc()
-                time.sleep(0.1)  # 短暂等待后重试
+        return
+
+    def _process_main(self):
+        """处理帧的主循环"""
+        self._set_logger()
+        self.logger.info(f"子进程启动, 进程ID: {mp.current_process().pid}")
+        self._initialize_vectorizer()
+        assert self.frame_queue is not None
+        self._vectorize_frames()
+
     
-    def _should_process_frame(self, frame_data):
+    def _should_process_frame(self, frame_data: FrameData = None):
         """根据策略决定是否处理当前帧"""
         if self.extraction_strategy == "every_frame":
             return True
@@ -216,21 +219,21 @@ class FrameVectorizer:
     
     def start(self):
         """启动向量化进程"""
-        self.running = True
-        self.process = mp.Process(target=self._process_frames, daemon=True)
+        # 创建一个共享变量来控制子进程运行
+        self.running_event = mp.Event()
+        self.running_event.set()
+        # 设置线程为daemon模式，确保主程序退出时线程也会退出
+        self.process = mp.Process(target=self._process_main, daemon=True)
         if hasattr(self.process, 'name'):
             self.process.name = "FrameVectorizer-Processor"
         self.process.start()
-        print(f"FrameVectorizer进程已启动, 模型: {self.model_type}")
     
     def start_single_process(self):
         """启动单进程向量化"""
-        self.running = True
-        self._process_frames()
+        self._process_main()
 
     def stop(self):
         """停止向量化进程"""
-        self.running = False
         if hasattr(self, 'process') and self.process.is_alive():
             self.process.join(timeout=5)
         print("FrameVectorizer进程已停止")
