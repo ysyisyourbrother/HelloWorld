@@ -44,7 +44,6 @@ class StreamInput:
         
         # 使用multiprocessing.Queue以支持多进程间通信
         self.frame_queue = mp.Queue(maxsize=100)
-        self.running = False
         self.cap = None  # cv2视频捕获对象
         self.vr = None  # decord视频读取器对象
         self.current_frame_idx = 0 # 读取到的帧索引
@@ -57,6 +56,8 @@ class StreamInput:
         log_file = self.config.stream_log_file
 
         self.logger = logging.getLogger(name='StreamInput')
+        # 设置logger本身的级别，确保所有级别日志都能被处理
+        self.logger.setLevel(logging.DEBUG)
         # 配置日志输出到控制台
         console_handler = logging.StreamHandler()
         console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -89,9 +90,9 @@ class StreamInput:
                 self._cv2_load_video(self.video_file_path)
         self.current_frame_idx = 0
 
-    def _cv2_load_video(self, file_path: str) -> bool:
+    def _cv2_load_video(self, video_file_path: str) -> bool:
         """使用cv2加载视频文件"""
-        self.cap = cv2.VideoCapture(file_path)
+        self.cap = cv2.VideoCapture(video_file_path)
         
         self.video_fps = self.cap.get(cv2.CAP_PROP_FPS)
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -100,10 +101,10 @@ class StreamInput:
         self.logger.info(f"视频加载成功: 总帧数 {self.total_frames}, FPS: {self.video_fps}, 时长: {self.video_duration:.2f}s")
         return True
     
-    def _decord_load_video(self, file_path: str) -> bool:
+    def _decord_load_video(self, video_file_path: str) -> bool:
         """使用decord加载视频文件"""
         # 使用decord的VideoReader加载视频
-        self.vr = VideoReader(file_path)
+        self.vr = VideoReader(video_file_path)
         
         self.video_fps = self.vr.get_avg_fps()
         # self.video_fps = float(self.vr.metadata.get('video', {}).get('fps', 30))
@@ -115,9 +116,7 @@ class StreamInput:
     
     def _to_frame_data(self, frame, timestamp, frame_id=None, source_path="unknown", total_frames=None, video_fps=None):
         # 如果提供了帧索引，使用原始帧索引作为frame_id，否则使用时间戳生成
-        if frame_id is not None:
-            frame_id = frame_id
-        else:
+        if frame_id is None:
             frame_id = int(timestamp * 1000)
         
         return FrameData(
@@ -217,14 +216,15 @@ class StreamInput:
                 self.logger.debug(f"准备将帧 {frame_data.frame_id} 放入队列")
                 
                 # TODO: 这里可以有两种处理方式：
-                # 1. 确保所有帧都被处理，不跳过任何帧（已经实现）
-                # 2. 模拟视频播放，按视频原始帧率处理帧
+                # 1. 确保所有帧都被处理, 不跳过任何帧, 队列满了就阻塞等待
+                # 2. 模拟视频播放, 按视频原始帧率处理帧, 队列满了就丢包
                 if True:
                     # 队列满了就会卡在这里, 这是正常的
                     self._put_frame_safely(frame_data)
                     frames_processed += 1
                     self.logger.info(f"已处理帧数: {frames_processed}")
                 else:
+                    # 满了就丢包
                     pass
                 
                 # 帧率控制 - 确保不超过视频原始FPS
@@ -244,12 +244,9 @@ class StreamInput:
     
     def start(self):
         """启动帧提取子进程"""
-        self.running = True
-        
         # 创建一个共享变量来控制子进程运行
         self.running_event = mp.Event()
         self.running_event.set()
-        
         # 设置线程为daemon模式，确保主程序退出时线程也会退出
         # 注意：我们将视频源初始化移到子进程内部，确保资源在子进程上下文中正确创建
         self.process = mp.Process(target=self._process_main, daemon=True)
@@ -257,6 +254,12 @@ class StreamInput:
             self.process.name = "StreamInput-Extractor"
         self.process.start()
     
+    def start_single_process(self):
+        """启动单线程处理模式"""
+        self.running_event = mp.Event()
+        self.running_event.set()
+        self._process_main()
+
     def _process_main(self):
         """子进程主函数，负责初始化视频源和提取帧"""
         # 注意：在子进程中需要重新初始化logger
@@ -264,7 +267,6 @@ class StreamInput:
         self.logger.info(f"子进程启动, 进程ID: {mp.current_process().pid}")
         self._initialize_video_source()
         self._extract_frames()
-        # 使用running_event来控制循环，确保可以正确停止
     
     def _put_frame_safely(self, frame_data: FrameData, timeout=None):
         """安全地将帧放入队列"""
@@ -276,17 +278,8 @@ class StreamInput:
                 self.frame_queue.put(frame_data, timeout=timeout)
             self.logger.debug(f"成功将帧 {frame_data.frame_id} 放入队列")
         except Exception as e:
-            self.logger.error(f"将帧放入队列时出错: {e}")
-            import traceback
-            traceback.print_exc()
+            self.logger.error(f"丢包: {e}")
 
-    def start_single_process(self):
-        """启动单线程处理模式"""
-        self.running_event.set()
-        self._initialize_video_source()
-        # 直接调用提取函数，不使用线程
-        self._extract_frames()
-    
     def stop(self):
         """停止帧提取子进程"""
         # 使用running_event来停止子进程
@@ -331,53 +324,3 @@ class StreamInput:
     def get_frame_queue(self):
         """获取帧队列供其他模块使用"""
         return self.frame_queue
-
-if __name__ == "__main__":
-    # 测试代码 - 分别测试cv2和decord两种读取器
-    config = Config()
-    
-    # 创建一个独立的logger用于测试
-    test_logger = logging.getLogger('StreamInputTest')
-    test_logger.setLevel(logging.INFO)
-    
-    # 检查GPU是否可用
-    test_logger.info(f"GPU是否可用: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        test_logger.info(f"当前GPU设备: {torch.cuda.current_device()}")
-        test_logger.info(f"GPU设备名称: {torch.cuda.get_device_name(0)}")
-    
-    stream_input = StreamInput(config)
-    
-    try:
-        stream_input.start()
-        test_logger.info(f"视频信息: {stream_input.get_video_info()}")
-        test_logger.info("开始获取帧数据...")
-        
-        # 给线程一些时间来填充队列
-        import time
-        time.sleep(1)
-        
-        frame_count = 0
-        max_wait = 5  # 最大等待5秒
-        start_time = time.time()
-        
-        while frame_count < 5 and (time.time() - start_time) < max_wait:
-            frame_data = stream_input.get_frame()
-            if frame_data:
-                test_logger.info(f"获取到帧 {frame_count}: ID={frame_data.frame_id}, "
-                        f"时间戳={frame_data.timestamp:.3f}, "
-                        f"张量形状={frame_data.frame.shape}, "
-                        f"设备={frame_data.frame.device}")
-                frame_count += 1
-            else:
-                test_logger.debug("未获取到帧数据，尝试再次获取...")
-                time.sleep(0.1)
-        
-        if frame_count == 0:
-            test_logger.warning(f"在{max_wait}秒内未获取到任何帧数据")
-                
-    except Exception as e:
-        test_logger.error(f"读取器测试失败: {e}")
-    finally:
-        test_logger.info("停止StreamInput线程...")
-        stream_input.stop()
