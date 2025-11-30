@@ -6,7 +6,7 @@ from logging.handlers import RotatingFileHandler
 import time
 import queue
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 import glob
 import os
 # 本项目
@@ -45,21 +45,17 @@ class VectorData:
             video_fps=frame_data.video_fps,
         )
 
-class BGEVectorizer():
+class ImageBGEVectorizer():
     """BGE模型向量化器"""
     def __init__(self, config: Config):
-        # 加载BGE模型到GPU
         self.device = config.frame_device
         model_path = config.frame_model_path
-        print(f"正在加载BGE模型, 路径: {model_path}")
-        print(f"使用设备: {self.device}")
         
         # 加载CLIPModel
         self.model = CLIPModel.from_pretrained(model_path).to(self.device)
         self.model.set_processor(model_path)
         self.processor = self.model.processor  # 确保processor作为类属性存在
         self.model.eval()
-        print("BGE模型向量化器已成功初始化")
     
     def encode(self, frame):
         # 使用processor处理图像
@@ -89,7 +85,7 @@ class FrameVectorizer:
         self.vectorizer = None
         self.frame_queue = None
         # 创建向量队列，使用multiprocessing.Queue以支持多进程间通信
-        self.vector_queue = mp.Queue(maxsize=100)
+        self.frame_vector_queue = mp.Queue(maxsize=100)
         self.running = False
         self.vectorized_frame_count = 0
         self.all_frame_count = 0
@@ -126,11 +122,11 @@ class FrameVectorizer:
     def _initialize_vectorizer(self):
         """初始化向量化器"""
         if self.model_type == "BGE":
-            self.vectorizer = BGEVectorizer(self.config)
+            self.vectorizer = ImageBGEVectorizer(self.config)
         elif self.model_type == "ViT":
             # 为了兼容性保留ViT选项，但实际上使用BGE
             print("注意: 当前配置为ViT: 但将使用BGE模型")
-            self.vectorizer = BGEVectorizer(self.config)
+            self.vectorizer = ImageBGEVectorizer(self.config)
         else:
             raise ValueError(f"不支持的模型类型: {self.model_type}")
     
@@ -148,7 +144,7 @@ class FrameVectorizer:
         start_time = time.time()
         last_vectorized_time = start_time
         while self.running_event.is_set():
-            self.logger.info(f"尝试从帧队列获取数据... 当前队列大小估计: {self.frame_queue.qsize()}")
+            self.logger.debug(f"尝试从帧队列获取数据... 当前队列大小: {self.frame_queue.qsize()}")
             frame_data: FrameData = self.frame_queue.get() 
             # 直接尝试访问FrameData对象的属性
             frame = frame_data.frame
@@ -157,13 +153,12 @@ class FrameVectorizer:
             
             # 根据提取策略决定是否处理当前帧
             if self._should_process_frame(frame_data):
-                self.logger.info(f"处理帧数据: frame_id={frame_id}")
                 # 预处理
                 frame = self._preprocess_single_frame(frame)
                 # 向量化
                 vector_tensor = self.vectorizer.encode(frame)
                 vector = vector_tensor.cpu().numpy()
-                self.logger.debug(f"帧 {frame_id} 向量化完成，向量形状: {vector.shape}")
+                self.logger.info(f"帧 {frame_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
 
                 # 创建VectorData对象
                 vector_data = VectorData(
@@ -177,12 +172,12 @@ class FrameVectorizer:
                 
                 # 放入向量队列
                 self.logger.debug(f"尝试将帧 {frame_id} 的向量化数据放入向量队列...")
-                self.vector_queue.put(vector_data)  # 增加超时时间
+                self.frame_vector_queue.put(vector_data)  # 增加超时时间
                 self.logger.debug(f"帧 {frame_id} 的向量化数据成功放入向量队列")
                 self.vectorized_frame_count += 1
+
                 # 计算并打印处理速度
                 current_time = time.time()
-                
                 frames_per_second = 1.0 / (current_time - last_vectorized_time)
                 self.logger.debug(f"当前编码速度(FPS): {frames_per_second:.2f} 帧/秒")
                 self.last_vectorized_frame_count = self.vectorized_frame_count
@@ -244,7 +239,7 @@ class FrameVectorizer:
 
     def get_vector_queue(self):
         """获取向量队列供MemoryManager使用"""
-        return self.vector_queue
+        return self.frame_vector_queue
 
 if __name__ == "__main__":
     # 测试代码
