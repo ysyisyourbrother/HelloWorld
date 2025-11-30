@@ -47,8 +47,10 @@ class Config:
         
         # Query Vectorizer配置
         query_config = self._config.get("query_vectorizer", {})
-        self.query_model_type = query_config.get("model_type", "BERT")
-        self.query_max_length = query_config.get("max_length", 512)
+        self.query_model_type = query_config.get("model_type", "BGE")
+        self.query_model_path = query_config.get("model_path", "/mnt/share/cache/models/BGE-VL-base")
+        self.query_dimension = query_config.get("dimension", 512)
+        self.query_device = query_config.get("device", "cuda")
         
         # Memory Manager配置
         memory_config = self._config.get("memory_manager", {})
