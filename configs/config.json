@@ -11,11 +11,13 @@
     "model_path": "/mnt/share/cache/models/BGE-VL-base",
     "extraction_strategy": "every_frame",
     "frame_interval": 1,
+    "device": "cuda",
     "use_vlm": false
   },
   "query_vectorizer": {
-    "model_type": "BERT",
-    "max_length": 512,
+    "model_type": "BGE",
+    "model_path": "/mnt/share/cache/models/BGE-VL-base",
+    "dimension": 512,
     "device": "cuda"
   },
   "memory_manager": {
