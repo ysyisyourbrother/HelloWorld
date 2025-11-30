@@ -1,21 +1,11 @@
 import multiprocessing as mp
 import numpy as np
 import time
-from abc import ABC, abstractmethod
 from collections import defaultdict
 from config import Config
 
-class MemoryBase(ABC):
-    """记忆模块基类"""
-    @abstractmethod
-    def add_memory(self, vector_data):
-        pass
-    
-    @abstractmethod
-    def retrieve(self, query_vector, top_k=5):
-        pass
 
-class VectorMemory(MemoryBase):
+class VectorMemory():
     """基于向量的记忆模块"""
     def __init__(self, max_size=10000):
         self.max_size = max_size

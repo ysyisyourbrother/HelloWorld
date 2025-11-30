@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from stream_input import StreamInput
 from frame_vectorizer import FrameVectorizer
-from query_vectorizer import QueryVectorizer
+from query_vectorizer import TextBGEVectorizer
 from memory_manager import MemoryManager
 from api_server_e import APIServerE
 from reasoner import Reasoner
@@ -43,7 +43,7 @@ class VideoAnalysisSystem:
         # 创建客户端模块实例
         stream_input = StreamInput(self.config)
         frame_vectorizer = FrameVectorizer(self.config)
-        query_vectorizer = QueryVectorizer(self.config)
+        query_vectorizer = TextBGEVectorizer(self.config)
         memory_manager = MemoryManager(self.config)
         api_server_e = APIServerE(self.config)
         
