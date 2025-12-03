@@ -15,7 +15,7 @@ from src.stream_input import FrameData
 from models.bge.modeling_MMRet_CLIP import CLIPModel
 
 @dataclass
-class VectorData:
+class FrameVectorData:
     """向量数据结构体, 包含向量张量、时间戳、帧ID、视频来源、视频总帧数和视频FPS"""
     vector: np.ndarray        # 向量张量数据
     timestamp: float                # 时间戳
@@ -65,7 +65,7 @@ class ImageBGEVectorizer():
         return vector
     
 class FrameVectorizer:
-    def __init__(self, config=None):
+    def __init__(self, config: Config = None):
         """
         初始化FrameVectorizer模块
         负责把提取到的帧转换为语义向量和时间索引
@@ -161,7 +161,7 @@ class FrameVectorizer:
                 self.logger.info(f"帧 {frame_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
 
                 # 创建VectorData对象
-                vector_data = VectorData(
+                vector_data = FrameVectorData(
                     vector=vector,
                     timestamp=timestamp,
                     frame_id=frame_id,
@@ -172,7 +172,7 @@ class FrameVectorizer:
                 
                 # 放入向量队列
                 self.logger.debug(f"尝试将帧 {frame_id} 的向量化数据放入向量队列...")
-                self.frame_vector_queue.put(vector_data)  # 增加超时时间
+                self.frame_vector_queue.put(vector_data)  
                 self.logger.debug(f"帧 {frame_id} 的向量化数据成功放入向量队列")
                 self.vectorized_frame_count += 1
 
@@ -225,6 +225,8 @@ class FrameVectorizer:
     
     def start_single_process(self):
         """启动单进程向量化"""
+        self.running_event = mp.Event()
+        self.running_event.set()
         self._process_main()
 
     def stop(self):
