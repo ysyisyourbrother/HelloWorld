@@ -377,6 +377,7 @@ class MemoryManager:
         
         while self.running_event.is_set():
             # 从队列获取查询向量数据
+            self.logger.info(f"等待查询向量...")
             query_data: QueryVectorData = self.query_vector_queue.get()
             query_vector = query_data.vector
             query_id = query_data.query_id
@@ -397,7 +398,7 @@ class MemoryManager:
             
             # 将结果放入结果队列
             self.query_result_queue.put(result)
-            self.logger.info(f"查询 {query_id} 处理完成，返回 {len(vector_ids)} 个结果")
+            self.logger.info(f"查询 {query_id} 处理完成，返回 {len(frame_data_list)} 个结果")
     
     def _process_main(self):
         """主进程，启动两个线程"""
