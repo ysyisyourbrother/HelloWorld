@@ -15,26 +15,35 @@
     "use_vlm": false
   },
   "query_vectorizer": {
+    "log_file": "logs/query_vectorizer.log",
     "model_type": "BGE",
     "model_path": "/mnt/share/cache/models/BGE-VL-base",
-    "dimension": 512,
     "device": "cuda"
   },
   "memory_manager": {
+    "log_file": "logs/memory_manager.log",
+    "resume": false,
     "database_type": "vector",
+    "faiss_file_path": "database/database.faiss",
+    "databasemap_file_path": "database/databasemap.json",
+    "faiss_index_type": "FlatIP",
+    "dimension": 512,
     "retrieval_strategy": "similarity",
-    "max_memory_size": 10000
+    "max_memory_size": null
   },
   "reasoner": {
+    "log_file": "logs/reasoner.log",
     "model_type": "VLM",
     "max_tokens": 2048,
     "temperature": 0.7
   },
   "api_server_e": {
+    "log_file": "logs/api_server_e.log",
     "host": "localhost",
     "port": 8000
   },
   "api_server_c": {
+    "log_file": "logs/api_server_c.log",
     "host": "0.0.0.0",
     "port": 9000
   }

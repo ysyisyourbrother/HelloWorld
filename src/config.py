@@ -47,6 +47,7 @@ class Config:
         
         # Query Vectorizer配置
         query_config = self._config.get("query_vectorizer", {})
+        self.query_log_file = query_config.get("log_file", "logs/query_vectorizer.log")
         self.query_model_type = query_config.get("model_type", "BGE")
         self.query_model_path = query_config.get("model_path", "/mnt/share/cache/models/BGE-VL-base")
         self.query_dimension = query_config.get("dimension", 512)
@@ -54,23 +55,32 @@ class Config:
         
         # Memory Manager配置
         memory_config = self._config.get("memory_manager", {})
+        self.memory_log_file = memory_config.get("log_file", "logs/memory_manager.log")
+        self.memory_resume = memory_config.get("resume", False)
         self.memory_database_type = memory_config.get("database_type", "vector")
+        self.memory_faiss_index_type = memory_config.get("faiss_index_type", "FlatIP")
+        self.memory_faiss_file_path = memory_config.get("faiss_file_path", "database/database.faiss")
+        self.memory_databasemap_file_path = memory_config.get("databasemap_file_path", "database/databasemap.json")
+        self.memory_dimension = memory_config.get("dimension", 512)
         self.memory_retrieval_strategy = memory_config.get("retrieval_strategy", "similarity")
         self.memory_max_size = memory_config.get("max_memory_size", 10000)
         
         # Reasoner配置
         reasoner_config = self._config.get("reasoner", {})
+        self.reasoner_log_file = reasoner_config.get("log_file", "logs/reasoner.log")
         self.reasoner_model_type = reasoner_config.get("model_type", "VLM")
         self.reasoner_max_tokens = reasoner_config.get("max_tokens", 2048)
         self.reasoner_temperature = reasoner_config.get("temperature", 0.7)
         
         # API Server E配置
         api_e_config = self._config.get("api_server_e", {})
+        self.api_e_log_file = api_e_config.get("log_file", "logs/api_server_e.log")
         self.api_host = api_e_config.get("host", "localhost")
         self.api_port = api_e_config.get("port", 8000)
         
         # API Server C配置
         api_c_config = self._config.get("api_server_c", {})
+        self.api_c_log_file = api_c_config.get("log_file", "logs/api_server_c.log")
         self.server_host = api_c_config.get("host", "0.0.0.0")
         self.server_port = api_c_config.get("port", 9000)
     
