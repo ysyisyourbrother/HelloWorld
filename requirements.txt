@@ -1,5 +1,6 @@
 opencv-python>=4.5.0
-numpy>=1.21.0
+numpy>=1.21.0,<2.0
+faiss-gpu>=1.7.0
 flask>=2.0.0
 requests>=2.25.0
 multiprocessing-logging>=0.3.0
