@@ -158,7 +158,7 @@ class FrameVectorizer:
                 # 向量化
                 vector_tensor = self.vectorizer.encode(frame)
                 vector = vector_tensor.cpu().numpy()
-                self.logger.info(f"帧 {frame_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
+                self.logger.debug(f"帧 {frame_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
 
                 # 创建VectorData对象
                 vector_data = FrameVectorData(
@@ -171,7 +171,6 @@ class FrameVectorizer:
                 )
                 
                 # 放入向量队列
-                self.logger.debug(f"尝试将帧 {frame_id} 的向量化数据放入向量队列...")
                 self.frame_vector_queue.put(vector_data)  
                 self.logger.debug(f"帧 {frame_id} 的向量化数据成功放入向量队列")
                 self.vectorized_frame_count += 1
@@ -180,7 +179,6 @@ class FrameVectorizer:
                 current_time = time.time()
                 frames_per_second = 1.0 / (current_time - last_vectorized_time)
                 self.logger.debug(f"当前编码速度(FPS): {frames_per_second:.2f} 帧/秒")
-                self.last_vectorized_frame_count = self.vectorized_frame_count
                 last_vectorized_time = current_time
             else:
                 self.logger.debug(f"跳过帧数据: frame_id={frame_id}")
@@ -202,14 +200,14 @@ class FrameVectorizer:
         if self.extraction_strategy == "every_frame":
             return True
         elif self.extraction_strategy == "interval":
-            return self.vectorized_frame_count % self.frame_interval == 0
+            return self.all_frame_count % self.frame_interval == 0
         else:
             return True
     
-    def _is_keyframe(self):
+    def _is_keyframe(self, frame_data: FrameData = None):
         """判断是否为关键(该函数还没有使用)"""
         # TODO: 实现关键帧检测逻辑
-        is_keyframe = self.vectorized_frame_count % (self.frame_interval * 10) == 0
+        is_keyframe = self.all_frame_count % self.frame_interval == 0
         return is_keyframe
     
     def start(self):
@@ -233,7 +231,6 @@ class FrameVectorizer:
         """停止向量化进程"""
         if hasattr(self, 'process') and self.process.is_alive():
             self.process.join(timeout=5)
-        print("FrameVectorizer进程已停止")
     
     def set_frame_queue(self, frame_queue):
         """设置帧队列"""
