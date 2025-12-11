@@ -34,12 +34,13 @@ class Config:
         self.stream_video_source = stream_config.get("video_source", "camera") # "camera" or "file"
         self.stream_video_file_path = stream_config.get("video_file_path", "demo/assets/cooking.mp4")
         self.stream_reader_type = stream_config.get("reader_type", "cv2")  # 视频读取器类型: "cv2" 或 "decord"
+        self.stream_original_fps = stream_config.get("original_fps", True)  # 是否按原帧率入队
         
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})
         self.frame_log_file = frame_config.get("log_file", "logs/frame_vectorizer.log")
         self.frame_model_type = frame_config.get("model_type", "BGE")
-        self.frame_extraction_strategy = frame_config.get("extraction_strategy", "every_frame")
+        self.frame_extraction_strategy = frame_config.get("extraction_strategy", "every_frame") # "every_frame", "interval"
         self.frame_interval = frame_config.get("frame_interval", 1)
         self.frame_use_vlm = frame_config.get("use_vlm", False)
         self.frame_device = frame_config.get("device", "cuda")
@@ -62,15 +63,13 @@ class Config:
         self.memory_faiss_file_path = memory_config.get("faiss_file_path", "database/database.faiss")
         self.memory_databasemap_file_path = memory_config.get("databasemap_file_path", "database/databasemap.json")
         self.memory_dimension = memory_config.get("dimension", 512)
-        self.memory_retrieval_strategy = memory_config.get("retrieval_strategy", "similarity")
+        self.memory_retrieval_strategy = memory_config.get("retrieval_strategy", "topk")
+        self.memory_topk = memory_config.get("topk", 5)
         self.memory_max_size = memory_config.get("max_memory_size", 10000)
         
         # Reasoner配置
         reasoner_config = self._config.get("reasoner", {})
         self.reasoner_log_file = reasoner_config.get("log_file", "logs/reasoner.log")
-        self.reasoner_model_type = reasoner_config.get("model_type", "VLM")
-        self.reasoner_max_tokens = reasoner_config.get("max_tokens", 2048)
-        self.reasoner_temperature = reasoner_config.get("temperature", 0.7)
         
         # API Server E配置
         api_e_config = self._config.get("api_server_e", {})
