@@ -185,7 +185,6 @@ class StreamInput:
         
         # 每次只前进一帧
         self.current_frame_idx += 1
-        self.logger.debug(f"帧索引递增，下一帧索引: {self.current_frame_idx}")
         
         return frame_data
 
@@ -230,19 +229,19 @@ class StreamInput:
                     # 队列满了就会卡在这里, 这是正常的
                     self._put_frame_safely(frame_data)
                     frames_processed += 1
-                    self.logger.info(f"已处理帧数: {frames_processed}")
                 else:
                     # 满了就丢包
                     pass
                 
                 # 帧率控制 - 确保不超过视频原始FPS
-                frame_elapsed = time.time() - frame_start
-                if frame_elapsed < frame_interval:
-                    sleep_time = frame_interval - frame_elapsed
-                    time.sleep(sleep_time)
-                else:
-                    additional_wait_time = frame_elapsed - frame_interval
-                    self.logger.debug(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
+                if self.config.stream_original_fps:
+                    frame_elapsed = time.time() - frame_start
+                    if frame_elapsed < frame_interval:
+                        sleep_time = frame_interval - frame_elapsed
+                        time.sleep(sleep_time)
+                    else:
+                        additional_wait_time = frame_elapsed - frame_interval
+                        self.logger.debug(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
 
         
         # 线程结束时打印最终统计信息
@@ -292,17 +291,13 @@ class StreamInput:
         # 使用running_event来停止子进程
         if hasattr(self, 'running_event'):
             self.running_event.clear()
-            self.logger.info("已清除running_event标志")
         # 等待子进程结束
         if hasattr(self, 'process') and self.process.is_alive():
-            self.logger.info("等待子进程结束...")
             self.process.join(timeout=5)
-            self.logger.info("子进程已结束或超时")
         # 注意：在父进程中不释放视频资源，因为它们在子进程中已经被释放
         # 重置状态以便可能的重新启动
         self.cap = None
         self.vr = None
-        self.logger.info("子进程已停止")
     
     def get_video_info(self):
         """获取视频信息"""
