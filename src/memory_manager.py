@@ -10,6 +10,7 @@ import os
 import faiss
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+from contextlib import contextmanager
 import multiprocessing as mp
 
 # 本项目
@@ -167,16 +168,21 @@ class MemoryManager:
         self.config = config
         
         # 从Config对象获取配置
-        self.database_type = config.memory_database_type
-        self.retrieval_strategy = config.memory_retrieval_strategy
-        self.max_size = config.memory_max_size
+        self.database_type = config.memory_database_type # 向量 或 其他
         
-        # 数据库相关
+        # logger配置
+        self.log_file = config.memory_log_file
+
+        # 向量数据库相关
         self.index = None
         self.dimension = None
-        self.faiss_file_path = self.config.memory_faiss_file_path  # faiss文件路径
-        self.databasemap_file_path = self.config.memory_databasemap_file_path  # databasemap文件路径
+        self.faiss_index_type = config.memory_faiss_index_type 
+        self.faiss_file_path = config.memory_faiss_file_path  # faiss文件路径
+        self.dimension = config.memory_dimension  # 向量维度
+        self.databasemap_file_path = config.memory_databasemap_file_path  # databasemap文件路径
         self.databasemap = None  # 线程安全的databasemap
+        self.retrieval_strategy = config.memory_retrieval_strategy
+        self.max_size = config.memory_max_size
         
         # 队列相关
         self.frame_vector_queue = None
@@ -188,7 +194,7 @@ class MemoryManager:
         
     def _set_logger(self):
         """设置日志记录器"""
-        log_file = self.config.memory_log_file
+        log_file = self.log_file
         pattern = log_file.replace(".log", "*")
         log_files = glob.glob(pattern)
         for f in log_files:
@@ -215,8 +221,8 @@ class MemoryManager:
         self.logger.addHandler(file_handler)
         self.logger.propagate = False
     
-    def _initialize_faiss(self):
-        """初始化向量数据库"""
+    def _initialize_database(self):
+        """初始化向量数据库和databasemap"""
         # 尝试从本地加载faiss文件
         if os.path.isfile(self.faiss_file_path):
             self.logger.info(f"从本地文件 {self.faiss_file_path} 加载向量数据库")
@@ -237,14 +243,13 @@ class MemoryManager:
                 self.logger.warning(f"databasemap文件 {self.databasemap_file_path} 不存在或加载失败")
         else:
             self.logger.info(f"本地文件 {self.faiss_file_path} 不存在，将创建新的向量数据库")
-            if self.config.memory_faiss_index_type == "FlatL2":
-                local_faiss = faiss.IndexFlatL2(self.config.memory_dimension)
-            elif self.config.memory_faiss_index_type == "FlatIP":
-                local_faiss = faiss.IndexFlatIP(self.config.memory_dimension)
+            if self.faiss_index_type == "FlatL2":
+                local_faiss = faiss.IndexFlatL2(self.dimension)
+            elif self.faiss_index_type == "FlatIP":
+                local_faiss = faiss.IndexFlatIP(self.dimension)
             else:
-                raise ValueError(f"不支持的faiss索引类型: {self.config.memory_faiss_index_type}")
+                raise ValueError(f"不支持的faiss索引类型: {self.faiss_index_type}")
             self.index = ThreadSafeFaiss(local_faiss)
-            self.dimension = self.config.memory_dimension
             # 初始化空的databasemap
             self.databasemap = ThreadSafeMap()
 
@@ -353,7 +358,7 @@ class MemoryManager:
 
         return frames
     
-    def retrieve(self, query_vector: np.ndarray, top_k: int = 5) -> Tuple[List[FrameVectorData], List[float]]:
+    def _retrieve(self, query_vector: np.ndarray, top_k: int = 5) -> Tuple[List[FrameVectorData], List[float]]:
         """根据查询向量检索匹配的帧数据
         
         Args:
@@ -385,7 +390,7 @@ class MemoryManager:
             timestamp = query_data.timestamp
             
             # 执行查询
-            frame_data_list, scores = self.retrieve(query_vector, top_k)
+            frame_data_list, scores = self._retrieve(query_vector, self.config.memory_topk)
             
             # 创建查询结果
             result = QueryResult(
@@ -401,7 +406,7 @@ class MemoryManager:
             self.logger.info(f"查询 {query_id} 处理完成，返回 {len(frame_data_list)} 个结果")
     
     def _process_main(self):
-        """主进程，启动两个线程"""
+        """子进程，启动两个线程"""
         self._set_logger()
         self.logger.info(f"MemoryManager启动, 进程ID: {os.getpid()}")
         
@@ -419,21 +424,21 @@ class MemoryManager:
         frame_thread.start()
         query_thread.start()
         
-        # 等待线程结束
-        frame_thread.join()
-        query_thread.join()
-        
-        # 结束时保存数据库
-        self._save_database()
+        # 保持子进程运行，等待线程完成
+        while self.running_event.is_set():
+            time.sleep(1.0)
     
     def start(self):
         """启动MemoryManager"""
         # 创建一个事件对象来控制线程运行
-        self.running_event = threading.Event()
+        self.running_event = mp.Event()
         self.running_event.set()
         
-        # 直接调用_process_main，在当前进程中运行
-        self._process_main()
+        # 在子进程中运行_process_main
+        self.process = mp.Process(target=self._process_main, daemon=True)
+        if hasattr(self.process, 'name'):
+            self.process.name = "MemoryManager-Processor"
+        self.process.start()
     
     def start_single_thread(self):
         """启动单线程运行MemoryManager"""
@@ -449,13 +454,15 @@ class MemoryManager:
         if hasattr(self, 'running_event'):
             self.running_event.clear()
         
-        # 保存数据库
-        self._save_database()
+        # 保存数据库 - 只有在当前进程有index的情况下才保存
+        if self.index is not None:
+            self._save_database()
         
-        # 只有在logger已初始化的情况下才记录日志
-        if hasattr(self, 'logger'):
-            self.logger.info("MemoryManager已停止")
-        print("MemoryManager已停止")
+        # 等待子进程结束
+        if hasattr(self, 'process') and self.process.is_alive():
+            # 只有在logger已初始化的情况下才记录日志
+            self.process.join(timeout=5)
+        
     
     def set_frame_vector_queue(self, frame_vector_queue: mp.Queue):
         """设置帧向量队列"""
