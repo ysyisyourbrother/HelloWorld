@@ -130,7 +130,7 @@ class QueryVectorizer:
             
             # 向量化
             vector = self.vectorizer.encode(query)
-            self.logger.info(f"查询 {query_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
+            self.logger.debug(f"查询 {query_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
             
             # 创建向量数据对象
             vector_data = QueryVectorData(
