@@ -118,8 +118,7 @@ class StreamInput:
         self.vr = VideoReader(video_file_path)
         
         self.video_fps = self.vr.get_avg_fps()
-        # self.video_fps = float(self.vr.metadata.get('video', {}).get('fps', 30))
-        self.total_frames = len(self.vr)            
+        self.total_frames = len(self.vr)
         self.video_duration = self.total_frames / self.video_fps if self.video_fps and self.video_fps > 0 else 0
         
         self.logger.info(f"视频加载成功: 总帧数 {self.total_frames}, FPS: {self.video_fps}, 时长: {self.video_duration:.2f}s")
@@ -162,14 +161,17 @@ class StreamInput:
         
         if self.reader_type == 'decord' and self.vr is not None:
             frame = self.vr[original_frame_idx].asnumpy() # RGB, [H,W,C], uint8
-        else:
+        elif self.reader_type == 'cv2' and self.cap is not None:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-            ret, frame = self.cap.read()  # RGB, [H,W,C], uint8
+            ret, frame = self.cap.read()  # BGR, [H,W,C], uint8
             if not ret:
-                self.logger.error(f"cv2读取帧失败，返回ret={ret}")
+                self.logger.error(f"cv2读取帧失败, 返回ret={ret}")
                 return None
             # 转换为RGB
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        else:
+            self.logger.error(f"未知的reader_type: {self.reader_type}")
+            return None
         
         self.logger.debug(f"成功提取帧 {original_frame_idx}, 帧形状: {frame.shape}, 帧数据类型: {frame.dtype}")
         
