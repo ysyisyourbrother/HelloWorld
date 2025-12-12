@@ -25,8 +25,8 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerateOutput
 
 # from ...constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
-from llava.model.llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
-from llava.model.language_model.modeling_qwen2 import Qwen2Model, Qwen2ForCausalLM
+from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
+from .modeling_qwen2 import Qwen2Model, Qwen2ForCausalLM
 from transformers import Qwen2Config
 
 # from .qwen.modeling_qwen import QWenLMHeadModel, QWenModel

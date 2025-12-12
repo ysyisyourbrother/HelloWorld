@@ -1,3 +1,4 @@
 import sys
 import os
-from .model import LlavaLlamaForCausalLM
+# 暂时注释掉，避免导入失败
+# from .model import LlavaLlamaForCausalLM
