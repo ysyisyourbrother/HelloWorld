@@ -70,18 +70,39 @@ class Config:
         # Reasoner配置
         reasoner_config = self._config.get("reasoner", {})
         self.reasoner_log_file = reasoner_config.get("log_file", "logs/reasoner.log")
+        self.reasoner_model_path = reasoner_config.get("model_path", "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2")
+        self.reasoner_model_name = reasoner_config.get("model_name", "llava_qwen")
+        self.reasoner_model_base = reasoner_config.get("model_base", None)
+        self.reasoner_torch_dtype = reasoner_config.get("torch_dtype", "bfloat16")
+        self.reasoner_load_in_8bit = reasoner_config.get("load_in_8bit", False)
+        self.reasoner_load_in_4bit = reasoner_config.get("load_in_4bit", False)
+        self.reasoner_device_map = reasoner_config.get("device_map", "auto")
+        self.reasoner_attn_implementation = reasoner_config.get("attn_implementation", "eager")
+        self.reasoner_mm_spatial_pool_mode = reasoner_config.get("mm_spatial_pool_mode", "average")
+        self.reasoner_conv_template = reasoner_config.get("conv_template", "qwen_1_5")
+        self.reasoner_device = reasoner_config.get("device", "cuda")
+        self.reasoner_max_new_tokens = reasoner_config.get("max_new_tokens", 128)
+        self.reasoner_temperature = reasoner_config.get("temperature", 0.0)
+        self.reasoner_top_p = reasoner_config.get("top_p", 0.1)
+        self.reasoner_num_beams = reasoner_config.get("num_beams", 1)
+        self.reasoner_do_sample = reasoner_config.get("do_sample", False)
         
         # API Server E配置
         api_e_config = self._config.get("api_server_e", {})
         self.api_e_log_file = api_e_config.get("log_file", "logs/api_server_e.log")
         self.api_host = api_e_config.get("host", "localhost")
         self.api_port = api_e_config.get("port", 8000)
+        self.cloud_server_url = api_e_config.get("cloud_server_url", "http://localhost:9000")
         
         # API Server C配置
         api_c_config = self._config.get("api_server_c", {})
         self.api_c_log_file = api_c_config.get("log_file", "logs/api_server_c.log")
         self.server_host = api_c_config.get("host", "0.0.0.0")
         self.server_port = api_c_config.get("port", 9000)
+        
+        # Cloud Server配置
+        cloud_config = self._config.get("cloud_server", {})
+        self.cloud_with_reasoner = cloud_config.get("with_reasoner", True)
     
     def reload(self):
         """重新加载配置"""
@@ -121,3 +142,7 @@ class Config:
     def get_api_c_config(self):
         """获取api_server_c配置"""
         return self._config.get("api_server_c", {})
+    
+    def get_cloud_config(self):
+        """获取cloud_server配置"""
+        return self._config.get("cloud_server", {})
