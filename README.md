@@ -51,6 +51,10 @@ pip install -r requirements.txt
 
 ### 3. 运行系统
 
+## 注意
+
+在任何情况下都请使用`ctrl + C`(对于控制台`python`或`python3`运行)或者`kill -2 <PID>`(对于`nohup`运行)进行程序的终止。
+
 ## 技术特性
 
 - **多进程架构**：每个模块独立运行，提高系统稳定性
