@@ -66,10 +66,15 @@ class Config:
         self.memory_retrieval_strategy = memory_config.get("retrieval_strategy", "topk")
         self.memory_topk = memory_config.get("topk", 5)
         self.memory_max_size = memory_config.get("max_memory_size", 10000)
+        memory_mode = memory_config.get("mode", "both")
+        
+        self.memory_mode = memory_mode #  ["only_query", "only_inject", "both"]
         
         # Reasoner配置
         reasoner_config = self._config.get("reasoner", {})
         self.reasoner_log_file = reasoner_config.get("log_file", "logs/reasoner.log")
+        self.reasoner_test_mode = reasoner_config.get("test_mode", False)
+        self.reasoner_test_response = reasoner_config.get("test_response", "这是测试模式的响应文本")
         self.reasoner_model_path = reasoner_config.get("model_path", "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2")
         self.reasoner_model_name = reasoner_config.get("model_name", "llava_qwen")
         self.reasoner_model_base = reasoner_config.get("model_base", None)
@@ -89,10 +94,11 @@ class Config:
         
         # API Server E配置
         api_e_config = self._config.get("api_server_e", {})
+        self.communication_mode = api_e_config.get("communication_mode", "unary")  # "unary", "server_stream", "bidi_stream"
+        self.cloud_server_url = api_e_config.get("cloud_server_url", "localhost:9000")
         self.api_e_log_file = api_e_config.get("log_file", "logs/api_server_e.log")
-        self.api_host = api_e_config.get("host", "localhost")
-        self.api_port = api_e_config.get("port", 8000)
-        self.cloud_server_url = api_e_config.get("cloud_server_url", "http://localhost:9000")
+        self.api_e_test_mode = api_e_config.get("test_mode", False)
+        self.api_e_dialog_mode = api_e_config.get("dialog_mode", "single")  # "single" 或 "multi"
         
         # API Server C配置
         api_c_config = self._config.get("api_server_c", {})
@@ -102,7 +108,6 @@ class Config:
         
         # Cloud Server配置
         cloud_config = self._config.get("cloud_server", {})
-        self.cloud_with_reasoner = cloud_config.get("with_reasoner", True)
     
     def reload(self):
         """重新加载配置"""

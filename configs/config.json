@@ -31,19 +31,44 @@
     "dimension": 512,
     "retrieval_strategy": "topk",
     "topk": 5,
-    "max_memory_size": null
+    "max_memory_size": null,
+    "mode": "both"
   },
   "reasoner": {
-    "log_file": "logs/reasoner.log"
+    "log_file": "logs/reasoner.log",
+    "test_mode": true,
+    "test_response": "这是测试模式的响应文本",
+    "model_path": "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2",
+    "model_name": "llava_qwen",
+    "model_base": null,
+    "torch_dtype": "bfloat16",
+    "load_in_8bit": false,
+    "load_in_4bit": false,
+    "device_map": "auto",
+    "attn_implementation": "eager",
+    "mm_spatial_pool_mode": "average",
+    "conv_template": "qwen_1_5",
+    "device": "cuda",
+    "max_new_tokens": 128,
+    "temperature": 0.0,
+    "top_p": 0.1,
+    "num_beams": 1,
+    "do_sample": false
   },
   "api_server_e": {
     "log_file": "logs/api_server_e.log",
-    "host": "localhost",
-    "port": 8000
+    "cloud_server_url": "127.0.0.1:9000",
+    "test_mode": true,
+    "dialog_mode": "single",
+    "communication_mode": "unary"
   },
   "api_server_c": {
     "log_file": "logs/api_server_c.log",
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 9000
+  },
+  "cloud_server": {
+  },
+  "edge": {
   }
 }
