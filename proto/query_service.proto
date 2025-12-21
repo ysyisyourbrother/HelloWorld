@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package query_service;
+
+// 查询请求消息
+message QueryRequest {
+    string query_text = 1;           // 查询文本
+    bytes memory_results = 2;        // 记忆检索结果（序列化的帧数据）
+    int32 query_id = 3;              // 查询ID
+}
+
+// 查询响应消息
+message QueryResponse {
+    int32 query_id = 1;              // 查询ID
+    string result = 2;               // 完整结果
+    string error = 3;                // 错误信息
+    double timestamp = 4;            // 时间戳
+}
+
+// 查询服务定义
+service QueryService {
+    // 一元RPC - 单轮对话
+    rpc Query(QueryRequest) returns (QueryResponse);
+    
+    // 服务器端流式RPC - 多轮对话（预留接口）
+    rpc QueryStream(QueryRequest) returns (stream QueryResponse);
+    
+    // 双向流式RPC - 多轮对话（预留接口）
+    rpc QueryBidiStream(stream QueryRequest) returns (stream QueryResponse);
+}
