@@ -36,13 +36,14 @@ class StreamInput:
         """
         if config is None:
             config = Config()
-        self.config = config
 
         # 从Config对象获取配置
-        self.video_source = self.config.stream_video_source
-        self.video_file_path = self.config.stream_video_file_path
+        self.video_source = config.stream_video_source
+        self.video_file_path = config.stream_video_file_path
         # 获取视频读取器类型
-        self.reader_type = self.config.stream_reader_type
+        self.reader_type = config.stream_reader_type
+        self.log_file = config.stream_log_file
+        self.stream_original_fps = config.stream_original_fps
         
         # 使用multiprocessing.Queue以支持多进程间通信
         self.frame_queue = mp.Queue(maxsize=100)
@@ -55,7 +56,7 @@ class StreamInput:
         
     def _set_logger(self):
         """设置日志记录器"""
-        log_file = self.config.stream_log_file
+        log_file = self.log_file
 
         pattern = log_file.replace(".log", "*")
         log_files = glob.glob(pattern)
@@ -236,7 +237,7 @@ class StreamInput:
                     pass
                 
                 # 帧率控制 - 确保不超过视频原始FPS
-                if self.config.stream_original_fps:
+                if self.stream_original_fps:
                     frame_elapsed = time.time() - frame_start
                     if frame_elapsed < frame_interval:
                         sleep_time = frame_interval - frame_elapsed

@@ -31,9 +31,8 @@ class QueryVectorData:
 
 class TextBGEVectorizer:
     """BGE模型向量化器"""
-    def __init__(self, config: Config):
-        self.device = config.query_device
-        model_path = config.query_model_path
+    def __init__(self, device: str, model_path: str):
+        self.device = device
         
         self.model = CLIPModel.from_pretrained(model_path).to(self.device)
         self.model.set_processor(model_path)
@@ -67,13 +66,15 @@ class QueryVectorizer:
         """
         if config is None:
             config = Config()
-        self.config = config
         
         # 从Config对象获取配置
         self.model_type = config.query_model_type
+        self.log_file = config.query_log_file
+        self.query_device = config.query_device
+        self.query_model_path = config.query_model_path
         
         self.vectorizer = None
-        self.query_queue = None
+        self.query_queue = None  # 需要由api_server_e设置
         # 创建向量队列，使用multiprocessing.Queue以支持多进程间通信
         self.query_vector_queue = mp.Queue(maxsize=100)
         self.running = False
@@ -82,7 +83,7 @@ class QueryVectorizer:
     
     def _set_logger(self):
         """设置日志记录器"""
-        log_file = self.config.query_log_file
+        log_file = self.log_file
         pattern = log_file.replace(".log", "*")
         log_files = glob.glob(pattern)
         for f in log_files:
@@ -112,7 +113,7 @@ class QueryVectorizer:
     def _initialize_vectorizer(self):
         """初始化向量化器"""
         if self.model_type == "BGE":
-            self.vectorizer = TextBGEVectorizer(self.config)
+            self.vectorizer = TextBGEVectorizer(self.query_device, self.query_model_path)
         else:
             raise ValueError(f"不支持的模型类型: {self.model_type}")
     
@@ -201,7 +202,7 @@ class QueryVectorizer:
 
 if __name__ == "__main__":
     config = Config()
-    vectorizer = TextBGEVectorizer(config)
+    vectorizer = TextBGEVectorizer(config.query_device, config.query_model_path)
     query = "你好"
     vector = vectorizer.encode(query)
     print(vector.shape)

@@ -28,7 +28,7 @@ class QueryResult:
     query_id: int             # 查询ID
     dialog_id: int            # 对话ID
     scores: List[float]       # 匹配分数列表
-    frame_data_list: List[FrameVectorData]  # 匹配的帧数据列表
+    frame_data_list: List[any]  # 匹配的帧数据列表
     timestamp: float          # 时间戳
 
 class ThreadSafeFaiss:
@@ -165,7 +165,6 @@ class MemoryManager:
         """
         if config is None:
             config = Config()
-        self.config = config
         
         # 从Config对象获取配置
         self.database_type = config.memory_database_type # 向量 或 其他
@@ -183,10 +182,12 @@ class MemoryManager:
         self.databasemap = None  # 线程安全的databasemap
         self.retrieval_strategy = config.memory_retrieval_strategy
         self.max_size = config.memory_max_size
+        self.memory_topk = config.memory_topk  # topk参数
         
         # 队列相关
-        self.frame_vector_queue = None
-        self.query_vector_queue = None
+        self.memory_mode = config.memory_mode
+        self.frame_vector_queue = None  # 需要由frame_vectorizer设置
+        self.query_vector_queue = None  # 需要由query_vectorizer设置
         self.query_result_queue = mp.Queue(maxsize=100)  # 用于返回查询结果
         
         self.running = False
@@ -390,7 +391,7 @@ class MemoryManager:
             timestamp = query_data.timestamp
             
             # 执行查询
-            frame_data_list, scores = self._retrieve(query_vector, self.config.memory_topk)
+            frame_data_list, scores = self._retrieve(query_vector, self.memory_topk)
             
             # 创建查询结果
             result = QueryResult(
@@ -406,23 +407,43 @@ class MemoryManager:
             self.logger.info(f"查询 {query_id} 处理完成，返回 {len(frame_data_list)} 个结果")
     
     def _process_main(self):
-        """子进程，启动两个线程"""
+        """子进程，根据配置启动相应的线程"""
         self._set_logger()
         self.logger.info(f"MemoryManager启动, 进程ID: {os.getpid()}")
         
         # 初始化数据库
         self._initialize_database()
         
-        # 创建两个线程
-        frame_thread = threading.Thread(target=self._thread_frame_vectors, daemon=True)
-        frame_thread.name = "FrameVectorThread"
+        # 根据memory_mode决定启动哪些线程
+        memory_mode = self.memory_mode
         
-        query_thread = threading.Thread(target=self._thread_query_vectors, daemon=True)
-        query_thread.name = "QueryThread"
+        self.logger.info(f"MemoryManager模式: {memory_mode}")
         
-        # 启动线程
-        frame_thread.start()
-        query_thread.start()
+        threads = []
+        
+        # 启动帧向量处理线程（用于inject）
+        if memory_mode in ["only_inject", "both"]:
+            frame_thread = threading.Thread(target=self._thread_frame_vectors, daemon=True)
+            frame_thread.name = "FrameVectorThread"
+            threads.append(frame_thread)
+            self.logger.info("帧向量处理线程已创建")
+        
+        # 启动查询向量处理线程（用于query）
+        if memory_mode in ["only_query", "both"]:
+            query_thread = threading.Thread(target=self._thread_query_vectors, daemon=True)
+            query_thread.name = "QueryThread"
+            threads.append(query_thread)
+            self.logger.info("查询向量处理线程已创建")
+        
+        # 验证至少启动了一个线程
+        if len(threads) == 0:
+            self.logger.error("没有启动任何线程，请检查memory_mode配置")
+            return
+        
+        # 启动所有创建的线程
+        for thread in threads:
+            thread.start()
+            self.logger.info(f"线程 {thread.name} 已启动")
         
         # 保持子进程运行，等待线程完成
         while self.running_event.is_set():
@@ -475,28 +496,3 @@ class MemoryManager:
     def get_query_result_queue(self):
         """获取查询结果队列"""
         return self.query_result_queue
-    
-    # def get_vector_data(self, vector_id: int) -> Optional[FrameVectorData]:
-    #     """根据向量ID获取对应的FrameVectorData对象
-        
-    #     Args:
-    #         vector_id: 向量ID
-            
-    #     Returns:
-    #         FrameVectorData: 对应的向量数据对象，若ID无效则返回None
-    #     """
-    #     # 使用ThreadSafeMap的get方法获取记录
-    #     db_record = self.databasemap.get(vector_id)
-    #     if db_record is not None:
-    #         # 从databasemap记录创建FrameVectorData对象
-    #         vector_data = FrameVectorData(
-    #             vector=None,  # 向量数据不在databasemap中，只在faiss索引中
-    #             timestamp=db_record["timestamp"],
-    #             frame_id=db_record["frame_id"],
-    #             source_path=db_record["source_path"],
-    #             total_frames=db_record.get("total_frames"),
-    #             video_fps=db_record.get("video_fps")
-    #         )
-    #         return vector_data
-    #     return None
-

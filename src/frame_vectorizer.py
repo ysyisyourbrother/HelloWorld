@@ -47,9 +47,8 @@ class FrameVectorData:
 
 class ImageBGEVectorizer():
     """BGE模型向量化器"""
-    def __init__(self, config: Config):
-        self.device = config.frame_device
-        model_path = config.frame_model_path
+    def __init__(self, device: str, model_path: str):
+        self.device = device
         
         # 加载CLIPModel
         self.model = CLIPModel.from_pretrained(model_path).to(self.device)
@@ -75,15 +74,17 @@ class FrameVectorizer:
         """
         if config is None:
             config = Config()
-        self.config = config
         
         # 从Config对象获取配置
         self.model_type = config.frame_model_type
         self.extraction_strategy = config.frame_extraction_strategy
         self.frame_interval = config.frame_interval
+        self.log_file = config.frame_log_file
+        self.frame_device = config.frame_device
+        self.frame_model_path = config.frame_model_path
         
         self.vectorizer = None
-        self.frame_queue = None
+        self.frame_queue = None  # 需要由stream_input设置
         # 创建向量队列，使用multiprocessing.Queue以支持多进程间通信
         self.frame_vector_queue = mp.Queue(maxsize=100)
         self.running = False
@@ -92,7 +93,7 @@ class FrameVectorizer:
         
     def _set_logger(self):
         """设置日志记录器"""
-        log_file = self.config.frame_log_file
+        log_file = self.log_file
         pattern = log_file.replace(".log", "*")
         log_files = glob.glob(pattern)
         for f in log_files:
@@ -122,11 +123,11 @@ class FrameVectorizer:
     def _initialize_vectorizer(self):
         """初始化向量化器"""
         if self.model_type == "BGE":
-            self.vectorizer = ImageBGEVectorizer(self.config)
+            self.vectorizer = ImageBGEVectorizer(self.frame_device, self.frame_model_path)
         elif self.model_type == "ViT":
             # 为了兼容性保留ViT选项，但实际上使用BGE
             print("注意: 当前配置为ViT: 但将使用BGE模型")
-            self.vectorizer = ImageBGEVectorizer(self.config)
+            self.vectorizer = ImageBGEVectorizer(self.frame_device, self.frame_model_path)
         else:
             raise ValueError(f"不支持的模型类型: {self.model_type}")
     
