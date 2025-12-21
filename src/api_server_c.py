@@ -1,206 +1,221 @@
-import multiprocessing as mp
-import json
+import pickle
 import time
-from flask import Flask, request, jsonify, Response
-import threading
 import queue
-from config import Config
+import logging
+from logging.handlers import RotatingFileHandler
+import glob
+import os
+import grpc
+from concurrent import futures
+from typing import Optional
+import multiprocessing as mp
+
+# 本项目
+from src.config import Config
+from src.reasoner import QueryRequest, QueryResponse
+
+# 导入生成的 gRPC 代码
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from proto import query_service_pb2
+from proto import query_service_pb2_grpc
+
+
+class QueryServiceServicer(query_service_pb2_grpc.QueryServiceServicer):
+    """gRPC 查询服务实现"""
+    
+    def __init__(self, prompt_queue: mp.Queue, result_queue: mp.Queue, logger: logging.Logger):
+        self.prompt_queue = prompt_queue
+        self.result_queue = result_queue
+        self.logger = logger
+    
+    def Query(self, request: query_service_pb2.QueryRequest, context):
+        """
+        一元RPC - 处理单轮对话查询
+        
+        Args:
+            request: 查询请求
+            context: gRPC 上下文
+            
+        Returns:
+            查询响应
+        """
+        query_id = request.query_id
+        query_text = request.query_text
+        
+        self.logger.info(f"收到查询请求 {query_id}: {query_text}")
+        
+        # 反序列化帧数据
+        memory_results = []
+        if request.memory_results:
+            memory_results = pickle.loads(request.memory_results)
+            self.logger.debug(f"反序列化了 {len(memory_results)} 帧数据")
+        
+        # 创建 QueryRequest 并添加到查询队列
+        query_request = QueryRequest(
+            query_text=query_text,
+            memory_results=memory_results,
+            query_id=query_id
+        )
+        self.prompt_queue.put(query_request)
+        
+        # 等待结果
+        response = self.result_queue.get(timeout=300)  # 5分钟超时
+        
+        # 构建 gRPC 响应
+        grpc_response = query_service_pb2.QueryResponse(
+            query_id=response.query_id,
+            result=response.result if response.result else "",
+            error=response.error if response.error else "",
+            timestamp=response.timestamp
+        )
+        
+        self.logger.info(f"查询 {query_id} 处理完成")
+        return grpc_response
+    
+    def QueryStream(self, request: query_service_pb2.QueryRequest, context):
+        """
+        服务器端流式RPC - 多轮对话（预留接口）
+        
+        Args:
+            request: 查询请求
+            context: gRPC 上下文
+            
+        Yields:
+            查询响应流
+        """
+        # TODO: 实现服务器端流式RPC
+        self.logger.warning("QueryStream 方法尚未实现")
+        yield query_service_pb2.QueryResponse(
+            query_id=request.query_id,
+            result="",
+            error="QueryStream 方法尚未实现",
+            timestamp=time.time()
+        )
+    
+    def QueryBidiStream(self, request_iterator, context):
+        """
+        双向流式RPC - 多轮对话（预留接口）
+        
+        Args:
+            request_iterator: 请求迭代器
+            context: gRPC 上下文
+            
+        Yields:
+            查询响应流
+        """
+        # TODO: 实现双向流式RPC
+        self.logger.warning("QueryBidiStream 方法尚未实现")
+        for request in request_iterator:
+            yield query_service_pb2.QueryResponse(
+                query_id=request.query_id,
+                result="",
+                error="QueryBidiStream 方法尚未实现",
+                timestamp=time.time()
+            )
+
 
 class APIServerC:
-    def __init__(self, config=None):
+    """云端 gRPC API 服务器"""
+    
+    def __init__(self, config: Config = None):
         """
-        初始化APIServerC模块
-        云端API服务器，负责接收客户端查询并返回推理结果
+        初始化云端 API 服务器
         
         Args:
             config (Config): 配置对象实例
         """
         if config is None:
             config = Config()
+        self.log_file = config.api_c_log_file
+        self.server_host = config.server_host
+        self.server_port = config.server_port
         
-        self.config = config
-        
-        # 从Config对象获取配置
-        self.host = config.server_host
-        self.port = config.server_port
-        
-        self.reasoner = None
-        self.active_streams = {}  # 存储活跃的流式连接
-        
-        self.app = Flask(__name__)
-        self.setup_routes()
-        
+        self.prompt_queue: Optional[mp.Queue] = None # reasoner的输入
+        self.result_queue: Optional[mp.Queue] = None # reasoner的输出
+        self.server: Optional[grpc.Server] = None
         self.running = False
         
-    def set_reasoner(self, reasoner):
-        """设置推理器"""
-        self.reasoner = reasoner
+        self._set_logger()
     
-    def setup_routes(self):
-        """设置API路由"""
-        
-        @self.app.route('/process_query', methods=['POST'])
-        def process_query():
-            """处理查询请求"""
+    def _set_logger(self):
+        """设置日志记录器"""
+        log_file = self.log_file
+        pattern = log_file.replace(".log", "*")
+        log_files = glob.glob(pattern)
+        for f in log_files:
             try:
-                data = request.json
-                query_text = data.get('query', '')
-                memory_results = data.get('memory_results', [])
-                stream_mode = data.get('stream_mode', True)
-                
-                if not query_text:
-                    return jsonify({'error': '查询文本不能为空'}), 400
-                
-                # 生成查询ID
-                query_id = int(time.time() * 1000)
-                
-                # 将查询添加到Reasoner
-                if self.reasoner:
-                    self.reasoner.add_query(
-                        query_text, 
-                        memory_results, 
-                        query_id, 
-                        stream_mode
-                    )
-                else:
-                    return jsonify({'error': '推理器未设置'}), 500
-                
-                if stream_mode:
-                    # 流式响应
-                    return Response(
-                        self._stream_response(query_id),
-                        mimetype='text/plain',
-                        headers={
-                            'Cache-Control': 'no-cache',
-                            'Connection': 'keep-alive',
-                            'X-Query-ID': str(query_id)
-                        }
-                    )
-                else:
-                    # 批量响应
-                    result = self._wait_for_result(query_id)
-                    if result:
-                        return jsonify(result)
-                    else:
-                        return jsonify({'error': '推理失败'}), 500
-                        
+                os.remove(f)
             except Exception as e:
-                return jsonify({'error': str(e)}), 500
+                pass
+
+        self.logger = logging.getLogger(name='APIServerC')
+        self.logger.setLevel(logging.DEBUG)
         
-        @self.app.route('/status', methods=['GET'])
-        def get_status():
-            """获取系统状态"""
-            return jsonify({
-                'status': 'running',
-                'reasoner': self.reasoner is not None,
-                'active_streams': len(self.active_streams)
-            })
-        
-        @self.app.route('/stop_stream/<query_id>', methods=['POST'])
-        def stop_stream(query_id):
-            """停止流式响应"""
-            if query_id in self.active_streams:
-                del self.active_streams[query_id]
-                return jsonify({'status': 'stopped'})
-            else:
-                return jsonify({'error': '流不存在'}), 404
+        # 控制台处理器
+        console_handler = logging.StreamHandler()
+        console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(console_formatter)
+        console_handler.setLevel(logging.INFO)
+        self.logger.addHandler(console_handler)
+
+        # 文件处理器
+        file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        file_handler.setLevel(logging.DEBUG)
+        self.logger.addHandler(file_handler)
+        self.logger.propagate = False
     
-    def _stream_response(self, query_id):
-        """生成流式响应"""
-        self.active_streams[query_id] = True
+    def set_prompt_queue(self, prompt_queue: mp.Queue):
+        """
+        设置查询队列
         
-        try:
-            while query_id in self.active_streams:
-                if self.reasoner and not self.reasoner.result_queue.empty():
-                    try:
-                        result_data = self.reasoner.result_queue.get(timeout=0.1)
-                        if result_data['query_id'] == query_id:
-                            if 'chunk' in result_data:
-                                chunk_data = result_data['chunk']
-                                if chunk_data.get('finished', False):
-                                    # 流结束
-                                    del self.active_streams[query_id]
-                                    yield "data: [DONE]\n\n"
-                                    break
-                                else:
-                                    # 发送数据块
-                                    chunk = chunk_data.get('chunk', '')
-                                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-                            elif 'result' in result_data:
-                                # 批量结果
-                                yield f"data: {json.dumps(result_data['result'])}\n\n"
-                                del self.active_streams[query_id]
-                                break
-                            elif 'error' in result_data:
-                                # 错误信息
-                                yield f"data: {json.dumps({'error': result_data['error']})}\n\n"
-                                del self.active_streams[query_id]
-                                break
-                        else:
-                            # 不是我们要找的结果，放回队列
-                            self.reasoner.result_queue.put(result_data)
-                    except queue.Empty:
-                        pass
-                    except Exception as e:
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                        del self.active_streams[query_id]
-                        break
-                
-                time.sleep(0.01)  # 减少CPU占用
-                
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        finally:
-            if query_id in self.active_streams:
-                del self.active_streams[query_id]
+        Args:
+            prompt_queue: Reasoner 的查询队列
+        """
+        self.prompt_queue = prompt_queue
     
-    def _wait_for_result(self, query_id, timeout=30):
-        """等待批量结果"""
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if self.reasoner and not self.reasoner.result_queue.empty():
-                try:
-                    result_data = self.reasoner.result_queue.get(timeout=0.1)
-                    if result_data['query_id'] == query_id:
-                        return result_data
-                    # 如果不是我们要找的结果，放回队列
-                    self.reasoner.result_queue.put(result_data)
-                except queue.Empty:
-                    pass
-            time.sleep(0.1)
-        return None
+    def set_result_queue(self, result_queue: mp.Queue):
+        """
+        设置结果队列
+        
+        Args:
+            result_queue: Reasoner 的结果队列
+        """
+        self.result_queue = result_queue
     
     def start(self):
-        """启动API服务器"""
-        self.running = True
+        """启动 gRPC 服务器"""
+        if self.prompt_queue is None or self.result_queue is None:
+            raise ValueError("查询队列或结果队列未设置，请先调用 set_query_queue() 和 set_result_queue()")
         
-        # 在单独的线程中启动Flask应用
-        self.flask_thread = threading.Thread(
-            target=self.app.run,
-            kwargs={'host': self.host, 'port': self.port, 'threaded': True}
+        # 创建 gRPC 服务器
+        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+        
+        # 添加服务
+        query_service_pb2_grpc.add_QueryServiceServicer_to_server(
+            QueryServiceServicer(self.prompt_queue, self.result_queue, self.logger),
+            self.server
         )
-        self.flask_thread.daemon = True
-        self.flask_thread.start()
         
-        print(f"APIServerC已启动，地址: http://{self.host}:{self.port}")
+        # 监听端口
+        server_host = self.server_host
+        server_port = self.server_port
+        listen_addr = f"{server_host}:{server_port}"
+        self.server.add_insecure_port(listen_addr)
+        
+        # 启动服务器
+        self.server.start()
+        self.running = True
+        self.logger.info(f"gRPC 服务器已启动，监听地址: {listen_addr}")
+        
+        # 等待服务器关闭
+        self.server.wait_for_termination()
     
     def stop(self):
-        """停止API服务器"""
-        self.running = False
-        self.active_streams.clear()
-        print("APIServerC已停止")
-
-if __name__ == "__main__":
-    # 测试代码
-    api_server = APIServerC()
-    try:
-        api_server.start()
-        
-        # 保持运行
-        while True:
-            time.sleep(1)
-            
-    except KeyboardInterrupt:
-        pass
-    finally:
-        api_server.stop()
+        """停止 gRPC 服务器"""
+        if self.server is not None:
+            self.server.stop(grace=5)
+            self.running = False
+            self.logger.info("gRPC 服务器已停止")

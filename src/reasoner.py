@@ -61,9 +61,13 @@ class Reasoner:
         """
         if config is None:
             config = Config()
-        self.config = config
+        
+        # 测试模式配置
+        self.test_mode = config.reasoner_test_mode
+        self.test_response = config.reasoner_test_response
         
         # 从Config对象获取配置
+        self.log_file = config.reasoner_log_file
         self.model_path = config.reasoner_model_path
         self.model_name = config.reasoner_model_name
         self.model_base = config.reasoner_model_base
@@ -90,7 +94,7 @@ class Reasoner:
         self.max_length = None
         
         # 队列相关
-        self.query_queue = mp.Queue(maxsize=100)
+        self.prompt_queue = mp.Queue(maxsize=100)
         self.result_queue = mp.Queue(maxsize=100)
         
         self.running = False
@@ -98,7 +102,7 @@ class Reasoner:
         
     def _set_logger(self):
         """设置日志记录器"""
-        log_file = self.config.reasoner_log_file
+        log_file = self.log_file
         pattern = log_file.replace(".log", "*")
         log_files = glob.glob(pattern)
         for f in log_files:
@@ -285,6 +289,20 @@ class Reasoner:
             
             self.logger.info(f"开始处理查询 {query_id}: {query_text}")
             
+            # 测试模式：直接返回测试文本，不加载模型
+            if self.test_mode:
+                self.logger.info(f"测试模式：查询 {query_id} 直接返回测试文本")
+                response = QueryResponse(
+                    query_id=query_id,
+                    result=self.test_response,
+                    error=None,
+                    timestamp=time.time()
+                )
+                self.result_queue.put(response)
+                self.logger.info(f"测试模式：查询 {query_id} 处理完成")
+                return
+            
+            # 正常模式：使用模型进行推理
             # 预处理帧数据
             frames_tensor = None
             if memory_results and len(memory_results) > 0:
@@ -327,7 +345,7 @@ class Reasoner:
         while self.running_event.is_set():
             try:
                 # 从队列获取查询请求
-                query_request: QueryRequest = self.query_queue.get(timeout=1.0)
+                query_request: QueryRequest = self.prompt_queue.get(timeout=1.0)
                 self._process_query(query_request)
             except queue.Empty:
                 continue
@@ -341,8 +359,12 @@ class Reasoner:
         self._set_logger()
         self.logger.info(f"Reasoner进程启动, 进程ID: {mp.current_process().pid}")
         
-        # 初始化模型
-        self._initialize_model()
+        # 测试模式：不加载模型
+        if self.test_mode:
+            self.logger.info("测试模式：不加载模型，直接返回测试文本")
+        else:
+            # 正常模式：初始化模型
+            self._initialize_model()
         
         # 启动查询处理循环
         self._process_queries()
@@ -393,7 +415,7 @@ class Reasoner:
             memory_results=memory_results,
             query_id=query_id
         )
-        self.query_queue.put(query_request)
+        self.prompt_queue.put(query_request)
     
     def get_result_queue(self):
         """获取结果队列"""
