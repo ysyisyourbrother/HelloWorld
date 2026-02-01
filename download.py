@@ -66,10 +66,10 @@ def detect_repo_type(repo_id: str) -> str:
         info = huggingface_hub.get_repo_info(repo_id)
         if info.type == "model":
             logger.info("Auto-detected: model")
-            return "model"
+            return "models"
         elif info.type == "dataset":
             logger.info("Auto-detected: dataset")
-            return "dataset"
+            return "datasets"
         else:
             logger.warning(f"Unknown repo type returned: {info.type}")
     except Exception as e:
@@ -88,7 +88,10 @@ def detect_repo_type(repo_id: str) -> str:
 # --------------------------
 # Download function
 # --------------------------
-def download_repo(repo_id: str, token: str | None, base_dir: str = BASE_DIR):
+def download_repo(repo_id: str,
+                  token: str | None,
+                  repo_type: str | None = None,
+                  base_dir: str = BASE_DIR):
     # Login if token is provided
     if token:
         logger.info("Logging in using provided token...")
@@ -99,14 +102,25 @@ def download_repo(repo_id: str, token: str | None, base_dir: str = BASE_DIR):
     else:
         logger.info("No token provided. Proceeding without login.")
 
-    # Detect repo type and set output directory
-    repo_type = detect_repo_type(repo_id)
+    # Determine repo type ("models" or "datasets") and set output directory
+    if repo_type is None:
+        repo_type = detect_repo_type(repo_id)
+    elif repo_type not in ("models", "datasets"):
+        raise ValueError("repo_type must be either 'models' or 'datasets'")
+
     out_dir = os.path.join(base_dir, repo_type, repo_id.split("/")[-1])
     os.makedirs(out_dir, exist_ok=True)
 
+    # Convert directory-style type to API repo_type ("model"/"dataset")
+    api_repo_type = "model" if repo_type == "models" else "dataset"
+
     # Download the repository
-    logger.info(f"Downloading '{repo_id}' → {out_dir}")
-    huggingface_hub.snapshot_download(repo_id=repo_id, local_dir=out_dir)
+    logger.info(f"Downloading '{repo_id}' ({api_repo_type}) → {out_dir}")
+    huggingface_hub.snapshot_download(
+        repo_id=repo_id,
+        repo_type=api_repo_type,
+        local_dir=out_dir,
+    )
     logger.info(f"Download completed: {repo_id}")
 
 
@@ -114,6 +128,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HuggingFace Hub Downloader")
     parser.add_argument("--repo", required=True, help="Repo ID (model or dataset), e.g. google/gemma-2b")
     parser.add_argument("--token", required=False, help="Optional HuggingFace token")
+    parser.add_argument(
+        "--type",
+        choices=["models", "datasets"],
+        help="Optional repo type: 'models' or 'datasets'. If omitted, auto-detect or ask manually.",
+    )
     args = parser.parse_args()
 
-    download_repo(args.repo, args.token)
+    download_repo(args.repo, args.token, args.type)

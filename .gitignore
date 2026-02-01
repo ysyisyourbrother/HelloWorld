@@ -1,6 +1,9 @@
 # this repository
 *.bkp
 *.drawio
+*.out
+*.pid
+*.mdc
 .vscode/
 # Byte-compiled / optimized / DLL files
 __pycache__/
