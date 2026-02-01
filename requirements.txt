@@ -1,5 +1,7 @@
 opencv-python>=4.5.0
 numpy>=1.21.0,<2.0
+# 在windows系统上使用faiss-cpu, 在linux系统上使用faiss-gpu
+# faiss-cpu>=1.7.0
 faiss-gpu>=1.7.0
 flask>=2.0.0
 flask-cors>=3.0.0
