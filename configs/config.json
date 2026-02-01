@@ -36,7 +36,8 @@
   },
   "reasoner": {
     "log_file": "logs/reasoner.log",
-    "test_mode": true,
+    "max_history_turns": 10,
+    "test_mode": false,
     "test_response": "这是测试模式的响应文本",
     "model_path": "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2",
     "model_name": "llava_qwen",

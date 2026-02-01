@@ -42,8 +42,9 @@ class QueryServiceServicer(query_service_pb2_grpc.QueryServiceServicer):
         """
         query_id = request.query_id
         query_text = request.query_text
+        dialog_id = getattr(request, "dialog_id", 0)
         
-        self.logger.info(f"收到查询请求 {query_id}: {query_text}")
+        self.logger.info(f"收到查询请求 {query_id}: {query_text} (dialog_id={dialog_id})")
         
         # 反序列化帧数据
         memory_results = []
@@ -55,7 +56,8 @@ class QueryServiceServicer(query_service_pb2_grpc.QueryServiceServicer):
         query_request = QueryRequest(
             query_text=query_text,
             memory_results=memory_results,
-            query_id=query_id
+            query_id=query_id,
+            dialog_id=dialog_id
         )
         self.prompt_queue.put(query_request)
         

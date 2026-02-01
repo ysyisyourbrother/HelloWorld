@@ -91,6 +91,7 @@ class Config:
         self.reasoner_top_p = reasoner_config.get("top_p", 0.1)
         self.reasoner_num_beams = reasoner_config.get("num_beams", 1)
         self.reasoner_do_sample = reasoner_config.get("do_sample", False)
+        self.reasoner_max_history_turns = reasoner_config.get("max_history_turns", None)  # None 表示不限制轮数
         
         # API Server E配置
         api_e_config = self._config.get("api_server_e", {})

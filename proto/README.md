@@ -1,5 +1,10 @@
 # gRPC 服务说明
 
+## 版本兼容
+
+- 生成的 `query_service_pb2.py` 依赖 **protobuf >= 6.31.1**。若运行时报 `TypeError: Couldn't parse file content!`，请执行：`pip install -U 'protobuf>=6.31.1'`。
+- 修改 `.proto` 后需重新执行生成脚本，使 _pb2 与当前 proto 定义一致。
+
 ## 生成 gRPC Python 代码
 
 在使用 gRPC 服务之前，需要先从 proto 文件生成 Python 代码：

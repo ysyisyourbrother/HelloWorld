@@ -13,7 +13,7 @@ import multiprocessing as mp
 # 本项目
 from src.config import Config
 from src.query_vectorizer import QueryVectorizer, QueryData
-from src.memory_manager import MemoryManager, QueryResult
+from src.memory_manager import MemoryManager, MemoryResult
 
 # 导入生成的 gRPC 代码
 import sys
@@ -147,7 +147,7 @@ class APIServerE:
             self.logger.debug(f"查询 {query_id} 已放入向量化队列")
             
             # 等待 MemoryManager 返回查询结果（帧数据）
-            query_result: QueryResult = self.query_result_queue.get(timeout=300)  # 5分钟超时
+            query_result: MemoryResult = self.query_result_queue.get(timeout=300)  # 5分钟超时
             
             # 验证 query_id 是否匹配
             if query_result.query_id != query_id:
@@ -162,7 +162,8 @@ class APIServerE:
         grpc_request = query_service_pb2.QueryRequest(
             query_text=query_text,
             memory_results=memory_results_bytes,
-            query_id=query_id
+            query_id=query_id,
+            dialog_id=dialog_id
         )
         
         # 5. 发送请求到云端并获取响应

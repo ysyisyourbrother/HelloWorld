@@ -7,6 +7,7 @@ message QueryRequest {
     string query_text = 1;           // 查询文本
     bytes memory_results = 2;        // 记忆检索结果（序列化的帧数据）
     int32 query_id = 3;              // 查询ID
+    int32 dialog_id = 4;             // 对话ID（多轮对话时用于云端记忆）
 }
 
 // 查询响应消息

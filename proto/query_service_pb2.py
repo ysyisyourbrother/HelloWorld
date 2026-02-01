@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19proto/query_service.proto\x12\rquery_service\"L\n\x0cQueryRequest\x12\x12\n\nquery_text\x18\x01 \x01(\t\x12\x16\n\x0ememory_results\x18\x02 \x01(\x0c\x12\x10\n\x08query_id\x18\x03 \x01(\x05\"S\n\rQueryResponse\x12\x10\n\x08query_id\x18\x01 \x01(\x05\x12\x0e\n\x06result\x18\x02 \x01(\t\x12\r\n\x05\x65rror\x18\x03 \x01(\t\x12\x11\n\ttimestamp\x18\x04 \x01(\x01\x32\xf0\x01\n\x0cQueryService\x12\x42\n\x05Query\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse\x12J\n\x0bQueryStream\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse0\x01\x12P\n\x0fQueryBidiStream\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse(\x01\x30\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19proto/query_service.proto\x12\rquery_service\"_\n\x0cQueryRequest\x12\x12\n\nquery_text\x18\x01 \x01(\t\x12\x16\n\x0ememory_results\x18\x02 \x01(\x0c\x12\x10\n\x08query_id\x18\x03 \x01(\x05\x12\x11\n\tdialog_id\x18\x04 \x01(\x05\"S\n\rQueryResponse\x12\x10\n\x08query_id\x18\x01 \x01(\x05\x12\x0e\n\x06result\x18\x02 \x01(\t\x12\r\n\x05\x65rror\x18\x03 \x01(\t\x12\x11\n\ttimestamp\x18\x04 \x01(\x01\x32\xf0\x01\n\x0cQueryService\x12\x42\n\x05Query\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse\x12J\n\x0bQueryStream\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse0\x01\x12P\n\x0fQueryBidiStream\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse(\x01\x30\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,9 +32,9 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'proto.query_service_pb2', _
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_QUERYREQUEST']._serialized_start=44
-  _globals['_QUERYREQUEST']._serialized_end=120
-  _globals['_QUERYRESPONSE']._serialized_start=122
-  _globals['_QUERYRESPONSE']._serialized_end=205
-  _globals['_QUERYSERVICE']._serialized_start=208
-  _globals['_QUERYSERVICE']._serialized_end=448
+  _globals['_QUERYREQUEST']._serialized_end=139
+  _globals['_QUERYRESPONSE']._serialized_start=141
+  _globals['_QUERYRESPONSE']._serialized_end=224
+  _globals['_QUERYSERVICE']._serialized_start=227
+  _globals['_QUERYSERVICE']._serialized_end=467
 # @@protoc_insertion_point(module_scope)

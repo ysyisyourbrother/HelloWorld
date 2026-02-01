@@ -10,7 +10,7 @@ import glob
 import os
 import copy
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 # 本项目
 from src.config import Config
@@ -39,6 +39,7 @@ class QueryRequest:
     query_text: str              # 查询文本
     memory_results: List[Any]    # 记忆检索结果（帧数据列表）
     query_id: int                # 查询ID
+    dialog_id: int = 0          # 对话ID（多轮对话时用于云端记忆）
 
 
 @dataclass
@@ -86,6 +87,7 @@ class Reasoner:
         self.top_p = config.reasoner_top_p
         self.num_beams = config.reasoner_num_beams
         self.do_sample = config.reasoner_do_sample
+        self.max_history_turns = getattr(config, "reasoner_max_history_turns", None)
         
         # 模型相关
         self.model = None
@@ -96,6 +98,9 @@ class Reasoner:
         # 队列相关
         self.prompt_queue = mp.Queue(maxsize=100)
         self.result_queue = mp.Queue(maxsize=100)
+        
+        # 按 dialog_id 维护对话历史：(user_turn, assistant_turn) 列表
+        self.dialog_histories: Dict[int, List[Tuple[str, str]]] = {}
         
         self.running = False
         self.running_event = None
@@ -212,49 +217,46 @@ class Reasoner:
         
         return qs
     
-    def _inference(
-        self, 
-        query_text: str, 
-        frames: Optional[torch.Tensor] = None
+    def _inference_with_history(
+        self,
+        question: str,
+        frames: Optional[torch.Tensor] = None,
+        history: Optional[List[Tuple[str, str]]] = None,
     ) -> str:
         """
-        执行推理
+        带对话历史的推理。先按历史拼 conv，再拼当前轮，再生成。
         
         Args:
-            query_text: 查询文本
-            frames: 预处理后的帧张量
+            question: 当前轮用户提示（已含图像 token 等）
+            frames: 当前轮视频帧张量（仅当前轮带帧，历史轮仅文本）
+            history: 历史轮列表 [(user_msg, assistant_msg), ...]
             
         Returns:
             生成的文本
         """
-        # 构建提示词
-        question = self._build_prompt(query_text, has_frames=(frames is not None))
-        
-        self.logger.debug(f"查询提示: {question}")
-        
-        # 构建对话
+        if history is None:
+            history = []
         conv = copy.deepcopy(conv_qwen)
+        for user_msg, assistant_msg in history:
+            conv.append_message(conv.roles[0], user_msg)
+            conv.append_message(conv.roles[1], assistant_msg)
         conv.append_message(conv.roles[0], question)
         conv.append_message(conv.roles[1], None)
         prompt_question = conv.get_prompt()
         
-        # Tokenize
+        self.logger.debug(f"对话提示长度: {len(prompt_question)} 字符, 历史轮数: {len(history)}")
+        
         input_ids = tokenizer_image_token(
-            prompt_question, 
-            self.tokenizer, 
+            prompt_question,
+            self.tokenizer,
             IMAGE_TOKEN_INDEX,
             return_tensors="pt"
         ).unsqueeze(0).to(self.device)
-        
-        # 创建attention mask
         attention_masks = input_ids.ne(self.tokenizer.pad_token_id).long().to(self.device)
-        
-        # 停止条件
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
         keywords = [stop_str]
         stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
         
-        # 生成
         with torch.inference_mode():
             output_ids = self.model.generate(
                 inputs=input_ids,
@@ -269,11 +271,27 @@ class Reasoner:
                 use_cache=True,
                 stopping_criteria=[stopping_criteria]
             )
-        
-        # 解码
         text_outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-        
         return text_outputs
+    
+    def _inference(
+        self, 
+        query_text: str, 
+        frames: Optional[torch.Tensor] = None
+    ) -> str:
+        """
+        执行推理（无历史，单轮）
+        
+        Args:
+            query_text: 查询文本
+            frames: 预处理后的帧张量
+            
+        Returns:
+            生成的文本
+        """
+        question = self._build_prompt(query_text, has_frames=(frames is not None))
+        self.logger.debug(f"查询提示: {question}")
+        return self._inference_with_history(question, frames, history=[])
     
     def _process_query(self, query_request: QueryRequest):
         """
@@ -286,8 +304,9 @@ class Reasoner:
             query_id = query_request.query_id
             query_text = query_request.query_text
             memory_results = query_request.memory_results
+            dialog_id = getattr(query_request, "dialog_id", 0)
             
-            self.logger.info(f"开始处理查询 {query_id}: {query_text}")
+            self.logger.info(f"开始处理查询 {query_id}: {query_text} (dialog_id={dialog_id})")
             
             # 测试模式：直接返回测试文本，不加载模型
             if self.test_mode:
@@ -310,13 +329,26 @@ class Reasoner:
                 frames_tensor = self._preprocess_frames(memory_results)
                 self.logger.debug(f"预处理了 {len(memory_results)} 帧，张量形状: {frames_tensor.shape}")
             
-            # 执行推理
+            # 当前轮用户提示
+            question = self._build_prompt(query_text, has_frames=(frames_tensor is not None))
+            # 按 dialog_id 取历史（后续可在此处按 max_history_turns 截断）
+            history = self.dialog_histories.get(dialog_id, [])
+            if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
+                history = history[-self.max_history_turns:]
+            
+            # 执行推理（带历史）
             start_time = time.time()
-            result_text = self._inference(query_text, frames_tensor)
+            result_text = self._inference_with_history(question, frames_tensor, history=history)
             inference_time = time.time() - start_time
             
-            self.logger.info(f"查询 {query_id} 推理完成，耗时: {inference_time:.2f}s")
+            self.logger.debug(f"查询 {query_id} 推理完成，耗时: {inference_time:.2f}s")
             self.logger.info(f"回答: {result_text}")
+            
+            # 写回历史：dialog_id != 0 时追加本轮 (question, result_text)
+            if dialog_id != 0:
+                self.dialog_histories.setdefault(dialog_id, []).append((question, result_text))
+                if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
+                    self.dialog_histories[dialog_id] = self.dialog_histories[dialog_id][-self.max_history_turns:]
             
             # 构建响应
             response = QueryResponse(

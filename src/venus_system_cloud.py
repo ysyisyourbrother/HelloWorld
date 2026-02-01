@@ -55,7 +55,7 @@ class VenusSystemCloud:
     
     def _signal_handler(self, signum, frame):
         """处理退出信号"""
-        self.logger.info(f"收到信号 {signum}，正在关闭系统...")
+        self.logger.debug(f"收到信号 {signum}，正在关闭系统...")
         self.stop()
         sys.exit(0)
     
@@ -64,7 +64,7 @@ class VenusSystemCloud:
         self.logger.info("正在初始化云端系统组件...")
         
         # 启动 Reasoner
-        self.logger.info("启用推理模块 (Reasoner)")
+        self.logger.debug("初始化 Reasoner")
         self.reasoner = Reasoner(self.config)
         # 从 Reasoner 获取队列
         prompt_queue = self.reasoner.prompt_queue
@@ -90,9 +90,9 @@ class VenusSystemCloud:
         
         # 启动 Reasoner（如果启用）
         if self.reasoner is not None:
-            self.logger.info("启动推理模块...")
+            self.logger.debug("启动推理模块...")
             self.reasoner.start()
-            self.logger.info("推理模块已启动")
+            self.logger.debug("推理模块已启动")
         
         # 启动 API 服务器（阻塞调用）
         self.logger.info(f"启动 gRPC API 服务器 (监听 {self.config.server_host}:{self.config.server_port})...")
@@ -101,7 +101,7 @@ class VenusSystemCloud:
         try:
             self.api_server.start()
         except KeyboardInterrupt:
-            self.logger.info("收到中断信号")
+            self.logger.debug("收到中断信号")
         except Exception as e:
             self.logger.error(f"API 服务器运行出错: {e}", exc_info=True)
         finally:
@@ -119,7 +119,7 @@ class VenusSystemCloud:
         if self.api_server is not None:
             try:
                 self.api_server.stop()
-                self.logger.info("API 服务器已停止")
+                self.logger.debug("API 服务器已停止")
             except Exception as e:
                 self.logger.error(f"停止 API 服务器时出错: {e}")
         
@@ -127,7 +127,7 @@ class VenusSystemCloud:
         if self.reasoner is not None:
             try:
                 self.reasoner.stop()
-                self.logger.info("推理模块已停止")
+                self.logger.debug("推理模块已停止")
             except Exception as e:
                 self.logger.error(f"停止推理模块时出错: {e}")
         

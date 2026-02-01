@@ -23,7 +23,7 @@ import cv2
 import decord
 
 @dataclass
-class QueryResult:
+class MemoryResult:
     """查询结果结构体, 包含查询ID、对话ID和匹配的向量ID列表"""
     query_id: int             # 查询ID
     dialog_id: int            # 对话ID
@@ -394,7 +394,7 @@ class MemoryManager:
             frame_data_list, scores = self._retrieve(query_vector, self.memory_topk)
             
             # 创建查询结果
-            result = QueryResult(
+            result = MemoryResult(
                 query_id=query_id,
                 dialog_id=dialog_id,
                 scores=scores,
