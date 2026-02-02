@@ -109,6 +109,10 @@ class Config:
         
         # Cloud Server配置
         cloud_config = self._config.get("cloud_server", {})
+
+        # Edge 配置
+        edge_config = self._config.get("edge", {})
+        self.edge_mode = edge_config.get("mode", "query_while_inject") # "query_while_inject", "query_with_memory", "only_inject", "benchmark"
     
     def reload(self):
         """重新加载配置"""

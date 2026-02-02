@@ -25,11 +25,11 @@ import decord
 @dataclass
 class MemoryResult:
     """查询结果结构体, 包含查询ID、对话ID和匹配的向量ID列表"""
+    frame_data_list: List[any]  # 匹配的帧数据列表
+    timestamp: float          # 时间戳
     query_id: int             # 查询ID
     dialog_id: int            # 对话ID
     scores: List[float]       # 匹配分数列表
-    frame_data_list: List[any]  # 匹配的帧数据列表
-    timestamp: float          # 时间戳
 
 class ThreadSafeFaiss:
     """线程安全的Faiss索引类"""

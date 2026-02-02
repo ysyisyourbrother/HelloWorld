@@ -71,5 +71,6 @@
   "cloud_server": {
   },
   "edge": {
+    "mode": "query_while_inject"
   }
 }
