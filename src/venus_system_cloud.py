@@ -92,7 +92,6 @@ class VenusSystemCloud:
         if self.reasoner is not None:
             self.logger.debug("启动推理模块...")
             self.reasoner.start()
-            self.logger.debug("推理模块已启动")
         
         # 启动 API 服务器（阻塞调用）
         self.logger.info(f"启动 gRPC API 服务器 (监听 {self.config.server_host}:{self.config.server_port})...")

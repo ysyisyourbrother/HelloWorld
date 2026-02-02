@@ -10,6 +10,8 @@ from typing import Optional
 import threading
 import multiprocessing as mp
 
+import cv2
+
 # 本项目
 from src.config import Config
 from src.query_vectorizer import QueryVectorizer, QueryData
@@ -120,69 +122,107 @@ class APIServerE:
         Returns:
             包含查询结果的字典
         """
-        
+        if self.test_mode:
+            self.logger.debug("测试模式：委托 query_test 处理")
+            return self.query_test(query_text=query_text, dialog_id=dialog_id)
+
         if self.grpc_stub is None:
             self._connect_to_cloud()
-        
+
         query_id = self._get_next_query_id()
         timestamp = time.time()
-        
+
         self.logger.info(f"处理查询 {query_id}: {query_text}")
-        
-        # 1. 将查询文本向量化并放入查询队列
+
         query_data = QueryData(
             query=query_text,
             query_id=query_id,
             dialog_id=dialog_id,
             timestamp=timestamp
         )
+        self.query_queue.put(query_data)
+        self.logger.debug(f"查询 {query_id} 已放入向量化队列")
+
+        query_result: MemoryResult = self.query_result_queue.get(timeout=300)
+        if query_result.query_id != query_id:
+            self.logger.warning(f"查询ID不匹配: 期望 {query_id}, 收到 {query_result.query_id}")
+
+        frame_data_list = query_result.frame_data_list
+        memory_results_bytes = pickle.dumps(frame_data_list) if frame_data_list else b""
+        self.logger.debug(f"序列化了 {len(frame_data_list) if frame_data_list else 0} 帧数据")
+
+        return self._send_grpc_and_return(
+            query_text=query_text,
+            memory_results_bytes=memory_results_bytes,
+            query_id=query_id,
+            dialog_id=dialog_id
+        )
+
+    def query_test(self, query_text: str, image_path: Optional[str] = None, dialog_id: int = 0) -> dict:
+        """
+        测试模式查询：跳过 MemoryManager，直接发送 gRPC 请求。
+        可传入图片地址，将该图片放入 memory_results 供云端推理使用。
         
-        
-        # 根据测试模式决定是否等待查询结果
-        if self.test_mode:
-            # 测试模式：不需要查询结果，直接使用空的 memory_results_bytes
-            self.logger.debug(f"测试模式：跳过查询结果等待，直接封装 gRPC 请求")
-            memory_results_bytes = b""
+        Args:
+            query_text: 用户查询文本
+            image_path: 可选，图片文件路径，读取后放入 memory_results
+            dialog_id: 对话ID（用于多轮对话，单轮对话时默认为0）
+            
+        Returns:
+            包含查询结果的字典
+        """
+        if self.grpc_stub is None:
+            self._connect_to_cloud()
+
+        query_id = self._get_next_query_id()
+        self.logger.info(f"测试查询 {query_id}: {query_text}")
+
+        if image_path:
+            frame = cv2.imread(image_path, cv2.IMREAD_COLOR)
+            if frame is None:
+                self.logger.warning(f"无法读取图片: {image_path}，使用空的 memory_results")
+                memory_results_bytes = b""
+            else:
+                if frame.ndim == 2:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                else:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame_list = [frame]
+                memory_results_bytes = pickle.dumps(frame_list)
+                self.logger.debug(f"已将图片 {image_path} 放入 memory_results")
         else:
-            # 正常模式：将查询数据放入队列并等待结果
-            # 将查询数据放入队列
-            self.query_queue.put(query_data)
-            self.logger.debug(f"查询 {query_id} 已放入向量化队列")
-            
-            # 等待 MemoryManager 返回查询结果（帧数据）
-            query_result: MemoryResult = self.query_result_queue.get(timeout=300)  # 5分钟超时
-            
-            # 验证 query_id 是否匹配
-            if query_result.query_id != query_id:
-                self.logger.warning(f"查询ID不匹配: 期望 {query_id}, 收到 {query_result.query_id}")
-            
-            # 序列化帧数据
-            frame_data_list = query_result.frame_data_list
-            memory_results_bytes = pickle.dumps(frame_data_list) if frame_data_list else b""
-            self.logger.debug(f"序列化了 {len(frame_data_list) if frame_data_list else 0} 帧数据")
-        
-        # 构建 gRPC 请求
+            memory_results_bytes = b""
+            self.logger.debug("无图片路径，使用空的 memory_results")
+
+        return self._send_grpc_and_return(
+            query_text=query_text,
+            memory_results_bytes=memory_results_bytes,
+            query_id=query_id,
+            dialog_id=dialog_id
+        )
+
+    def _send_grpc_and_return(
+        self,
+        query_text: str,
+        memory_results_bytes: bytes,
+        query_id: int,
+        dialog_id: int
+    ) -> dict:
+        """构建 gRPC 请求、发送并返回结果"""
         grpc_request = query_service_pb2.QueryRequest(
             query_text=query_text,
             memory_results=memory_results_bytes,
             query_id=query_id,
             dialog_id=dialog_id
         )
-        
-        # 5. 发送请求到云端并获取响应
         self.logger.info(f"发送查询 {query_id} 到云端")
         grpc_response = self.grpc_stub.Query(grpc_request, timeout=300)
-        
-        # 6. 返回结果
-        result = {
+        return {
             "query_id": grpc_response.query_id,
             "result": grpc_response.result,
             "error": grpc_response.error if grpc_response.error else None,
             "timestamp": grpc_response.timestamp
         }
-        
-        self.logger.info(f"查询 {query_id} 完成")
-        return result
     
     def query_stream(self, query_text: str, dialog_id: int = 0):
         """

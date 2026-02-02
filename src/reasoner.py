@@ -217,6 +217,19 @@ class Reasoner:
         
         return qs
     
+    @staticmethod
+    def _strip_image_placeholders_for_history(user_msg: str) -> str:
+        """
+        从要写入历史的 user 消息中移除图像占位符，避免下一轮无图时
+        prompt 中仍含 <image> 导致 input_ids 与 images 数量不一致触发 CUDA assert。
+        """
+        if not user_msg:
+            return user_msg
+        s = user_msg
+        for token in (DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, DEFAULT_IMAGE_TOKEN):
+            s = s.replace(token, "")
+        return s.strip()
+    
     def _inference_with_history(
         self,
         question: str,
@@ -245,7 +258,7 @@ class Reasoner:
         prompt_question = conv.get_prompt()
         
         self.logger.debug(f"对话提示长度: {len(prompt_question)} 字符, 历史轮数: {len(history)}")
-        
+
         input_ids = tokenizer_image_token(
             prompt_question,
             self.tokenizer,
@@ -273,25 +286,6 @@ class Reasoner:
             )
         text_outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
         return text_outputs
-    
-    def _inference(
-        self, 
-        query_text: str, 
-        frames: Optional[torch.Tensor] = None
-    ) -> str:
-        """
-        执行推理（无历史，单轮）
-        
-        Args:
-            query_text: 查询文本
-            frames: 预处理后的帧张量
-            
-        Returns:
-            生成的文本
-        """
-        question = self._build_prompt(query_text, has_frames=(frames is not None))
-        self.logger.debug(f"查询提示: {question}")
-        return self._inference_with_history(question, frames, history=[])
     
     def _process_query(self, query_request: QueryRequest):
         """
@@ -328,11 +322,11 @@ class Reasoner:
                 # 假设memory_results是numpy数组列表（RGB格式）
                 frames_tensor = self._preprocess_frames(memory_results)
                 self.logger.debug(f"预处理了 {len(memory_results)} 帧，张量形状: {frames_tensor.shape}")
-            
+
             # 当前轮用户提示
             question = self._build_prompt(query_text, has_frames=(frames_tensor is not None))
             # 按 dialog_id 取历史（后续可在此处按 max_history_turns 截断）
-            history = self.dialog_histories.get(dialog_id, [])
+            history = self.dialog_histories.get(dialog_id, []) # TODO: 如果是新的对话，把其他对话都删了以释放内存，这在处理benchmark时尤为重要
             if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
                 history = history[-self.max_history_turns:]
             
@@ -344,9 +338,10 @@ class Reasoner:
             self.logger.debug(f"查询 {query_id} 推理完成，耗时: {inference_time:.2f}s")
             self.logger.info(f"回答: {result_text}")
             
-            # 写回历史：dialog_id != 0 时追加本轮 (question, result_text)
+            # 写回历史：dialog_id != 0 时追加本轮；存历史时去掉 <image> 等占位符，避免下一轮无图时 prompt 仍含 image token 导致 CUDA assert
             if dialog_id != 0:
-                self.dialog_histories.setdefault(dialog_id, []).append((question, result_text))
+                history_user_msg = self._strip_image_placeholders_for_history(question)
+                self.dialog_histories.setdefault(dialog_id, []).append((history_user_msg, result_text))
                 if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
                     self.dialog_histories[dialog_id] = self.dialog_histories[dialog_id][-self.max_history_turns:]
             
