@@ -62,7 +62,6 @@ class ThreadSafeFaiss:
         with self.acquire():
             return self._index.search(query_vector, top_k)
 
-
 class ThreadSafeMap:
     """线程安全的id-frame映射类, 用于管理databasemap"""
     def __init__(self, map_data: list = None):
@@ -152,7 +151,6 @@ class ThreadSafeMap:
         with self.acquire():
             self._map.append(item)
 
-
 class MemoryManager:
     """内存管理器"""
     def __init__(self, config: Config = None):
@@ -191,6 +189,7 @@ class MemoryManager:
         self.query_result_queue = mp.Queue(maxsize=100)  # 用于返回查询结果
         
         self.running = False
+        self.current_video_name = None
         self.vector_count = 0
         
     def _set_logger(self):
@@ -243,7 +242,7 @@ class MemoryManager:
             else:
                 self.logger.warning(f"databasemap文件 {self.databasemap_file_path} 不存在或加载失败")
         else:
-            self.logger.info(f"本地文件 {self.faiss_file_path} 不存在，将创建新的向量数据库")
+            self.logger.info(f"本地文件 {self.faiss_file_path} 不存在，将根据*视频文件名*创建新的向量数据库")
             if self.faiss_index_type == "FlatL2":
                 local_faiss = faiss.IndexFlatL2(self.dimension)
             elif self.faiss_index_type == "FlatIP":
@@ -257,16 +256,34 @@ class MemoryManager:
     def _save_database(self):
         """保存向量数据库到本地"""
         if self.index is not None and self.vector_count > 0:
+            # 按当前视频名生成保存路径
+            if self.current_video_name:
+                base_dir = os.path.dirname(self.faiss_file_path)
+                save_faiss_path = os.path.join(base_dir, f"{self.current_video_name}.faiss")
+                save_map_path = os.path.join(base_dir, f"{self.current_video_name}.json")
+            else:
+                save_faiss_path = self.faiss_file_path
+                save_map_path = self.databasemap_file_path
+
             # 保存faiss索引
-            self.index.save_local(self.faiss_file_path)
+            self.index.save_local(save_faiss_path)
             # 保存databasemap
-            self.databasemap.save_local(self.databasemap_file_path)
-            
-            self.logger.info(f"向量数据库已保存到 {self.faiss_file_path}，包含 {self.vector_count} 个向量")
-            self.logger.info(f"databasemap已保存到 {self.databasemap_file_path}，包含 {len(self.databasemap)} 条记录")
+            self.databasemap.save_local(save_map_path)
+
+            self.logger.info(f"向量数据库已保存到 {save_faiss_path}，包含 {self.vector_count} 个向量")
+            self.logger.info(f"databasemap已保存到 {save_map_path}，包含 {len(self.databasemap)} 条记录")
     
     def _add_vector(self, vector_data: FrameVectorData):
         """添加单个向量到数据库"""
+        current_video_name = os.path.splitext(os.path.basename(vector_data.source_path))[0]
+        if not self.current_video_name:
+            self.current_video_name = current_video_name
+        elif self.current_video_name != current_video_name:
+            raise RuntimeError(
+                f"当前处理视频为 {self.current_video_name}，收到来自 {current_video_name} 的帧；"
+                "跨视频文件转换的逻辑尚未开发。"
+            )
+
         vector = vector_data.vector
         # 确保向量是二维数组 [1, dim]
         if len(vector.shape) == 1:
@@ -337,25 +354,42 @@ class MemoryManager:
         self.logger.info(f"查询完成，返回 {len(vector_ids)} 个结果")
         return vector_ids, scores
     
-    def _read_frame_from_video(self, vector_ids: List[int]) -> Optional[np.ndarray]:
-        """根据vector_ids读取实际帧数据
-        """
+    def _read_frame_from_video(self, vector_ids: List[int]) -> Optional[List[np.ndarray]]:
+        """根据vector_ids读取实际帧数据，并保存到 database/ 目录"""
         frames = []
+        save_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "database")
+        os.makedirs(save_dir, exist_ok=True)
+
         for vector_id in vector_ids:
             db_record = self.databasemap[vector_id]
+            source_path = db_record["source_path"]
+            frame_id = db_record["frame_id"]
 
-            cap = cv2.VideoCapture(db_record["source_path"])
+            cap = cv2.VideoCapture(source_path)
             if not cap.isOpened():
-                self.logger.error(f"无法打开视频文件: {db_record['source_path']}")
+                self.logger.error(f"无法打开视频文件: {source_path}")
                 return None
 
-            cap.set(cv2.CAP_PROP_POS_FRAMES, db_record["frame_id"])
+            fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
+            sec = round(frame_id / fps, 2)
+            self.logger.info(
+                f"读取帧: 视频={source_path}, 帧数={frame_id}, 时间={sec}秒"
+            )
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
             ret, frame = cap.read()
+            cap.release()
             if not ret:
-                self.logger.error(f"无法读取视频帧 {db_record['frame_id']}")
+                self.logger.error(f"无法读取视频帧 {frame_id}")
                 continue
-            
+
             frames.append(frame)
+
+            # 保存到 database/，命名为 "视频名_帧数.png"
+            video_name = os.path.splitext(os.path.basename(source_path))[0]
+            save_path = os.path.join(save_dir, f"{video_name}_{frame_id}.png")
+            cv2.imwrite(save_path, frame)
+            self.logger.debug(f"已保存帧: {save_path}")
 
         return frames
     
@@ -479,10 +513,17 @@ class MemoryManager:
         if self.index is not None:
             self._save_database()
         
-        # 等待子进程结束
-        if hasattr(self, 'process') and self.process.is_alive():
-            # 只有在logger已初始化的情况下才记录日志
-            self.process.join(timeout=5)
+        # 等待子进程结束（仅当当前进程是子进程的父进程时才可安全 join）
+        if not hasattr(self, 'process'):
+            return
+        try:
+            parent_pid = getattr(self.process, '_parent_pid', None)
+            if parent_pid is None or parent_pid != os.getpid():
+                return
+            if self.process.is_alive():
+                self.process.join(timeout=5)
+        except (AssertionError, ValueError) as e:
+            logging.getLogger(__name__).debug("停止子进程时跳过 join: %s", e)
         
     
     def set_frame_vector_queue(self, frame_vector_queue: mp.Queue):

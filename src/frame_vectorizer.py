@@ -228,10 +228,25 @@ class FrameVectorizer:
         self.running_event.set()
         self._process_main()
 
+    def _is_process_parent(self):
+        """当前进程是否为子进程的父进程（只有父进程才能安全调用 is_alive/join）"""
+        if not hasattr(self, 'process'):
+            return False
+        parent_pid = getattr(self.process, '_parent_pid', None)
+        return parent_pid is not None and parent_pid == os.getpid()
+
     def stop(self):
         """停止向量化进程"""
-        if hasattr(self, 'process') and self.process.is_alive():
-            self.process.join(timeout=5)
+        if not hasattr(self, 'process'):
+            return
+        try:
+            if not self._is_process_parent():
+                return
+            if self.process.is_alive():
+                self.process.join(timeout=5)
+        except (AssertionError, ValueError) as e:
+            # 非父进程调用 is_alive/join 会触发 "can only test/join a child process"
+            logging.getLogger(__name__).debug("停止子进程时跳过 join: %s", e)
     
     def set_frame_queue(self, frame_queue):
         """设置帧队列"""

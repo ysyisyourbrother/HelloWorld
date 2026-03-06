@@ -289,14 +289,28 @@ class StreamInput:
         except Exception as e:
             self.logger.error(f"丢包: {e}")
 
+    def _is_process_parent(self):
+        """当前进程是否为子进程的父进程（只有父进程才能安全调用 is_alive/join）"""
+        if not hasattr(self, 'process'):
+            return False
+        parent_pid = getattr(self.process, '_parent_pid', None)
+        return parent_pid is not None and parent_pid == os.getpid()
+
     def stop(self):
         """停止帧提取子进程"""
         # 使用running_event来停止子进程
         if hasattr(self, 'running_event'):
             self.running_event.clear()
-        # 等待子进程结束
-        if hasattr(self, 'process') and self.process.is_alive():
-            self.process.join(timeout=5)
+        # 等待子进程结束（仅当当前进程是父进程时才可安全 join）
+        if not hasattr(self, 'process'):
+            return
+        try:
+            if not self._is_process_parent():
+                return
+            if self.process.is_alive():
+                self.process.join(timeout=5)
+        except (AssertionError, ValueError) as e:
+            logging.getLogger(__name__).debug("停止子进程时跳过 join: %s", e)
         # 注意：在父进程中不释放视频资源，因为它们在子进程中已经被释放
         # 重置状态以便可能的重新启动
         self.cap = None
