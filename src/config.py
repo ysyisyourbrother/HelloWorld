@@ -35,12 +35,12 @@ class Config:
         self.stream_video_file_path = stream_config.get("video_file_path", "demo/assets/cooking.mp4")
         self.stream_reader_type = stream_config.get("reader_type", "cv2")  # 视频读取器类型: "cv2" 或 "decord"
         self.stream_original_fps = stream_config.get("original_fps", True)  # 是否按原帧率入队
-        
+        self.stream_target_fps = stream_config.get("target_fps", 8)  # 特定帧率
+
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})
         self.frame_log_file = frame_config.get("log_file", "logs/frame_vectorizer.log")
         self.frame_model_type = frame_config.get("model_type", "BGE")
-        self.frame_extraction_strategy = frame_config.get("extraction_strategy", "every_frame") # "every_frame", "interval"
         self.frame_interval = frame_config.get("frame_interval", 1)
         self.frame_use_vlm = frame_config.get("use_vlm", False)
         self.frame_device = frame_config.get("device", "cuda")
@@ -113,12 +113,25 @@ class Config:
         # Edge 配置
         edge_config = self._config.get("edge", {})
         self.edge_mode = edge_config.get("mode", "query_while_inject") # "query_while_inject", "query_with_memory", "only_inject", "benchmark"
-    
+
+        # Benchmark 配置
+        bench_config = self._config.get("benchmark", {})
+        self.benchmark_dataset = bench_config.get("dataset", "Video-MME")  # "egoschema" | "Video-MME"
+        self.benchmark_subset = bench_config.get("subset", "short")  # egoschema: "Subset"; Video-MME: "short"|"medium"|"long"
+        self.benchmark_dataset_path = bench_config.get("dataset_path", "local_datasets")
+        self.benchmark_batch_size = bench_config.get("batch_size", 16)
+        self.benchmark_result_dir = bench_config.get("result_dir", "benchmark_results")
+        self.benchmark_use_cloud = bench_config.get("use_cloud", True)
+        self.benchmark_video_dir_egoschema = bench_config.get("video_dir_egoschema", "local_datasets/egoschema/videos")
+        self.benchmark_video_dir_videomme = bench_config.get("video_dir_videomme", "local_datasets/Video-MME/data")
+        self.benchmark_db_dir_egoschema = bench_config.get("db_dir_egoschema", "database/egoschema")
+        self.benchmark_db_dir_videomme = bench_config.get("db_dir_videomme", "database/videomme")
+
     def reload(self):
         """重新加载配置"""
         self._load_config()
         self._set_attributes()
-    
+
     def get_config(self, section=None):
         """获取配置字典"""
         if section:

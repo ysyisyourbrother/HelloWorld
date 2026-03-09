@@ -93,6 +93,7 @@ class QueryVectorizer:
                 pass
 
         self.logger = logging.getLogger(name='QueryVectorizer')
+        self.logger.handlers.clear()
         # 设置logger本身的级别，确保所有级别日志都能被处理
         self.logger.setLevel(logging.DEBUG)
         # 配置日志输出到控制台
@@ -199,6 +200,12 @@ class QueryVectorizer:
     def get_vector_queue(self):
         """获取向量队列供后续处理使用"""
         return self.query_vector_queue
+
+    def encode_query_sync(self, query_text: str) -> np.ndarray:
+        """同步编码查询文本，供 benchmark 使用。需先调用 _initialize_vectorizer()。"""
+        if self.vectorizer is None:
+            self._initialize_vectorizer()
+        return self.vectorizer.encode(query_text)
 
 if __name__ == "__main__":
     config = Config()

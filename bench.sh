@@ -1,0 +1,1 @@
+nohup python launch_benchmark.py --config configs/config.json > bench.out 2>&1 & echo $! > bench.pid

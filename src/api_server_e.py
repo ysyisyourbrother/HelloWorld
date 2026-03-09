@@ -107,7 +107,13 @@ class APIServerE:
         elif cloud_server_url.startswith("https://"):
             cloud_server_url = cloud_server_url[8:]
         
-        self.grpc_channel = grpc.insecure_channel(cloud_server_url)
+        # 视频帧数据可能较大，提高 gRPC 消息大小限制（默认 4MB）
+        max_msg_size = 50 * 1024 * 1024  # 50MB
+        options = [
+            ('grpc.max_send_message_length', max_msg_size),
+            ('grpc.max_receive_message_length', max_msg_size),
+        ]
+        self.grpc_channel = grpc.insecure_channel(cloud_server_url, options=options)
         self.grpc_stub = query_service_pb2_grpc.QueryServiceStub(self.grpc_channel)
         self.logger.info(f"已连接到云端服务器: {cloud_server_url}")
     

@@ -9,7 +9,7 @@ import torch
 import logging
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Iterator
 from decord import VideoReader
 
 # 本项目
@@ -17,13 +17,14 @@ from src.config import Config
 
 @dataclass
 class FrameData:
-    """帧数据结构体, 包含帧numpy数组数据、时间戳、帧ID、视频来源、视频总帧数和视频FPS"""
+    """帧数据结构体, 包含帧numpy数组数据、时间戳、帧ID、视频来源、视频总帧数、视频FPS和视频时长"""
     frame: np.ndarray               # 帧numpy数组数据
     timestamp: float                # 时间戳, 用于系统测时
     frame_id: int                   # 帧ID
     source_path: str                # 视频来源: "camera"或视频文件路径
     total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
+    duration: Optional[float] = None     # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
 
 class StreamInput:
     def __init__(self, config=None):
@@ -43,8 +44,9 @@ class StreamInput:
         # 获取视频读取器类型
         self.reader_type = config.stream_reader_type
         self.log_file = config.stream_log_file
-        self.stream_original_fps = config.stream_original_fps
-        
+        self.is_original_fps = config.stream_original_fps
+        self.target_fps = config.stream_target_fps
+
         # 使用multiprocessing.Queue以支持多进程间通信
         self.frame_queue = mp.Queue(maxsize=100)
         self.cap = None  # cv2视频捕获对象
@@ -125,7 +127,7 @@ class StreamInput:
         self.logger.info(f"视频加载成功: 总帧数 {self.total_frames}, FPS: {self.video_fps}, 时长: {self.video_duration:.2f}s")
         return True
     
-    def _to_frame_data(self, frame, timestamp, frame_id=None, source_path="unknown", total_frames=None, video_fps=None):
+    def _to_frame_data(self, frame, timestamp, frame_id=None, source_path="unknown", total_frames=None, video_fps=None, duration=None):
         # 如果提供了帧索引，使用原始帧索引作为frame_id，否则使用时间戳生成
         if frame_id is None:
             frame_id = int(timestamp * 1000)
@@ -136,7 +138,8 @@ class StreamInput:
             frame_id=frame_id,
             source_path=source_path,
             total_frames=total_frames,
-            video_fps=video_fps
+            video_fps=video_fps,
+            duration=duration
         )
     
     def _extract_camera_frame(self, current_time):
@@ -176,14 +179,15 @@ class StreamInput:
         
         self.logger.debug(f"成功提取帧 {original_frame_idx}, 帧形状: {frame.shape}, 帧数据类型: {frame.dtype}")
         
-        # 传入原始帧索引作为frame_id、视频文件路径作为source_path，以及视频总帧数和FPS
+        # 传入原始帧索引作为frame_id、视频文件路径作为source_path，以及视频总帧数、FPS和时长
         frame_data = self._to_frame_data(
             frame, 
             current_time, 
             original_frame_idx, 
             source_path=self.video_file_path,
             total_frames=self.total_frames,
-            video_fps=self.video_fps
+            video_fps=self.video_fps,
+            duration=self.video_duration
         )
         
         # 每次只前进一帧
@@ -237,7 +241,7 @@ class StreamInput:
                     pass
                 
                 # 帧率控制 - 确保不超过视频原始FPS
-                if self.stream_original_fps:
+                if self.is_original_fps:
                     frame_elapsed = time.time() - frame_start
                     if frame_elapsed < frame_interval:
                         sleep_time = frame_interval - frame_elapsed
@@ -343,3 +347,42 @@ class StreamInput:
     def get_frame_queue(self):
         """获取帧队列供其他模块使用"""
         return self.frame_queue
+
+    def init_for_file(self, video_file_path: str):
+        """为 benchmark 同步模式初始化视频文件源（不启动子进程）"""
+        if not hasattr(self, "logger") or self.logger is None:
+            self._set_logger()
+        self.video_source = "file"
+        self.video_file_path = video_file_path
+        self._initialize_video_source()
+
+    def iter_frames_batch(self, batch_size: int, frame_interval: int = 1) -> Iterator[List[FrameData]]:
+        """
+        按 batch 同步迭代帧，供 benchmark 使用。
+        需先调用 init_for_file(video_path)。
+        按索引跳帧读取，frame_interval > 1 时直接跳到目标帧，不读取中间帧。
+
+        Args:
+            batch_size: 每批帧数量
+            frame_interval: 帧间隔，每 frame_interval 帧取一帧（1 表示不跳过）
+
+        Yields:
+            每批 FrameData 列表
+        """
+        batch = []
+        step = max(1, frame_interval)
+        current_time = time.time()
+        while self.current_frame_idx < self.total_frames:
+            frame_data = self._extract_video_frame(current_time)
+            if frame_data is None:
+                break
+            batch.append(frame_data)
+            if step > 1:
+                # _extract_video_frame 已 +1，再跳过 (step-1) 帧，下次读取目标索引
+                self.current_frame_idx += step - 1
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+            current_time = time.time()
+        if batch:
+            yield batch

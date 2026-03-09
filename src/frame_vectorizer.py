@@ -6,7 +6,7 @@ from logging.handlers import RotatingFileHandler
 import time
 import queue
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, List
 import glob
 import os
 # 本项目
@@ -16,13 +16,14 @@ from models.bge.modeling_MMRet_CLIP import CLIPModel
 
 @dataclass
 class FrameVectorData:
-    """向量数据结构体, 包含向量张量、时间戳、帧ID、视频来源、视频总帧数和视频FPS"""
+    """向量数据结构体, 包含向量张量、时间戳、帧ID、视频来源、视频总帧数、视频FPS和视频时长"""
     vector: np.ndarray        # 向量张量数据
     timestamp: float                # 时间戳
     frame_id: int                   # 帧ID
     source_path: str                # 视频来源: "camera"或视频文件路径
     total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
+    duration: Optional[float] = None     # 视频总时长(秒)，仅视频文件模式有值
     
     @classmethod
     def from_frame(cls, frame_data: FrameData, vector: np.ndarray = None):
@@ -43,6 +44,7 @@ class FrameVectorData:
             source_path=frame_data.source_path,
             total_frames=frame_data.total_frames,
             video_fps=frame_data.video_fps,
+            duration=frame_data.duration,
         )
 
 class ImageBGEVectorizer():
@@ -62,6 +64,15 @@ class ImageBGEVectorizer():
         with torch.no_grad():
             vector = self.model.encode_image(images=img)
         return vector
+
+    def encode_batch(self, frames: list):
+        """批量编码多帧图像，frames 为 numpy 数组列表 [H,W,C] RGB"""
+        if not frames:
+            return torch.empty(0)
+        img = self.processor(images=frames, return_tensors="pt")['pixel_values'].to(self.device)
+        with torch.no_grad():
+            vectors = self.model.encode_image(images=img)
+        return vectors
     
 class FrameVectorizer:
     def __init__(self, config: Config = None):
@@ -77,7 +88,6 @@ class FrameVectorizer:
         
         # 从Config对象获取配置
         self.model_type = config.frame_model_type
-        self.extraction_strategy = config.frame_extraction_strategy
         self.frame_interval = config.frame_interval
         self.log_file = config.frame_log_file
         self.frame_device = config.frame_device
@@ -103,6 +113,7 @@ class FrameVectorizer:
                 pass
 
         self.logger = logging.getLogger(name='FrameVectorizer')
+        self.logger.handlers.clear()
         # 设置logger本身的级别，确保所有级别日志都能被处理
         self.logger.setLevel(logging.DEBUG)
         # 配置日志输出到控制台
@@ -168,7 +179,8 @@ class FrameVectorizer:
                     frame_id=frame_id,
                     source_path=frame_data.source_path,
                     total_frames=frame_data.total_frames,
-                    video_fps=frame_data.video_fps
+                    video_fps=frame_data.video_fps,
+                    duration=frame_data.duration
                 )
                 
                 # 放入向量队列
@@ -195,21 +207,9 @@ class FrameVectorizer:
         assert self.frame_queue is not None
         self._vectorize_frames()
 
-    
     def _should_process_frame(self, frame_data: FrameData = None):
-        """根据策略决定是否处理当前帧"""
-        if self.extraction_strategy == "every_frame":
-            return True
-        elif self.extraction_strategy == "interval":
-            return self.all_frame_count % self.frame_interval == 0
-        else:
-            return True
-    
-    def _is_keyframe(self, frame_data: FrameData = None):
-        """判断是否为关键(该函数还没有使用)"""
-        # TODO: 实现关键帧检测逻辑
-        is_keyframe = self.all_frame_count % self.frame_interval == 0
-        return is_keyframe
+        """根据帧间隔决定是否处理当前帧"""
+        return self.all_frame_count % self.frame_interval == 0
     
     def start(self):
         """启动向量化进程"""
@@ -255,6 +255,39 @@ class FrameVectorizer:
     def get_vector_queue(self):
         """获取向量队列供MemoryManager使用"""
         return self.frame_vector_queue
+
+    def encode_frames_batch(self, frame_data_list: List[FrameData]) -> List[FrameVectorData]:
+        """
+        同步批量编码帧，供 benchmark 使用。需先调用 _initialize_vectorizer()。
+        
+        Args:
+            frame_data_list: FrameData 列表
+            
+        Returns:
+            FrameVectorData 列表
+        """
+        if not frame_data_list:
+            return []
+        if self.vectorizer is None:
+            self._initialize_vectorizer()
+        frames = [self._preprocess_single_frame(fd.frame) for fd in frame_data_list]
+        vector_tensors = self.vectorizer.encode_batch(frames)
+        vectors_np = vector_tensors.cpu().numpy()
+        result = []
+        for i, fd in enumerate(frame_data_list):
+            vec = vectors_np[i] if len(vectors_np.shape) > 1 else vectors_np
+            if len(vec.shape) == 1:
+                vec = vec.reshape(1, -1)
+            result.append(FrameVectorData(
+                vector=vec,
+                timestamp=fd.timestamp,
+                frame_id=fd.frame_id,
+                source_path=fd.source_path,
+                total_frames=fd.total_frames,
+                video_fps=fd.video_fps,
+                duration=fd.duration
+            ))
+        return result
 
 if __name__ == "__main__":
     # 测试代码

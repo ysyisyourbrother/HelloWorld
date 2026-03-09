@@ -117,6 +117,7 @@ class Reasoner:
                 pass
 
         self.logger = logging.getLogger(name='Reasoner')
+        self.logger.handlers.clear()
         self.logger.setLevel(logging.DEBUG)
         
         # 控制台处理器
@@ -423,6 +424,70 @@ class Reasoner:
         if hasattr(self, 'process') and self.process.is_alive():
             self.process.join(timeout=5)
     
+    def infer_sync(self, query_request: QueryRequest) -> QueryResponse:
+        """
+        同步推理，直接返回结果（用于 benchmark 等单进程场景，无需 gRPC/队列）。
+        需先调用 _initialize_model() 或通过 test_mode 跳过模型加载。
+        """
+        if not hasattr(self, "logger") or self.logger is None:
+            self._set_logger()
+        if not self.test_mode and self.model is None:
+            self._initialize_model()
+        try:
+            query_id = query_request.query_id
+            query_text = query_request.query_text
+            memory_results = query_request.memory_results
+            dialog_id = getattr(query_request, "dialog_id", 0)
+
+            self.logger.info(f"开始处理查询 {query_id}: {query_text} (dialog_id={dialog_id})")
+
+            if self.test_mode:
+                self.logger.info(f"测试模式：查询 {query_id} 直接返回测试文本")
+                return QueryResponse(
+                    query_id=query_id,
+                    result=self.test_response,
+                    error=None,
+                    timestamp=time.time()
+                )
+
+            frames_tensor = None
+            if memory_results and len(memory_results) > 0:
+                frames_tensor = self._preprocess_frames(memory_results)
+                self.logger.debug(f"预处理了 {len(memory_results)} 帧，张量形状: {frames_tensor.shape}")
+
+            question = self._build_prompt(query_text, has_frames=(frames_tensor is not None))
+            history = self.dialog_histories.get(dialog_id, [])
+            if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
+                history = history[-self.max_history_turns:]
+
+            start_time = time.time()
+            result_text = self._inference_with_history(question, frames_tensor, history=history)
+            inference_time = time.time() - start_time
+
+            self.logger.debug(f"查询 {query_id} 推理完成，耗时: {inference_time:.2f}s")
+            self.logger.info(f"回答: {result_text}")
+
+            if dialog_id != 0:
+                history_user_msg = self._strip_image_placeholders_for_history(question)
+                self.dialog_histories.setdefault(dialog_id, []).append((history_user_msg, result_text))
+                if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
+                    self.dialog_histories[dialog_id] = self.dialog_histories[dialog_id][-self.max_history_turns:]
+
+            return QueryResponse(
+                query_id=query_id,
+                result=result_text,
+                error=None,
+                timestamp=time.time()
+            )
+        except Exception as e:
+            self.logger.error(f"处理查询 {query_request.query_id} 时出错: {e}", exc_info=True)
+            return QueryResponse(
+                query_id=query_request.query_id,
+                result=None,
+                error=str(e),
+                timestamp=time.time()
+            )
+
     def add_query(
         self, 
         query_text: str, 

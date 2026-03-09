@@ -9,7 +9,7 @@ import glob
 import os
 import faiss
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Sequence
 from contextlib import contextmanager
 import multiprocessing as mp
 
@@ -63,9 +63,12 @@ class ThreadSafeFaiss:
             return self._index.search(query_vector, top_k)
 
 class ThreadSafeMap:
-    """线程安全的id-frame映射类, 用于管理databasemap"""
-    def __init__(self, map_data: list = None):
-        self._map = map_data if map_data is not None else []
+    """线程安全的 id-frame 映射类，按视频聚合存储，减少冗余。
+    内部结构: [_videos] 每项为 {"source_path", "total_frames", "video_fps", "duration", "frames": [frame_id, ...]}
+    FAISS 索引 i 对应: 按顺序遍历 _videos，累加 frames 长度，定位到对应视频和 frame_id。
+    """
+    def __init__(self, videos: list = None):
+        self._videos = videos if videos is not None else []
         self._lock = threading.RLock()
 
     @contextmanager
@@ -73,83 +76,141 @@ class ThreadSafeMap:
         """上下文管理器，用于自动获取和释放锁"""
         try:
             self._lock.acquire()
-            yield self._map
+            yield self._videos
         finally:
             self._lock.release()
 
+    def _total_frames_count(self):
+        """返回总帧数（向量数）"""
+        return sum(len(v["frames"]) for v in self._videos)
+
+    def _index_to_record(self, index: int) -> dict:
+        """将 FAISS 索引转换为 {source_path, frame_id, total_frames, video_fps, duration}"""
+        offset = 0
+        for v in self._videos:
+            n = len(v["frames"])
+            if index < offset + n:
+                return {
+                    "source_path": v["source_path"],
+                    "frame_id": v["frames"][index - offset],
+                    "total_frames": v["total_frames"],
+                    "video_fps": v["video_fps"],
+                    "duration": v.get("duration"),
+                }
+            offset += n
+        raise IndexError("databasemap index out of range")
+
     def save_local(self, path: str = None):
-        """保存databasemap到本地文件"""
+        """保存 databasemap 到本地，新格式：单视频为对象，多视频为数组"""
         with self.acquire():
-            # 确保目录存在
             dir_path = os.path.dirname(path)
             if dir_path and not os.path.exists(dir_path):
                 os.makedirs(dir_path)
-            # 保存到文件
+            if len(self._videos) == 1:
+                data = self._videos[0]
+            else:
+                data = self._videos
             with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self._map, f, ensure_ascii=False, indent=2)
+                json.dump(data, f, ensure_ascii=False, indent=2)
 
-    def load_local(self, path: str = None):
-        """从本地文件加载databasemap"""
-        if os.path.isfile(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                map_data = json.load(f)
-            if not isinstance(map_data, list):
-                return False
-            with self.acquire():
-                self._map = map_data
-            return True
-        return False
+    def load_local(self, path: str = None) -> bool:
+        """从本地加载 databasemap，支持新格式和旧格式（数组逐条记录）"""
+        if not os.path.isfile(path):
+            return False
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+
+        # 新格式：单视频对象 {"source_path", "total_frames", "video_fps", "duration", "frames": [...]}
+        if isinstance(raw, dict) and "frames" in raw:
+            videos = [self._ensure_duration(raw)]
+        # 新格式：多视频数组 [{...}, {...}]
+        elif isinstance(raw, list) and len(raw) > 0 and isinstance(raw[0], dict) and "frames" in raw[0]:
+            videos = [self._ensure_duration(v) for v in raw]
+        # 旧格式：逐条记录 [{"source_path", "frame_id", ...}, ...]
+        elif isinstance(raw, list) and len(raw) > 0 and "frame_id" in raw[0]:
+            videos = self._convert_legacy_to_videos(raw)
+        else:
+            return False
+
+        with self.acquire():
+            self._videos = videos
+        return True
+
+    def _ensure_duration(self, v: dict) -> dict:
+        """确保视频对象包含 duration，若缺失则根据 total_frames/video_fps 计算"""
+        if "duration" not in v or v["duration"] is None:
+            tf = v.get("total_frames")
+            fps = v.get("video_fps")
+            v = dict(v)
+            v["duration"] = (tf / fps if tf is not None and fps and fps > 0 else None)
+        return v
+
+    def _convert_legacy_to_videos(self, records: list) -> list:
+        """将旧格式 [{"source_path", "frame_id", ...}, ...] 转为按视频聚合的新格式，保持插入顺序"""
+        from collections import OrderedDict
+        by_path = OrderedDict()
+        for r in records:
+            key = (r["source_path"], r["total_frames"], r["video_fps"])
+            if key not in by_path:
+                entry = {"source_path": r["source_path"], "total_frames": r["total_frames"],
+                         "video_fps": r["video_fps"], "frames": []}
+                # 旧格式可能带 duration
+                if "duration" in r:
+                    entry["duration"] = r["duration"]
+                by_path[key] = entry
+            by_path[key]["frames"].append(r["frame_id"])
+        return [self._ensure_duration(v) for v in by_path.values()]
 
     def append(self, item: dict):
-        """添加一个项目到databasemap"""
+        """添加一条记录，自动聚合到对应视频的 frames 中"""
         with self.acquire():
-            self._map.append(item)
+            sp = item["source_path"]
+            tf = item["total_frames"]
+            fps = item["video_fps"]
+            fid = item["frame_id"]
+            duration = item.get("duration")
+            if self._videos and self._videos[-1]["source_path"] == sp:
+                self._videos[-1]["frames"].append(fid)
+                if duration is not None and "duration" not in self._videos[-1]:
+                    self._videos[-1]["duration"] = duration
+            else:
+                self._videos.append({
+                    "source_path": sp,
+                    "total_frames": tf,
+                    "video_fps": fps,
+                    "duration": duration,
+                    "frames": [fid],
+                })
 
     def get(self, index: int):
-        """获取指定索引的项目"""
+        """获取指定索引的记录"""
         with self.acquire():
-            if 0 <= index < len(self._map):
-                return self._map[index]
+            if 0 <= index < self._total_frames_count():
+                return self._index_to_record(index)
             return None
 
     def clear(self):
-        """清空databasemap"""
+        """清空 databasemap"""
         with self.acquire():
-            self._map.clear()
+            self._videos.clear()
 
     def __len__(self):
-        """获取databasemap的长度"""
+        """总向量数"""
         with self.acquire():
-            return len(self._map)
+            return self._total_frames_count()
 
-    def __getitem__(self, index: int):
-        """获取指定索引的项目"""
+    def __getitem__(self, index: int) -> dict:
+        """按 FAISS 索引获取 {source_path, frame_id, total_frames, video_fps, duration}"""
         with self.acquire():
-            if 0 <= index < len(self._map):
-                return self._map[index]
-            else:
-                raise IndexError("databasemap index out of range")
+            return self._index_to_record(index)
 
     def __setitem__(self, index: int, item: dict):
-        """设置指定索引的项目"""
-        with self.acquire():
-            if 0 <= index < len(self._map):
-                self._map[index] = item
-            else:
-                raise IndexError("databasemap index out of range")
+        """不支持按索引修改，请通过 append 添加"""
+        raise NotImplementedError("按视频聚合格式不支持按索引覆盖，请使用 append")
 
     def __delitem__(self, index: int):
-        """删除指定索引的项目"""
-        with self.acquire():
-            if 0 <= index < len(self._map):
-                del self._map[index]
-            else:
-                raise IndexError("databasemap index out of range")
-
-    def append(self, item: dict):
-        """添加一个项目到databasemap"""
-        with self.acquire():
-            self._map.append(item)
+        """不支持按索引删除"""
+        raise NotImplementedError("按视频聚合格式不支持按索引删除")
 
 class MemoryManager:
     """内存管理器"""
@@ -204,6 +265,8 @@ class MemoryManager:
                 pass
 
         self.logger = logging.getLogger(name='MemoryManager')
+        # 清除已有 handler，避免 benchmark 多次 _init_components 时重复添加导致日志重复输出
+        self.logger.handlers.clear()
         # 设置logger本身的级别，确保所有级别日志都能被处理
         self.logger.setLevel(logging.DEBUG)
         # 配置日志输出到控制台
@@ -300,13 +363,14 @@ class MemoryManager:
             "frame_id": vector_data.frame_id,
             "timestamp": vector_data.timestamp,
             "total_frames": vector_data.total_frames,
-            "video_fps": vector_data.video_fps
+            "video_fps": vector_data.video_fps,
+            "duration": vector_data.duration
         }
         self.databasemap.append(db_record)
         
         self.vector_count += 1
         
-        self.logger.info(f"向量添加成功, ID: {self.vector_count-1}, 总向量数: {self.vector_count}")
+        self.logger.debug(f"向量添加成功, ID: {self.vector_count-1}, 总向量数: {self.vector_count}")
     
     def _thread_frame_vectors(self):
         """处理帧向量的线程"""
@@ -355,43 +419,50 @@ class MemoryManager:
         return vector_ids, scores
     
     def _read_frame_from_video(self, vector_ids: List[int]) -> Optional[List[np.ndarray]]:
-        """根据vector_ids读取实际帧数据，并保存到 database/ 目录"""
-        frames = []
+        """根据 vector_ids 读取实际帧数据，并保存到 database/ 目录。
+        按视频分组、复用 VideoCapture，避免重复打开同一视频。
+        """
+        from collections import defaultdict
+
         save_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "database")
         os.makedirs(save_dir, exist_ok=True)
 
+        # 按视频分组: source_path -> [(vector_id, frame_id), ...]
+        by_video = defaultdict(list)
         for vector_id in vector_ids:
             db_record = self.databasemap[vector_id]
-            source_path = db_record["source_path"]
-            frame_id = db_record["frame_id"]
+            by_video[db_record["source_path"]].append((vector_id, db_record["frame_id"]))
 
+        # 预分配结果，按 vector_ids 顺序
+        result = [None] * len(vector_ids)
+        vid_to_idx = {vid: i for i, vid in enumerate(vector_ids)}
+
+        for source_path, items in by_video.items():
             cap = cv2.VideoCapture(source_path)
             if not cap.isOpened():
                 self.logger.error(f"无法打开视频文件: {source_path}")
                 return None
+            try:
+                video_name = os.path.splitext(os.path.basename(source_path))[0]
+                fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
+                for vector_id, frame_id in items:
+                    sec = round(frame_id / fps, 2)
+                    self.logger.info(
+                        f"读取帧: 视频={source_path}, 帧数={frame_id}, 时间={sec}秒"
+                    )
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+                    ret, frame = cap.read()
+                    if not ret:
+                        self.logger.error(f"无法读取视频帧 {frame_id}")
+                        continue
+                    result[vid_to_idx[vector_id]] = frame
+                    # save_path = os.path.join(save_dir, f"{video_name}_{frame_id}.png")
+                    # cv2.imwrite(save_path, frame)
+                    # self.logger.debug(f"已保存帧: {save_path}")
+            finally:
+                cap.release()
 
-            fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
-            sec = round(frame_id / fps, 2)
-            self.logger.info(
-                f"读取帧: 视频={source_path}, 帧数={frame_id}, 时间={sec}秒"
-            )
-
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
-            ret, frame = cap.read()
-            cap.release()
-            if not ret:
-                self.logger.error(f"无法读取视频帧 {frame_id}")
-                continue
-
-            frames.append(frame)
-
-            # 保存到 database/，命名为 "视频名_帧数.png"
-            video_name = os.path.splitext(os.path.basename(source_path))[0]
-            save_path = os.path.join(save_dir, f"{video_name}_{frame_id}.png")
-            cv2.imwrite(save_path, frame)
-            self.logger.debug(f"已保存帧: {save_path}")
-
-        return frames
+        return [f for f in result if f is not None]
     
     def _retrieve(self, query_vector: np.ndarray, top_k: int = 5) -> Tuple[List[FrameVectorData], List[float]]:
         """根据查询向量检索匹配的帧数据
@@ -537,3 +608,22 @@ class MemoryManager:
     def get_query_result_queue(self):
         """获取查询结果队列"""
         return self.query_result_queue
+
+    def init_sync(self):
+        """同步初始化数据库（在主进程调用，供 benchmark 使用）"""
+        self._set_logger()
+        self._initialize_database()
+
+    def add_vectors_batch(self, vector_data_list: Sequence[FrameVectorData]):
+        """批量同步添加向量，供 benchmark 使用。需先调用 init_sync()。"""
+        for vd in vector_data_list:
+            self._add_vector(vd)
+
+    def retrieve_sync(self, query_vector: np.ndarray, top_k: int = None) -> Tuple[List, List[float]]:
+        """同步检索，供 benchmark 使用。返回 (帧列表, 分数列表)。"""
+        k = top_k if top_k is not None else self.memory_topk
+        return self._retrieve(query_vector, k)
+
+    def save_database_sync(self):
+        """同步保存数据库"""
+        self._save_database()

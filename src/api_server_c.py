@@ -192,8 +192,16 @@ class APIServerC:
         if self.prompt_queue is None or self.result_queue is None:
             raise ValueError("查询队列或结果队列未设置，请先调用 set_query_queue() 和 set_result_queue()")
         
-        # 创建 gRPC 服务器
-        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+        # 创建 gRPC 服务器，视频帧数据可能较大，提高消息大小限制（默认 4MB）
+        max_msg_size = 50 * 1024 * 1024  # 50MB
+        options = [
+            ('grpc.max_send_message_length', max_msg_size),
+            ('grpc.max_receive_message_length', max_msg_size),
+        ]
+        self.server = grpc.server(
+            futures.ThreadPoolExecutor(max_workers=10),
+            options=options
+        )
         
         # 添加服务
         query_service_pb2_grpc.add_QueryServiceServicer_to_server(

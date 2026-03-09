@@ -4,13 +4,13 @@
     "video_source": "file",
     "video_file_path": "demo/assets/cooking.mp4",
     "reader_type": "cv2",
-    "original_fps": true
+    "original_fps": false,
+    "target_fps": 8
     },
   "frame_vectorizer": {
     "log_file": "logs/frame_vectorizer.log",
     "model_type": "BGE",
     "model_path": "/mnt/share/cache/models/BGE-VL-base",
-    "extraction_strategy": "interval",
     "frame_interval": 10,
     "device": "cuda",
     "use_vlm": false
@@ -59,7 +59,7 @@
   "api_server_e": {
     "log_file": "logs/api_server_e.log",
     "cloud_server_url": "127.0.0.1:9000",
-    "test_mode": true,
+    "test_mode": false,
     "dialog_mode": "single",
     "communication_mode": "unary"
   },
@@ -72,5 +72,17 @@
   },
   "edge": {
     "mode": "query_while_inject"
+  },
+  "benchmark": {
+    "dataset": "Video-MME",
+    "subset": "short",
+    "dataset_path": "local_datasets",
+    "video_dir_egoschema": "local_datasets/egoschema/videos",
+    "video_dir_videomme": "local_datasets/Video-MME/data",
+    "db_dir_egoschema": "database/egoschema",
+    "db_dir_videomme": "database/videomme",
+    "batch_size": 16,
+    "result_dir": "benchmark_results",
+    "use_cloud": true
   }
 }
