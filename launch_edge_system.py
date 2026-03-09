@@ -26,7 +26,7 @@ def main():
     config.edge_mode = "query_with_memory"
     config.memory_faiss_file_path = "database/cooking.faiss"
     config.memory_databasemap_file_path = "database/cooking.json"
-    # 创建并启动云端系统
+    # 创建并启动边端系统
     system = VenusSystemEdge(config)
     system.start()
 
