@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--max-videos", type=int, default=None, help="最多处理视频数")
     parser.add_argument("--config", type=str, default="configs/config.json", help="配置文件路径")
     parser.add_argument("--no-cloud", action="store_true", help="不调用云端，仅测试边端检索")
+    parser.add_argument("--resume", type=str, default=None, help="断点续跑：指定已有结果 JSON 路径，从中读取已处理视频并继续")
     args = parser.parse_args()
 
     config = Config(args.config)
@@ -31,6 +32,7 @@ def main():
         skip_inject=args.skip_inject,
         max_queries=args.max_queries,
         max_videos=args.max_videos,
+        resume_path=args.resume,
     )
 
 

@@ -1,0 +1,2 @@
+result_file="/home/ubuntu/liangh/Project-Video/HelloWorld/benchmark_results/useful/benchmark_Video-MME_short_20260309_170326.json"
+python eval_videomme.py --results_file $result_file --video_duration_type short

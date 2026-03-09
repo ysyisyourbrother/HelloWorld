@@ -328,6 +328,47 @@ class VenusSystemBench:
 
         return result
 
+    def _build_video_entry(
+        self,
+        video_id: str,
+        query_results: List[Dict],
+        create_v_db_time: float = 0,
+    ) -> Dict[str, Any]:
+        """根据单视频的 query 结果构建一个视频的 JSON 条目"""
+        if not query_results:
+            return {
+                "video_id": video_id,
+                "duration": "",
+                "domain": "",
+                "sub_category": "",
+                "url": video_id,
+                "create_v_db_time": create_v_db_time,
+                "questions": [],
+            }
+        first = query_results[0]
+        questions = []
+        for r in query_results:
+            q = {
+                "question_id": r.get("sample_id", ""),
+                "task_type": r.get("task_type", ""),
+                "question": r.get("question", ""),
+                "options": r.get("options", []),
+                "answer": r.get("ground_truth", ""),
+                "response": r.get("cloud_result") or "",
+                "rag_question": r.get("rag_question", ""),
+                "select_frame_num": r.get("select_frame_num", 0),
+            }
+            questions.append(q)
+        return {
+            "video_id": video_id,
+            "duration": first.get("duration", ""),
+            "domain": first.get("domain", ""),
+            "sub_category": first.get("sub_category", ""),
+            "url": first.get("url", video_id),
+            "create_v_db_time": create_v_db_time,
+            "questions": questions,
+        }
+
     def _save_results(
         self,
         inject_stats_list: List[Dict],
@@ -335,17 +376,16 @@ class VenusSystemBench:
         dataset_name: str,
         subset: str,
         video_paths: List[str],
+        out_path: Optional[str] = None,
     ):
-        """保存测试结果到 JSON，结构为按视频分组的列表"""
+        """保存测试结果到 JSON，结构为按视频分组的列表。若指定 out_path 则写入该路径，否则生成新文件"""
         os.makedirs(self.result_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"benchmark_{dataset_name}_{subset}_{timestamp}.json"
-        out_path = os.path.join(self.result_dir, fname)
+        if out_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"benchmark_{dataset_name}_{subset}_{timestamp}.json"
+            out_path = os.path.join(self.result_dir, fname)
 
-        # video_id -> create_v_db_time
         inject_by_video = {s["video_id"]: s.get("elapsed_sec", 0) for s in inject_stats_list}
-
-        # 按 video_id 分组
         groups: Dict[str, List[Dict]] = {}
         for r in query_results:
             vid = r.get("video_id", "")
@@ -353,33 +393,11 @@ class VenusSystemBench:
                 groups[vid] = []
             groups[vid].append(r)
 
-        # 构建用户期望的列表结构
         result_list = []
         for video_id, results in groups.items():
-            first = results[0]
-            questions = []
-            for r in results:
-                q = {
-                    "question_id": r.get("sample_id", ""),
-                    "task_type": r.get("task_type", ""),
-                    "question": r.get("question", ""),
-                    "options": r.get("options", []),
-                    "answer": r.get("ground_truth", ""),
-                    "response": r.get("cloud_result") or "",
-                    "rag_question": r.get("rag_question", ""),
-                    "select_frame_num": r.get("select_frame_num", 0),
-                }
-                questions.append(q)
-
-            entry = {
-                "video_id": video_id,
-                "duration": first.get("duration", ""),
-                "domain": first.get("domain", ""),
-                "sub_category": first.get("sub_category", ""),
-                "url": first.get("url", video_id),
-                "create_v_db_time": inject_by_video.get(video_id, 0),
-                "questions": questions,
-            }
+            entry = self._build_video_entry(
+                video_id, results, inject_by_video.get(video_id, 0)
+            )
             result_list.append(entry)
 
         with open(out_path, "w", encoding="utf-8") as f:
@@ -388,11 +406,53 @@ class VenusSystemBench:
         self.logger.info(f"结果已保存: {out_path}")
         return out_path
 
+    def _append_video_and_save(
+        self,
+        result_list: List[Dict],
+        out_path: str,
+        inject_stat: Dict[str, Any],
+        query_results_for_video: List[Dict],
+        video_id: str,
+    ) -> List[Dict]:
+        """将单个视频的结果追加到 result_list 并保存到 out_path。返回更新后的 result_list"""
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        create_v_db_time = inject_stat.get("elapsed_sec", 0)
+        entry = self._build_video_entry(video_id, query_results_for_video, create_v_db_time)
+        result_list.append(entry)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(result_list, f, ensure_ascii=False, indent=2)
+        self.logger.info(f"结果已保存（增量）: {out_path}")
+        return result_list
+
+    def _load_resume_result(self, resume_path: str) -> tuple:
+        """
+        加载 resume JSON 文件，返回 (result_list, processed_video_ids)。
+        若文件不存在或解析失败，返回 ([], set())。
+        """
+        path = Path(resume_path)
+        if not path.is_absolute():
+            base = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            path = (base / resume_path).resolve()
+        if not path.exists():
+            self.logger.warning(f"Resume 文件不存在: {path}")
+            return [], set()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                result_list = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            self.logger.warning(f"Resume 文件解析失败: {e}")
+            return [], set()
+        if not isinstance(result_list, list):
+            return [], set()
+        processed = {e.get("video_id") for e in result_list if isinstance(e, dict) and e.get("video_id")}
+        return result_list, processed
+
     def run(
         self,
         skip_inject: bool = False,
         max_queries: Optional[int] = None,
         max_videos: Optional[int] = None,
+        resume_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         运行完整 benchmark 流程。视频路径从数据集配置的目录自动解析。
@@ -401,6 +461,7 @@ class VenusSystemBench:
             skip_inject: 若为 True，跳过 inject，仅做 query（需已有向量库）
             max_queries: 最多执行的查询数量，None 表示全部
             max_videos: 最多处理的视频数量，None 表示全部
+            resume_path: 断点续跑用的 JSON 文件路径，将从中读取已处理的视频并跳过，从下一个未处理的视频继续
 
         Returns:
             包含 summary 和 result_path 的字典
@@ -422,6 +483,21 @@ class VenusSystemBench:
         video_paths_used = []
         query_count = 0
 
+        # Resume 支持：加载已处理结果，确定输出路径
+        result_list: List[Dict] = []
+        result_path: Optional[str] = None
+        processed_video_ids: set = set()
+        if resume_path:
+            result_list, processed_video_ids = self._load_resume_result(resume_path)
+            p = Path(resume_path)
+            if not p.is_absolute():
+                base = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                result_path = str((base / resume_path).resolve())
+            else:
+                result_path = resume_path
+            if processed_video_ids:
+                self.logger.info(f"Resume 模式：已加载 {len(processed_video_ids)} 个已处理视频，从下一未处理视频继续")
+
         if skip_inject:
             self.logger.info("跳过 Inject，使用已有向量库")
             groups = self._group_by_video(ds, dataset_name)
@@ -429,6 +505,8 @@ class VenusSystemBench:
                 groups = dict(list(groups.items())[:max_videos])
             self.logger.info("Phase 2: Query（遍历数据集查询）")
             for video_id, samples in groups.items():
+                if resume_path and video_id in processed_video_ids:
+                    continue
                 faiss_path, map_path = self._get_db_paths(dataset_name, video_id)
                 if not os.path.isfile(faiss_path):
                     self.logger.warning(f"向量库不存在，跳过视频 {video_id}: {faiss_path}")
@@ -438,6 +516,7 @@ class VenusSystemBench:
                 if max_queries is not None:
                     remaining = max_queries - query_count
                     samples = samples[:remaining]
+                video_query_results = []
                 for sample in samples:
                     question = sample.get("question", "")
                     if not question:
@@ -459,9 +538,21 @@ class VenusSystemBench:
                     if not isinstance(r["options"], list):
                         r["options"] = list(r["options"]) if r["options"] else []
                     all_query_results.append(r)
+                    video_query_results.append(r)
                     query_count += 1
                     if query_count % 10 == 0:
                         self.logger.info(f"已查询 {query_count} 条")
+                # 每完成一个视频即保存
+                if video_query_results:
+                    if result_path is None:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        result_path = os.path.join(
+                            self.result_dir, f"benchmark_{dataset_name}_{subset}_{timestamp}.json"
+                        )
+                    inject_stat = {"video_id": video_id, "elapsed_sec": 0}
+                    result_list = self._append_video_and_save(
+                        result_list, result_path, inject_stat, video_query_results, video_id
+                    )
                 if max_queries is not None and query_count >= max_queries:
                     break
         else:
@@ -470,6 +561,8 @@ class VenusSystemBench:
                 groups = dict(list(groups.items())[:max_videos])
 
             for video_id, samples in groups.items():
+                if resume_path and video_id in processed_video_ids:
+                    continue
                 video_path = self._get_video_path(dataset_name, video_id)
                 if not video_path:
                     self.logger.warning(f"视频不存在，跳过: {video_id}")
@@ -483,7 +576,8 @@ class VenusSystemBench:
                 self.logger.info(f"Inject: {video_path}")
                 self.logger.info("=" * 50)
                 inject_stats = self._run_inject_phase(video_path, video_id, dataset_name)
-                all_inject_stats.append({"video_id": video_id, "path": video_path, **inject_stats})
+                inject_stat = {"video_id": video_id, "path": video_path, **inject_stats}
+                all_inject_stats.append(inject_stat)
                 video_paths_used.append(video_path)
 
                 video_time = self._get_video_time()
@@ -492,6 +586,7 @@ class VenusSystemBench:
                     samples = samples[:remaining]
 
                 self.logger.info("Phase 2: Query")
+                video_query_results = []
                 for sample in samples:
                     question = sample.get("question", "")
                     if not question:
@@ -513,14 +608,26 @@ class VenusSystemBench:
                     if not isinstance(r["options"], list):
                         r["options"] = list(r["options"]) if r["options"] else []
                     all_query_results.append(r)
+                    video_query_results.append(r)
                     query_count += 1
                     if query_count % 10 == 0:
                         self.logger.info(f"已查询 {query_count} 条")
 
+                # 每完成一个视频即保存
+                if video_query_results:
+                    if result_path is None:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        result_path = os.path.join(
+                            self.result_dir, f"benchmark_{dataset_name}_{subset}_{timestamp}.json"
+                        )
+                    result_list = self._append_video_and_save(
+                        result_list, result_path, inject_stat, video_query_results, video_id
+                    )
+
                 if max_queries is not None and query_count >= max_queries:
                     break
 
-        # 汇总 inject 统计
+        # 汇总 inject 统计（仅本次运行处理的视频）
         if all_inject_stats:
             agg = {
                 "total_frames": sum(s["total_frames"] for s in all_inject_stats),
@@ -532,28 +639,8 @@ class VenusSystemBench:
         else:
             agg = {}
 
-        result_path = self._save_results(
-            all_inject_stats, all_query_results, dataset_name, subset, video_paths_used
-        )
-        return {"summary": agg, "query_count": len(all_query_results), "result_path": result_path}
-
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="VenusSystemBench 云边集成 Benchmark")
-    parser.add_argument("--skip-inject", action="store_true", help="跳过 inject，仅 query")
-    parser.add_argument("--max-queries", type=int, default=None, help="最多查询条数")
-    parser.add_argument("--max-videos", type=int, default=3, help="最多处理视频数")
-    parser.add_argument("--config", type=str, default="configs/config.json", help="配置文件路径")
-    parser.add_argument("--no-cloud", action="store_true", help="不调用云端，仅测试边端检索")
-    args = parser.parse_args()
-
-    config = Config(args.config)
-    if args.no_cloud:
-        config.benchmark_use_cloud = False
-    bench = VenusSystemBench(config)
-    bench.run(
-        skip_inject=args.skip_inject,
-        max_queries=args.max_queries,
-        max_videos=args.max_videos,
-    )
+        return {
+            "summary": agg,
+            "query_count": len(all_query_results),
+            "result_path": result_path or "",
+        }
