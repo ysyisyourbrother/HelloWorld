@@ -95,8 +95,8 @@ class VenusSystemBench:
         path = video_dir / f"{video_id}.mp4"
         return str(path) if path.exists() else None
 
-    def _get_db_paths(self, dataset_name: str, video_id: str) -> tuple:
-        """获取该视频的 faiss 和 databasemap 路径，按数据集分目录，faiss 存 faiss 子目录、json 存 json 子目录"""
+    def _get_db_paths(self, dataset_name: str, video_id: str, subset: Optional[str] = None) -> tuple:
+        """获取该视频的 faiss 和 databasemap 路径，按数据集和 subset 分目录，faiss 存 faiss 子目录、json 存 json 子目录"""
         base = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         if dataset_name == "egoschema":
             db_dir = getattr(self.config, "benchmark_db_dir_egoschema", "database/egoschema")
@@ -105,6 +105,8 @@ class VenusSystemBench:
         else:
             db_dir = "database/benchmark"
         db_path = base / db_dir
+        if subset:
+            db_path = db_path / subset
         faiss_dir = db_path / "faiss"
         json_dir = db_path / "json"
         faiss_dir.mkdir(parents=True, exist_ok=True)
@@ -192,10 +194,10 @@ class VenusSystemBench:
             self.frame_vectorizer = None
 
     def _run_inject_phase(
-        self, video_path: str, video_id: str, dataset_name: str
+        self, video_path: str, video_id: str, dataset_name: str, subset: Optional[str] = None
     ) -> Dict[str, Any]:
         """Inject 阶段：按 batch 读取、向量化、插入，按视频名保存到数据集对应目录"""
-        faiss_path, map_path = self._get_db_paths(dataset_name, video_id)
+        faiss_path, map_path = self._get_db_paths(dataset_name, video_id, subset)
         if os.path.isfile(faiss_path):
             self.logger.info(f"向量库已存在，跳过 inject: {faiss_path}")
             self._init_components(video_path=None, faiss_path=faiss_path, map_path=map_path)
@@ -507,7 +509,7 @@ class VenusSystemBench:
             for video_id, samples in groups.items():
                 if resume_path and video_id in processed_video_ids:
                     continue
-                faiss_path, map_path = self._get_db_paths(dataset_name, video_id)
+                faiss_path, map_path = self._get_db_paths(dataset_name, video_id, subset)
                 if not os.path.isfile(faiss_path):
                     self.logger.warning(f"向量库不存在，跳过视频 {video_id}: {faiss_path}")
                     continue
@@ -575,7 +577,7 @@ class VenusSystemBench:
                 self.logger.info("=" * 50)
                 self.logger.info(f"Inject: {video_path}")
                 self.logger.info("=" * 50)
-                inject_stats = self._run_inject_phase(video_path, video_id, dataset_name)
+                inject_stats = self._run_inject_phase(video_path, video_id, dataset_name, subset)
                 inject_stat = {"video_id": video_id, "path": video_path, **inject_stats}
                 all_inject_stats.append(inject_stat)
                 video_paths_used.append(video_path)

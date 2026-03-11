@@ -5,9 +5,11 @@
 *.pid
 *.mdc
 .vscode/
+database
 database/
 local_datasets/
 benchmark_results/
+motivation_results/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
