@@ -284,7 +284,7 @@ class VenusSystemBench:
         """单次查询：编码 -> 检索 -> 推理（直接变量传递，无 gRPC）。若提供 sample 和 video_time，则用 build_rag_prompt 构造 RAG 提示传给推理。"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
-        frame_list, scores = self.memory_manager.retrieve_sync(query_vector)
+        frame_list, scores, _ = self.memory_manager.retrieve_sync(query_vector)
         retrieve_time = time.time() - t0
 
         result = {"question": question, "retrieve_time_sec": retrieve_time, "scores": scores}

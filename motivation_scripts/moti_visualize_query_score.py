@@ -116,18 +116,21 @@ def visualize_patch_grid(
     print(f"  - Patch 大小: {patch_size}x{patch_size}")
     print(f"  - Patch 数量: {num_patches_per_side}x{num_patches_per_side} = {num_patches_per_side**2}")
 
-def get_cls_patch_similarity(
+def get_query_patch_similarity(
     image_path: str,
     model_path: str,
+    query_text: str,
     device: str = "cuda",
     image_size: int = 224,
     patch_size: int = 16,
-) -> np.ndarray:
+) -> tuple[np.ndarray, float]:
     """
-    计算 BGE ViT 中 CLS token 与各 patch 的余弦相似度。
-    
+    计算特定文本与各视觉 patch 的余弦相似度。
+    视觉 token（含 CLS）先经 post_layernorm 和 visual_projection，再与文本向量计算相似度。
+
     Returns:
-        scores: shape (num_patches_per_side, num_patches_per_side)，即 14x14
+        patch_scores: shape (num_patches_per_side, num_patches_per_side)，即 14x14，用于可视化
+        cls_score: CLS token 与文本的相似度，仅用于打印
     """
     model = CLIPModel.from_pretrained(model_path).to(device)
     model.set_processor(model_path)
@@ -140,20 +143,36 @@ def get_cls_patch_similarity(
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     pixel_values = processor(images=img_rgb, return_tensors="pt")["pixel_values"].to(device)
+    text_inputs = processor(text=[query_text], return_tensors="pt", padding=True).to(device)
 
     with torch.no_grad():
         vision_outputs = model.vision_model(pixel_values=pixel_values)
-    last_hidden = vision_outputs.last_hidden_state  # [1, 197, 768]
-    cls_token = last_hidden[:, 0, :]  # [1, 768]
-    patch_tokens = last_hidden[:, 1:, :]  # [1, 196, 768]
+        last_hidden = vision_outputs.last_hidden_state  # [1, 197, 768]
 
-    cls_norm = torch.nn.functional.normalize(cls_token, dim=-1)
-    patch_norm = torch.nn.functional.normalize(patch_tokens, dim=-1)
-    similarity = (cls_norm @ patch_norm.squeeze(0).T).squeeze(0).cpu().numpy()  # [196]
+        # 所有视觉 token 经 post_layernorm
+        post_ln = model.vision_model.post_layernorm
+        tokens_after_ln = post_ln(last_hidden)  # [1, 197, 768]
+
+        # 经 visual_projection
+        tokens_proj = model.visual_projection(tokens_after_ln)  # [1, 197, proj_dim]
+
+        cls_token_proj = tokens_proj[:, 0, :]  # [1, proj_dim]
+        patch_tokens_proj = tokens_proj[:, 1:, :]  # [1, 196, proj_dim]
+
+        # 文本特征（已含 text_projection）
+        text_features = model.get_text_features(**text_inputs)  # [1, proj_dim]
+
+        # 归一化后计算余弦相似度
+        text_norm = torch.nn.functional.normalize(text_features, dim=-1)
+        patch_norm = torch.nn.functional.normalize(patch_tokens_proj, dim=-1)
+        cls_norm = torch.nn.functional.normalize(cls_token_proj, dim=-1)
+
+        patch_similarity = (text_norm @ patch_norm.squeeze(0).T).squeeze(0).cpu().numpy()  # [196]
+        cls_similarity = (text_norm @ cls_norm.T).squeeze().item()
 
     num_per_side = image_size // patch_size
-    scores = similarity.reshape(num_per_side, num_per_side)
-    return scores
+    patch_scores = patch_similarity.reshape(num_per_side, num_per_side)
+    return patch_scores, cls_similarity
 
 
 def visualize_cls_patch_scores_on_original(
@@ -213,7 +232,7 @@ def visualize_cls_patch_scores_on_original(
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     cv2.imwrite(output_path, canvas)
-    print(f"CLS-patch 相似度热力图已保存到: {output_path}")
+    print(f"Query-patch 相似度热力图已保存到: {output_path}")
     print(f"  - 分数范围: [{s_min:.4f}, {s_max:.4f}]")
 
 
@@ -286,7 +305,7 @@ def visualize_cls_patch_scores_with_labels(
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     cv2.imwrite(output_path, canvas)
-    print(f"CLS-patch 相似度热力图（含分数标注）已保存到: {output_path}")
+    print(f"Query-patch 相似度热力图（含分数标注）已保存到: {output_path}")
     print(f"  - 分数范围: [{s_min:.4f}, {s_max:.4f}]")
 
 
@@ -350,7 +369,7 @@ def visualize_cls_patch_scores_overlay(
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     cv2.imwrite(output_path, blended)
-    print(f"CLS 热力图叠加图已保存到: {output_path} (alpha={alpha})")
+    print(f"Query 热力图叠加图已保存到: {output_path} (alpha={alpha})")
 
 
 def visualize_patch_grid_on_original(
@@ -385,32 +404,24 @@ def visualize_patch_grid_on_original(
     cv2.imwrite(output_path, img)
     print(f"Patch 可视化（原图尺寸）已保存到: {output_path}")
 
+def _sanitize_query_for_filename(q: str, max_len: int = 25) -> str:
+    """将 query 转为安全的文件名片段"""
+    s = "".join(c if c.isalnum() or c in " -_" else "_" for c in q)
+    s = "_".join(s.split())[:max_len].strip("_")
+    return s or "query"
+
+
 def main():
-    parser = argparse.ArgumentParser(description="BGE patch 网格与 CLS-patch 相似度可视化")
-    parser.add_argument("-i", "--input", default="motivation_results/frames/frame_selected.jpg", help="输入图片路径")
-    parser.add_argument("-o", "--output", default="motivation_results/frames/frame_patch_grid.jpg", help="patch 网格输出路径 (224x224)")
-    parser.add_argument(
-        "-o2", "--output_original",
-        default=None,
-        help="patch 网格原图尺寸输出路径 (默认: 在 -o 基础上加 _original_size)"
-    )
-    parser.add_argument(
-        "--output_cls",
-        default=None,
-        help="CLS-patch 相似度热力图输出路径 (默认: 在 -o 基础上加 _CLS_score)"
-    )
-    parser.add_argument(
-        "--output_overlay",
-        default=None,
-        help="热力图叠加在原图上的输出路径 (默认: 在 -o 基础上加 _CLS_overlay)"
-    )
-    parser.add_argument(
-        "--output_labels",
-        default=None,
-        help="带分数标注的热力图输出路径 (默认: 在 -o 基础上加 _CLS_labels)"
-    )
+    parser = argparse.ArgumentParser(description="BGE patch 网格与 文本-patch 相似度可视化")
+    parser.add_argument("-i", "--input", default="motivation_results/frames/1500/1500.png", help="输入图片路径")
+    # parser.add_argument("-q", "--query", default="Saxophone", help="查询文本，用于与视觉 token 计算相似度")
+    # parser.add_argument("-q", "--query", default="Which instrument is the performer on the stage holding in the video?", help="查询文本，用于与视觉 token 计算相似度")
+    parser.add_argument("-q", "--query", default="A person holding a saxophone", help="查询文本，用于与视觉 token 计算相似度")
+    # parser.add_argument("-q", "--query", default="A person with a blue shirt holding a saxophone", help="查询文本，用于与视觉 token 计算相似度")
+
+    
     parser.add_argument("--overlay_alpha", type=float, default=0.4, help="叠加时热力图不透明度 (默认 0.4)")
-    parser.add_argument("--no_patch_grid", action="store_true", help="不生成 patch 网格图，仅生成 CLS 热力图")
+    parser.add_argument("--no_patch_grid", action="store_true", help="不生成 patch 网格图，仅生成 query 热力图")
     parser.add_argument("-c", "--config", default="configs/config_moti.json", help="配置文件")
     parser.add_argument("--device", default=None, help="device (默认从 config 读取)")
     parser.add_argument("--image_size", type=int, default=None, help="模型输入尺寸 (默认从 config 读取)")
@@ -427,34 +438,23 @@ def main():
     device = args.device or config.frame_device
     model_path = config.frame_model_path
 
-    output_original = args.output_original
-    if output_original is None:
-        base, ext = os.path.splitext(args.output)
-        output_original = f"{base}_original_size{ext}"
-
-    output_cls = args.output_cls
-    if output_cls is None:
-        base, ext = os.path.splitext(args.output)
-        output_cls = f"{base}_CLS_score{ext}"
-
-    output_overlay = args.output_overlay
-    if output_overlay is None:
-        base, ext = os.path.splitext(args.output)
-        output_overlay = f"{base}_CLS_overlay{ext}"
-
-    output_labels = args.output_labels
-    if output_labels is None:
-        base, ext = os.path.splitext(args.output)
-        output_labels = f"{base}_CLS_labels{ext}"
+    # 所有输出路径基于输入路径 -i 和 query 自动生成
+    base, ext = os.path.splitext(args.input)
+    q_suffix = _sanitize_query_for_filename(args.query)
+    output = f"{base}_patch_grid.jpg"
+    output_original = f"{base}_patch_grid_original_size.jpg"
+    output_query = f"{base}_query_{q_suffix}_score.jpg"
+    output_overlay = f"{base}_query_{q_suffix}_overlay.jpg"
+    output_labels = f"{base}_query_{q_suffix}_labels.jpg"
 
     # 自定义 colormap，可改为 dict 如 {"0":"#0000FF","0.5":"#00FF00","1":"#FF0000"}
     colormap: Union[int, dict] = cv2.COLORMAP_JET
-    colormap= {"0":"#18354E","0.80":"#B1CEE7","1":"#CC0300"}
+    colormap = {"0": "#18354E", "0.80": "#B1CEE7", "1": "#CC0300"}
 
     if not args.no_patch_grid:
         visualize_patch_grid(
             image_path=args.input,
-            output_path=args.output,
+            output_path=output,
             image_size=image_size,
             patch_size=patch_size,
         )
@@ -465,17 +465,20 @@ def main():
             patch_size=patch_size,
         )
 
-    scores = get_cls_patch_similarity(
+    patch_scores, cls_score = get_query_patch_similarity(
         image_path=args.input,
         model_path=model_path,
+        query_text=args.query,
         device=device,
         image_size=image_size,
         patch_size=patch_size,
     )
+    print(f"CLS token 与文本 \"{args.query}\" 的相似度: {cls_score:.4f}")
+
     visualize_cls_patch_scores_on_original(
         image_path=args.input,
-        output_path=output_cls,
-        scores=scores,
+        output_path=output_query,
+        scores=patch_scores,
         image_size=image_size,
         patch_size=patch_size,
         colormap=colormap,
@@ -483,7 +486,7 @@ def main():
     visualize_cls_patch_scores_with_labels(
         image_path=args.input,
         output_path=output_labels,
-        scores=scores,
+        scores=patch_scores,
         image_size=image_size,
         patch_size=patch_size,
         colormap=colormap,
@@ -491,7 +494,7 @@ def main():
     visualize_cls_patch_scores_overlay(
         image_path=args.input,
         output_path=output_overlay,
-        scores=scores,
+        scores=patch_scores,
         image_size=image_size,
         patch_size=patch_size,
         alpha=args.overlay_alpha,

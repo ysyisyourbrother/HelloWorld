@@ -260,3 +260,118 @@ def eval_your_results(
     total_answered = sum([sum([q_type_dict[video_type][q_type]["answered"] for q_type in TASK_CATEGORIES]) for video_type in video_types])
     print(f"Overall: {100 * total_correct / total_answered if total_answered > 0 else 0 : .1f}%")
 
+
+def eval_your_results_then_return(
+        your_results_path: str,
+        video_types: Optional[Union[List[str], str]] = None,
+        skip_missing: Optional[bool] = False,
+        return_categories_accuracy: Optional[bool] = True,
+        return_sub_categories_accuracy: Optional[bool] = True,
+        return_task_types_accuracy: Optional[bool] = True,
+        gt_answer_key: Optional[str] = "answer",
+        your_answer_key: Optional[str] = "response"
+) -> Dict[str, Union[Dict[str, float], float]]:
+    """
+    Evaluate your results against the ground truth and return metrics as a dictionary.
+
+    Returns:
+        Dict with keys:
+            - "Video Domains": {category: accuracy_percent}
+            - "Video Sub Categories": {sub_category: accuracy_percent}
+            - "Task Categories": {task_type: accuracy_percent}
+            - "Overall Acc": overall_accuracy_percent
+    """
+    # Load your results
+    with open(your_results_path, 'r') as f:
+        your_results = json.load(f)
+
+    if isinstance(video_types, str):
+        video_types = video_types.split(",")
+
+    q_type_dict = {}
+    v_type_dict = {}
+    v_sub_type_dict = {}
+
+    for video_type in video_types:
+        your_results_video_type = [item for item in your_results if item["duration"] == video_type]
+
+        q_type_dict[video_type] = {}
+        for q_type in TASK_CATEGORIES:
+            q_type_dict[video_type][q_type] = {"correct": 0, "answered": 0}
+
+        v_type_dict[video_type] = {}
+        for v_type in CATEGORIES:
+            v_type_dict[video_type][v_type] = {"correct": 0, "answered": 0}
+
+        v_sub_type_dict[video_type] = {}
+        for v_sub_type in SUB_CATEGORIES:
+            v_sub_type_dict[video_type][v_sub_type] = {"correct": 0, "answered": 0}
+
+        if not skip_missing:
+            assert len(your_results_video_type) == 300, f"Number of files in {video_type} is not 300."
+
+        for item in your_results_video_type:
+            if skip_missing and item.get("missing", False):
+                continue
+
+            video_category = item["domain"]
+            video_sub_category = item["sub_category"]
+            questions = item["questions"]
+
+            for question in questions:
+                q_type = question["task_type"]
+                gt_answer = question[gt_answer_key]
+                response = question[your_answer_key]
+                extration = extract_characters_regex(response)
+
+                if extration != "":
+                    q_type_dict[video_type][q_type]["answered"] += 1
+                    q_type_dict[video_type][q_type]["correct"] += extration == gt_answer
+
+                    v_type_dict[video_type][video_category]["answered"] += 1
+                    v_type_dict[video_type][video_category]["correct"] += extration == gt_answer
+
+                    v_sub_type_dict[video_type][video_sub_category]["answered"] += 1
+                    v_sub_type_dict[video_type][video_sub_category]["correct"] += extration == gt_answer
+
+    result: Dict[str, Union[Dict[str, float], float]] = {}
+
+    if return_categories_accuracy:
+        result["Video Domains"] = {}
+        for v_type in CATEGORIES:
+            total_correct = sum(v_type_dict[vt][v_type]["correct"] for vt in video_types)
+            total_answered = sum(v_type_dict[vt][v_type]["answered"] for vt in video_types)
+            result["Video Domains"][v_type] = round(
+                100 * total_correct / total_answered if total_answered > 0 else 0, 1
+            )
+
+    if return_sub_categories_accuracy:
+        result["Video Sub Categories"] = {}
+        for v_sub_type in SUB_CATEGORIES:
+            total_correct = sum(v_sub_type_dict[vt][v_sub_type]["correct"] for vt in video_types)
+            total_answered = sum(v_sub_type_dict[vt][v_sub_type]["answered"] for vt in video_types)
+            result["Video Sub Categories"][v_sub_type] = round(
+                100 * total_correct / total_answered if total_answered > 0 else 0, 1
+            )
+
+    if return_task_types_accuracy:
+        result["Task Categories"] = {}
+        for q_type in TASK_CATEGORIES:
+            total_correct = sum(q_type_dict[vt][q_type]["correct"] for vt in video_types)
+            total_answered = sum(q_type_dict[vt][q_type]["answered"] for vt in video_types)
+            result["Task Categories"][q_type] = round(
+                100 * total_correct / total_answered if total_answered > 0 else 0, 1
+            )
+
+    total_correct = sum(
+        sum(q_type_dict[vt][q]["correct"] for q in TASK_CATEGORIES) for vt in video_types
+    )
+    total_answered = sum(
+        sum(q_type_dict[vt][q]["answered"] for q in TASK_CATEGORIES) for vt in video_types
+    )
+    result["Overall Acc"] = round(
+        100 * total_correct / total_answered if total_answered > 0 else 0, 1
+    )
+
+    return result
+

@@ -81,7 +81,7 @@
     "video_dir_videomme": "local_datasets/Video-MME/data",
     "db_dir_egoschema": "motivation_results",
     "db_dir_videomme": "motivation_results",
-    "batch_size": 1,
+    "batch_size": 16,
     "result_dir": "motivation_results",
     "use_cloud": false
   }

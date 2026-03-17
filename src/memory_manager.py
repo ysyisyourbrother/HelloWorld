@@ -9,7 +9,7 @@ import glob
 import os
 import faiss
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Sequence
+from typing import List, Optional, Tuple, Sequence, Callable
 from contextlib import contextmanager
 import multiprocessing as mp
 
@@ -252,7 +252,15 @@ class MemoryManager:
         self.running = False
         self.current_video_name = None
         self.vector_count = 0
-        
+
+        # 检索钩子：每次 retrieve 时调用，传入 (query_vector, all_scores)
+        # all_scores: List[float]，长度为 vector_count，all_scores[i] 为向量 i 与 query 的距离
+        self._retrieve_hooks: List[Callable[[np.ndarray, List[float]], None]] = []
+
+    def register_retrieve_hook(self, fn: Callable[[np.ndarray, List[float]], None]):
+        """注册检索钩子，在每次 retrieve 时调用。fn(query_vector, all_scores)"""
+        self._retrieve_hooks.append(fn)
+
     def _set_logger(self):
         """设置日志记录器"""
         log_file = self.log_file
@@ -417,6 +425,21 @@ class MemoryManager:
         
         self.logger.info(f"查询完成，返回 {len(vector_ids)} 个结果")
         return vector_ids, scores
+
+    def _query_faiss_all_scores(self, query_vector: np.ndarray) -> List[float]:
+        """查询所有向量与 query 的距离，返回长度为 vector_count 的列表，all_scores[i] 为向量 i 的距离"""
+        if self.index is None or self.vector_count == 0:
+            return []
+        if len(query_vector.shape) == 1:
+            query_vector = query_vector.reshape(1, -1)
+        k = self.vector_count
+        distances, indices = self.index.search(query_vector, k)
+        # 构建 all_scores[i] = 向量 i 与 query 的距离
+        all_scores = [0.0] * self.vector_count
+        for idx, dist in zip(indices[0].tolist(), distances[0].tolist()):
+            if 0 <= idx < self.vector_count:
+                all_scores[idx] = float(dist)
+        return all_scores
     
     def _read_frame_from_video(self, vector_ids: List[int]) -> Optional[List[np.ndarray]]:
         """根据 vector_ids 读取实际帧数据，并保存到 database/ 目录。
@@ -462,25 +485,49 @@ class MemoryManager:
             finally:
                 cap.release()
 
-        return [f for f in result if f is not None]
-    
-    def _retrieve(self, query_vector: np.ndarray, top_k: int = 5) -> Tuple[List[FrameVectorData], List[float]]:
+        return result
+
+    def _retrieve(
+        self, query_vector: np.ndarray, top_k: int = 5
+    ) -> Tuple[List[np.ndarray], List[float], List[dict]]:
         """根据查询向量检索匹配的帧数据
-        
-        Args:
-            query_vector: 查询向量
-            top_k: 返回前k个最相似的帧数据
-            
+
         Returns:
-            tuple: (匹配的帧数据列表, 相似度分数列表)
+            tuple: (帧列表, 分数列表, 元数据列表)，元数据每项为 {frame_id, video_fps}
         """
+        # 若有注册的钩子，计算全量相似度并调用
+        if self._retrieve_hooks:
+            all_scores = self._query_faiss_all_scores(query_vector)
+            for fn in self._retrieve_hooks:
+                try:
+                    fn(query_vector.copy(), all_scores)
+                except Exception as e:
+                    self.logger.warning(f"检索钩子执行异常: {e}")
+
         vector_ids, scores = self._query_faiss(query_vector, top_k)
         self.logger.info(f"查询完成，返回 {len(vector_ids)} 个结果")
-        # 获取对应的帧数据
+
+        # 构建元数据（frame_id, video_fps）
+        metadata_list = []
+        for vid in vector_ids:
+            rec = self.databasemap[vid]
+            metadata_list.append({
+                "frame_id": rec["frame_id"],
+                "video_fps": rec.get("video_fps") or 1.0,
+            })
+
+        # 读取帧（返回完整列表以保持与 vector_ids 对齐）
         frame_data_list = self._read_frame_from_video(vector_ids)
-        
-        self.logger.debug(f"成功读取 {len(frame_data_list)} 个实际帧")
-        return frame_data_list, scores
+        # 过滤读取失败的帧，同步过滤元数据
+        frame_list, scores_filtered, metadata_filtered = [], [], []
+        for f, s, m in zip(frame_data_list, scores, metadata_list):
+            if f is not None:
+                frame_list.append(f)
+                scores_filtered.append(s)
+                metadata_filtered.append(m)
+
+        self.logger.debug(f"成功读取 {len(frame_list)} 个实际帧")
+        return frame_list, scores_filtered, metadata_filtered
     
     def _thread_query_vectors(self):
         """处理查询向量的线程"""
@@ -496,8 +543,8 @@ class MemoryManager:
             timestamp = query_data.timestamp
             
             # 执行查询
-            frame_data_list, scores = self._retrieve(query_vector, self.memory_topk)
-            
+            frame_data_list, scores, _ = self._retrieve(query_vector, self.memory_topk)
+
             # 创建查询结果
             result = MemoryResult(
                 query_id=query_id,
@@ -619,8 +666,10 @@ class MemoryManager:
         for vd in vector_data_list:
             self._add_vector(vd)
 
-    def retrieve_sync(self, query_vector: np.ndarray, top_k: int = None) -> Tuple[List, List[float]]:
-        """同步检索，供 benchmark 使用。返回 (帧列表, 分数列表)。"""
+    def retrieve_sync(
+        self, query_vector: np.ndarray, top_k: int = None
+    ) -> Tuple[List, List[float], List[dict]]:
+        """同步检索，供 benchmark 使用。返回 (帧列表, 分数列表, 元数据列表)。"""
         k = top_k if top_k is not None else self.memory_topk
         return self._retrieve(query_vector, k)
 

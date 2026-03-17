@@ -16,7 +16,7 @@ import time
 import logging
 import faiss
 import cv2
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from pathlib import Path
 
 # 添加项目根目录到路径
@@ -52,6 +52,20 @@ class VenusSystemMoti:
         self.batch_size = getattr(config, "benchmark_batch_size", 16)
         self.frame_interval = getattr(config, "frame_interval", 10)
         self.use_cloud = getattr(config, "benchmark_use_cloud", True)
+
+        # 检索钩子列表（每次 init 新 memory_manager 时会重新挂入）
+        self._retrieve_hooks: List[Callable] = []
+
+    def register_retrieve_hook(self, fn: Callable):
+        """
+        注册检索钩子，在每次 retrieve 时调用。
+        fn(query_vector, all_scores)：
+          - query_vector: np.ndarray, 查询向量
+          - all_scores: List[float], 长度为 vector_count，all_scores[i] 为向量 i 与 query 的距离
+        """
+        self._retrieve_hooks.append(fn)
+        if self.memory_manager is not None:
+            self.memory_manager.register_retrieve_hook(fn)
 
     def _setup_logger(self):
         self.logger = logging.getLogger("VenusSystemMoti")
@@ -131,6 +145,8 @@ class VenusSystemMoti:
         self.query_vectorizer = QueryVectorizer(self.config)
 
         self.memory_manager.init_sync()
+        for fn in self._retrieve_hooks:
+            self.memory_manager.register_retrieve_hook(fn)
         self.query_vectorizer._initialize_vectorizer()
 
         if video_path:
@@ -234,10 +250,16 @@ class VenusSystemMoti:
         """单次查询：编码 -> 检索 -> 推理"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
-        frame_list, scores = self.memory_manager.retrieve_sync(query_vector)
+        frame_list, scores, frames_metadata = self.memory_manager.retrieve_sync(query_vector)
         retrieve_time = time.time() - t0
 
-        result = {"question": question, "retrieve_time_sec": retrieve_time, "scores": scores}
+        result = {
+            "question": question,
+            "retrieve_time_sec": retrieve_time,
+            "scores": scores,
+            "retrieved_frames": frame_list if frame_list else [],
+            "retrieved_frames_metadata": frames_metadata if frames_metadata else [],
+        }
 
         query_text = question
         select_frame_num = len(frame_list) if frame_list else 0
