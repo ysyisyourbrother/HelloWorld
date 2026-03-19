@@ -16,6 +16,7 @@ import time
 import logging
 import faiss
 import cv2
+from tqdm import tqdm
 from typing import List, Dict, Any, Optional, Callable
 from pathlib import Path
 
@@ -55,6 +56,29 @@ class VenusSystemMoti:
 
         # 检索钩子列表（每次 init 新 memory_manager 时会重新挂入）
         self._retrieve_hooks: List[Callable] = []
+
+        # 编码钩子列表（每次 init 新 frame_vectorizer 时会重新挂入）
+        self._encode_hooks: List[tuple] = []  # [(fn, need_hidden_states, need_attentions), ...]
+
+    def register_encode_hook(
+        self,
+        fn: Callable,
+        need_hidden_states: bool = False,
+        need_attentions: bool = False,
+    ):
+        """
+        注册编码钩子，在 frame_vectorizer.encode_frames_batch 时调用。
+        fn(frame_data_list, vectors, hidden_states, attentions)：
+          - frame_data_list: List[FrameData]
+          - vectors: np.ndarray, shape (N, dim)
+          - hidden_states: Optional[Tuple]，仅当 need_hidden_states=True 时有值
+          - attentions: Optional[Tuple]，仅当 need_attentions=True 时有值（softmax(QK^T)）
+        """
+        self._encode_hooks.append((fn, need_hidden_states, need_attentions))
+        if self.frame_vectorizer is not None:
+            self.frame_vectorizer.register_encode_hook(
+                fn, need_hidden_states=need_hidden_states, need_attentions=need_attentions
+            )
 
     def register_retrieve_hook(self, fn: Callable):
         """
@@ -154,6 +178,10 @@ class VenusSystemMoti:
             self.config.stream_video_file_path = video_path
             self.stream_input = StreamInput(self.config)
             self.frame_vectorizer = FrameVectorizer(self.config)
+            for fn, need_hs, need_attn in self._encode_hooks:
+                self.frame_vectorizer.register_encode_hook(
+                    fn, need_hidden_states=need_hs, need_attentions=need_attn
+                )
             self.stream_input.init_for_file(video_path)
             self.frame_vectorizer._initialize_vectorizer()
         else:
@@ -161,11 +189,16 @@ class VenusSystemMoti:
             self.frame_vectorizer = None
 
     def _run_inject_phase(
-        self, video_path: str, video_id: str, dataset_name: str, subset: Optional[str] = None
+        self,
+        video_path: str,
+        video_id: str,
+        dataset_name: str,
+        subset: Optional[str] = None,
+        force_update: bool = True,
     ) -> Dict[str, Any]:
         """Inject 阶段：按 batch 读取、向量化、插入，按视频名保存"""
         faiss_path, map_path = self._get_db_paths(dataset_name, video_id, subset)
-        if os.path.isfile(faiss_path):
+        if os.path.isfile(faiss_path) and not force_update:
             self.logger.info(f"向量库已存在，跳过 inject: {faiss_path}")
             self._init_components(video_path=None, faiss_path=faiss_path, map_path=map_path)
             idx = faiss.read_index(faiss_path)
@@ -177,20 +210,37 @@ class VenusSystemMoti:
                 "skipped": True,
             }
 
+        if os.path.isfile(faiss_path) and force_update:
+            try:
+                os.remove(faiss_path)
+                self.logger.info(f"已删除旧向量库，将重新 inject: {faiss_path}")
+            except OSError as e:
+                self.logger.warning(f"删除 faiss 文件失败: {e}")
+            if os.path.isfile(map_path):
+                try:
+                    os.remove(map_path)
+                except OSError:
+                    pass
+
         self._init_components(video_path=video_path, faiss_path=faiss_path, map_path=map_path)
 
         total_frames = 0
         total_vectors = 0
         t0 = time.time()
 
-        for batch in self.stream_input.iter_frames_batch(
+        step = max(1, self.frame_interval)
+        num_encoded = (self.stream_input.total_frames + step - 1) // step
+        batch_iter = self.stream_input.iter_frames_batch(
             batch_size=self.batch_size, frame_interval=self.frame_interval
-        ):
-            total_frames += len(batch)
-            vector_data_list = self.frame_vectorizer.encode_frames_batch(batch)
-            self.memory_manager.add_vectors_batch(vector_data_list)
-            total_vectors += len(vector_data_list)
-            self.logger.debug(f"已处理 {total_frames} 帧，插入 {total_vectors} 向量")
+        )
+        with tqdm(total=num_encoded, unit="frame", desc="Encoding") as pbar:
+            for batch in batch_iter:
+                total_frames += len(batch)
+                vector_data_list = self.frame_vectorizer.encode_frames_batch(batch)
+                self.memory_manager.add_vectors_batch(vector_data_list)
+                total_vectors += len(vector_data_list)
+                pbar.update(len(batch))
+                self.logger.debug(f"已处理 {total_frames} 帧，插入 {total_vectors} 向量")
 
         self.memory_manager.current_video_name = None
         self.memory_manager.save_database_sync()
@@ -305,6 +355,7 @@ class VenusSystemMoti:
         video_id: str,
         dataset_name: str = "Video-MME",
         subset: Optional[str] = None,
+        force_update: bool = True,
     ) -> Dict[str, Any]:
         """
         对指定视频执行 inject（向量化并写入 faiss）。
@@ -314,11 +365,14 @@ class VenusSystemMoti:
             video_id: 视频 ID（用于保存 faiss/databasemap 文件名）
             dataset_name: 数据集名，用于确定 db 目录
             subset: 子集（如 short/medium/long）
+            force_update: 若为 True（默认），即使 faiss 已存在也强制重新 inject；若为 False 则跳过
 
         Returns:
             inject 统计信息
         """
-        return self._run_inject_phase(video_path, video_id, dataset_name, subset)
+        return self._run_inject_phase(
+            video_path, video_id, dataset_name, subset, force_update=force_update
+        )
 
     def query_video(
         self,
@@ -362,6 +416,7 @@ class VenusSystemMoti:
         questions: List[Dict[str, Any]],
         dataset_name: str = "Video-MME",
         subset: Optional[str] = None,
+        force_update: bool = True,
     ) -> Dict[str, Any]:
         """
         对指定视频执行完整流程：inject + 多次 query。
@@ -372,6 +427,7 @@ class VenusSystemMoti:
             questions: 问题列表，每项为 dict，需含 "question"，可选 "options"、"answer" 等
             dataset_name: 数据集名
             subset: 子集
+            force_update: 若为 True（默认），即使 faiss 已存在也强制重新 inject
 
         Returns:
             包含 inject_stats 和 query_results 的字典
@@ -383,7 +439,9 @@ class VenusSystemMoti:
                 reasoner._initialize_model()
                 self.logger.info("已预加载 LLaVA 模型")
 
-        inject_stats = self._run_inject_phase(video_path, video_id, dataset_name, subset)
+        inject_stats = self._run_inject_phase(
+            video_path, video_id, dataset_name, subset, force_update=force_update
+        )
         video_time = self._get_video_time()
 
         query_results = []
