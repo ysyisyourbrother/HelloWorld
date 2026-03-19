@@ -1,1 +1,2 @@
-nohup python launch_benchmark.py --config configs/config.json > bench.out 2>&1 & echo $! > bench.pid
+# nohup python launch_benchmark_venus.py --config configs/config.json > bench.out 2>&1 & echo $! > bench.pid
+nohup python launch_benchmark_symphony.py --config configs/symconfig.json > symphony.out 2>&1 & echo $! > symphony.pid
