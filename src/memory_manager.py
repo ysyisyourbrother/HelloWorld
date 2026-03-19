@@ -213,7 +213,7 @@ class ThreadSafeMap:
         raise NotImplementedError("按视频聚合格式不支持按索引删除")
 
 class MemoryManager:
-    """内存管理器"""
+    """记忆管理器"""
     def __init__(self, config: Config = None):
         """
         初始化MemoryManager模块

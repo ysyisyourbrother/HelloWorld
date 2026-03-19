@@ -169,3 +169,12 @@ class Config:
     def get_cloud_config(self):
         """获取cloud_server配置"""
         return self._config.get("cloud_server", {})
+
+
+class SymConfig(Config):
+    """继承 Config，默认使用 symconfig.json，额外解析 select_strategy"""
+
+    def __init__(self, config_path="configs/symconfig.json"):
+        super().__init__(config_path)
+        frame_config = self._config.get("frame_vectorizer", {})
+        self.frame_select_strategy = frame_config.get("select_strategy", "first")  # "random" | "first" | "pktsize"

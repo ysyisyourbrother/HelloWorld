@@ -14,6 +14,7 @@ from decord import VideoReader
 
 # 本项目
 from src.config import Config
+from src.video_utils.ffprobe_utils import get_frame_info_for_stream
 
 @dataclass
 class FrameData:
@@ -68,7 +69,7 @@ class StreamInput:
             except Exception as e:
                 pass
 
-        self.logger = logging.getLogger(name='StreamInput')
+        self.logger = logging.getLogger(name=self.__class__.__name__)
         # 清除旧的处理器，避免重复添加
         self.logger.handlers.clear()
         # 设置logger本身的级别，确保所有级别日志都能被处理
@@ -265,7 +266,7 @@ class StreamInput:
         # 注意：我们将视频源初始化移到子进程内部，确保资源在子进程上下文中正确创建
         self.process = mp.Process(target=self._process_main, daemon=True)
         if hasattr(self.process, 'name'):
-            self.process.name = "StreamInput-Extractor"
+            self.process.name = f"{self.__class__.__name__}-Extractor"
         self.process.start()
     
     def start_single_process(self):
@@ -386,3 +387,117 @@ class StreamInput:
             current_time = time.time()
         if batch:
             yield batch
+
+# pict_type 到整数的映射：I=0, P=1, B=2
+P_TYPE_I, P_TYPE_P, P_TYPE_B = 0, 1, 2
+PICT_TYPE_TO_INT = {"I": P_TYPE_I, "P": P_TYPE_P, "B": P_TYPE_B}
+
+
+@dataclass
+class SymFrameData:
+    frame: np.ndarray               # 帧numpy数组数据
+    frame_id: int                   # 帧ID
+    p_type: int                     # 在压缩算法中的类型 (0=I, 1=P, 2=B)
+    source_path: str                # 视频来源: "camera"或视频文件路径
+    pkt_size: Optional[int] = None  # 该包压缩后的大小
+    total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
+    video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
+    duration: Optional[float] = None    # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
+
+class SymStreamInput(StreamInput):
+    """
+    继承 StreamInput，按 p_type 分组返回帧：每次迭代返回两个 I 帧之间的帧（留头去尾）。
+    """
+
+    def __init__(self, config=None):
+        super().__init__(config)
+        self.i_frame_indices: list[int] = []
+        self.frame_types: list[str] = []
+        self.pkt_sizes: list[int] = []
+
+    def _to_sym_frame_data(
+        self,
+        frame: np.ndarray,
+        frame_id: int,
+        p_type: int,
+        source_path: str,
+        pkt_size: int | None = None,
+        total_frames: int | None = None,
+        video_fps: float | None = None,
+        duration: float | None = None,
+    ) -> SymFrameData:
+        """构造 SymFrameData，包含 p_type 与 pkt_size 信息"""
+        return SymFrameData(
+            frame=frame,
+            frame_id=frame_id,
+            p_type=p_type,
+            source_path=source_path,
+            pkt_size=pkt_size,
+            total_frames=total_frames,
+            video_fps=video_fps,
+            duration=duration,
+        )
+
+    def _extract_video_frame_at(self, frame_idx: int) -> SymFrameData | None:
+        """按索引提取单帧，返回 SymFrameData（含 p_type），不修改 current_frame_idx"""
+        if frame_idx < 0 or frame_idx >= self.total_frames:
+            return None
+        if frame_idx >= len(self.frame_types):
+            p_type_int = P_TYPE_I
+        else:
+            p_type_int = PICT_TYPE_TO_INT.get(self.frame_types[frame_idx], P_TYPE_I)
+
+        if self.reader_type == "decord" and self.vr is not None:
+            frame = self.vr[frame_idx].asnumpy()
+        elif self.reader_type == "cv2" and self.cap is not None:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = self.cap.read()
+            if not ret:
+                return None
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        else:
+            return None
+
+        pkt_size = None
+        if hasattr(self, "pkt_sizes") and self.pkt_sizes and frame_idx < len(self.pkt_sizes):
+            pkt_size = self.pkt_sizes[frame_idx]
+
+        return self._to_sym_frame_data(
+            frame=frame,
+            frame_id=frame_idx,
+            p_type=p_type_int,
+            source_path=self.video_file_path,
+            pkt_size=pkt_size,
+            total_frames=self.total_frames,
+            video_fps=self.video_fps,
+            duration=self.video_duration,
+        )
+
+    def init_for_file(self, video_file_path: str):
+        """为 SymStreamInput 同步模式初始化视频文件源，并获取 ffprobe 的 I 帧、pict_type、pkt_size 信息"""
+        super().init_for_file(video_file_path)
+        self.i_frame_indices, self.frame_types, self.pkt_sizes = get_frame_info_for_stream(video_file_path)
+        self.logger.info(f"ffprobe: I 帧数 {len(self.i_frame_indices)}, 总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}")
+
+    def iter_frames_by_gop(self) -> Iterator[List[SymFrameData]]:
+        """
+        按 GOP（两个 I 帧之间）迭代帧，留头去尾：含起始 I 帧，不含下一 I 帧。
+        需先调用 init_for_file(video_path)。
+
+        Yields:
+            每个 GOP 的 SymFrameData 列表，即 [I, P, P, B, ...] 直到下一 I 之前
+        """
+        if not self.i_frame_indices:
+            self.logger.warning("无 I 帧信息，无法按 GOP 迭代")
+            return
+
+        for k in range(len(self.i_frame_indices)):
+            start = self.i_frame_indices[k]
+            end = self.i_frame_indices[k + 1] if k + 1 < len(self.i_frame_indices) else self.total_frames
+            group: List[SymFrameData] = []
+            for idx in range(start, end):
+                fd = self._extract_video_frame_at(idx)
+                if fd is not None:
+                    group.append(fd)
+            if group:
+                yield group

@@ -1,17 +1,18 @@
 import multiprocessing as mp
 import numpy as np
+import random
 import torch
 import logging
 from logging.handlers import RotatingFileHandler
 import time
 import queue
 from dataclasses import dataclass
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Callable, Tuple
 import glob
 import os
 # 本项目
 from src.config import Config
-from src.stream_input import FrameData
+from src.stream_input import FrameData, SymFrameData
 from models.bge.modeling_MMRet_CLIP import CLIPModel
 
 @dataclass
@@ -49,15 +50,19 @@ class FrameVectorData:
 
 class ImageBGEVectorizer():
     """BGE模型向量化器"""
-    def __init__(self, device: str, model_path: str):
+    def __init__(self, device: str, model_path: str, attn_implementation: str = "sdpa"):
         self.device = device
-        
-        # 加载CLIPModel
-        self.model = CLIPModel.from_pretrained(model_path).to(self.device)
+        self.attn_implementation = attn_implementation
+
+        # 加载CLIPModel，attn_implementation="eager" 时支持 output_attentions
+        self.model = CLIPModel.from_pretrained(
+            model_path,
+            attn_implementation=attn_implementation,
+        ).to(self.device)
         self.model.set_processor(model_path)
         self.processor = self.model.processor  # 确保processor作为类属性存在
         self.model.eval()
-    
+
     def encode(self, frame):
         # 使用processor处理图像
         img = self.processor(images=frame, return_tensors="pt")['pixel_values'].to(self.device)
@@ -73,6 +78,33 @@ class ImageBGEVectorizer():
         with torch.no_grad():
             vectors = self.model.encode_image(images=img)
         return vectors
+
+    def encode_batch_with_vision_outputs(
+        self,
+        frames: list,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[object]]:
+        """
+        批量编码并返回 vision_model 的 hidden_states 和 attentions。
+        当 output_attentions=True 时，需使用 attn_implementation="eager" 初始化。
+
+        Returns:
+            (vectors, vision_outputs): vectors 为归一化后的嵌入；vision_outputs 含 .hidden_states 和 .attentions
+        """
+        if not frames:
+            return torch.empty(0), None
+        img = self.processor(images=frames, return_tensors="pt")["pixel_values"].to(self.device)
+        with torch.no_grad():
+            vision_outputs = self.model.vision_model(
+                pixel_values=img,
+                output_hidden_states=output_hidden_states,
+                output_attentions=output_attentions,
+            )
+            pooled_output = vision_outputs[1]
+            image_features = self.model.visual_projection(pooled_output)
+            vectors = torch.nn.functional.normalize(image_features, dim=-1)
+        return vectors, vision_outputs
     
 class FrameVectorizer:
     def __init__(self, config: Config = None):
@@ -100,6 +132,11 @@ class FrameVectorizer:
         self.running = False
         self.vectorized_frame_count = 0
         self.all_frame_count = 0
+
+        # 编码钩子：在 encode_frames_batch 时调用，fn(frame_data_list, vectors, hidden_states, attentions)
+        self._encode_hooks: List[Callable] = []
+        self._encode_hooks_need_hidden_states = False
+        self._encode_hooks_need_attentions = False
         
     def _set_logger(self):
         """设置日志记录器"""
@@ -112,7 +149,7 @@ class FrameVectorizer:
             except Exception as e:
                 pass
 
-        self.logger = logging.getLogger(name='FrameVectorizer')
+        self.logger = logging.getLogger(name=self.__class__.__name__)
         self.logger.handlers.clear()
         # 设置logger本身的级别，确保所有级别日志都能被处理
         self.logger.setLevel(logging.DEBUG)
@@ -131,14 +168,42 @@ class FrameVectorizer:
         self.logger.addHandler(file_handler)
         self.logger.propagate = False
 
+    def register_encode_hook(
+        self,
+        fn: Callable,
+        need_hidden_states: bool = False,
+        need_attentions: bool = False,
+    ):
+        """
+        注册编码钩子，在 encode_frames_batch 时调用。
+
+        fn(frame_data_list, vectors, hidden_states, attentions)：
+          - frame_data_list: List[FrameData]
+          - vectors: np.ndarray, shape (N, dim)
+          - hidden_states: Optional[Tuple], 每层 (bsz, seq_len, hidden_size)，仅当 need_hidden_states=True 时有值
+          - attentions: Optional[Tuple], 每层 (bsz, num_heads, seq_len, seq_len) softmax(QK^T)，仅当 need_attentions=True 时有值
+
+        need_attentions=True 时，需使用 attn_implementation="eager" 加载模型，否则可能报错。
+        """
+        self._encode_hooks.append(fn)
+        if need_hidden_states:
+            self._encode_hooks_need_hidden_states = True
+        if need_attentions:
+            self._encode_hooks_need_attentions = True
+
     def _initialize_vectorizer(self):
         """初始化向量化器"""
+        attn_impl = "eager" if self._encode_hooks_need_attentions else "sdpa"
         if self.model_type == "BGE":
-            self.vectorizer = ImageBGEVectorizer(self.frame_device, self.frame_model_path)
+            self.vectorizer = ImageBGEVectorizer(
+                self.frame_device, self.frame_model_path, attn_implementation=attn_impl
+            )
         elif self.model_type == "ViT":
             # 为了兼容性保留ViT选项，但实际上使用BGE
             print("注意: 当前配置为ViT: 但将使用BGE模型")
-            self.vectorizer = ImageBGEVectorizer(self.frame_device, self.frame_model_path)
+            self.vectorizer = ImageBGEVectorizer(
+                self.frame_device, self.frame_model_path, attn_implementation=attn_impl
+            )
         else:
             raise ValueError(f"不支持的模型类型: {self.model_type}")
     
@@ -219,7 +284,7 @@ class FrameVectorizer:
         # 设置线程为daemon模式，确保主程序退出时线程也会退出
         self.process = mp.Process(target=self._process_main, daemon=True)
         if hasattr(self.process, 'name'):
-            self.process.name = "FrameVectorizer-Processor"
+            self.process.name = f"{self.__class__.__name__}-Processor"
         self.process.start()
     
     def start_single_process(self):
@@ -271,8 +336,33 @@ class FrameVectorizer:
         if self.vectorizer is None:
             self._initialize_vectorizer()
         frames = [self._preprocess_single_frame(fd.frame) for fd in frame_data_list]
-        vector_tensors = self.vectorizer.encode_batch(frames)
-        vectors_np = vector_tensors.cpu().numpy()
+
+        if self._encode_hooks:
+            need_hs = self._encode_hooks_need_hidden_states
+            need_attn = self._encode_hooks_need_attentions
+            vector_tensors, vision_outputs = self.vectorizer.encode_batch_with_vision_outputs(
+                frames, output_hidden_states=need_hs, output_attentions=need_attn
+            )
+            vectors_np = vector_tensors.cpu().numpy()
+            hidden_states = None
+            attentions = None
+            if vision_outputs is not None:
+                if need_hs and vision_outputs.hidden_states is not None:
+                    hidden_states = tuple(h.cpu().numpy() for h in vision_outputs.hidden_states)
+                if need_attn and vision_outputs.attentions is not None:
+                    attentions = tuple(a.cpu().numpy() for a in vision_outputs.attentions)
+            for fn in self._encode_hooks:
+                try:
+                    fn(frame_data_list, vectors_np, hidden_states, attentions)
+                except Exception as e:
+                    if hasattr(self, "logger"):
+                        self.logger.warning(f"编码钩子执行异常: {e}")
+                    else:
+                        logging.getLogger(__name__).warning(f"编码钩子执行异常: {e}")
+        else:
+            vector_tensors = self.vectorizer.encode_batch(frames)
+            vectors_np = vector_tensors.cpu().numpy()
+
         result = []
         for i, fd in enumerate(frame_data_list):
             vec = vectors_np[i] if len(vectors_np.shape) > 1 else vectors_np
@@ -289,13 +379,75 @@ class FrameVectorizer:
             ))
         return result
 
-if __name__ == "__main__":
-    # 测试代码
-    frame_vectorizer = FrameVectorizer()
-    try:
-        frame_vectorizer.start()
-        time.sleep(5)  # 运行5秒进行测试
-    except KeyboardInterrupt:
-        pass
-    finally:
-        frame_vectorizer.stop()
+
+class SymFrameVectorizer(FrameVectorizer):
+    """
+    继承 FrameVectorizer，支持按 GOP 编码：通过 select_frame_in_gop 筛选帧后仅编码选中的帧。
+    """
+
+    def __init__(self, config: Config = None):
+        super().__init__(config)
+        self.select_strategy = config.frame_select_strategy  # "random" | "first" | "pktsize"
+
+    def select_frame_in_gop(self, gop_frames: List[SymFrameData]) -> List[SymFrameData]:
+        """
+        根据 select_strategy 从 GOP 帧列表中筛选要编码的帧。
+
+        Args:
+            gop_frames: 一个 GOP 内的帧列表（SymFrameData）
+
+        Returns:
+            筛选后的帧列表
+        """
+        if not gop_frames:
+            return []
+
+        if self.select_strategy == "first":
+            return [gop_frames[0]]
+        elif self.select_strategy == "random":
+            return [random.choice(gop_frames)]
+        elif self.select_strategy == "pktsize":
+            raise NotImplementedError("select_strategy 'pktsize' 暂未实现")
+        else:
+            if hasattr(self, "logger"):
+                self.logger.warning(f"未知的 select_strategy '{self.select_strategy}'，回退为 first")
+            return [gop_frames[0]]
+
+    def encode_frames_by_gop(self, gop_frames: List[SymFrameData]) -> List[FrameVectorData]:
+        """
+        对 GOP 内帧先按 select_frame_in_gop 筛选，再仅编码筛选出的帧。
+        不依赖 encode_frames_batch，不触发编码钩子。
+
+        Args:
+            gop_frames: 一个 GOP 的 SymFrameData 列表
+
+        Returns:
+            编码后的 FrameVectorData 列表
+        """
+        selected = self.select_frame_in_gop(gop_frames)
+        if not selected:
+            return []
+
+        if self.vectorizer is None:
+            self._initialize_vectorizer()
+
+        frames = [self._preprocess_single_frame(sf.frame) for sf in selected]
+        vector_tensors = self.vectorizer.encode_batch(frames)
+        vectors_np = vector_tensors.cpu().numpy()
+
+        result = []
+        for i, sf in enumerate(selected):
+            vec = vectors_np[i] if len(vectors_np.shape) > 1 else vectors_np
+            if len(vec.shape) == 1:
+                vec = vec.reshape(1, -1)
+            ts = sf.frame_id / sf.video_fps if sf.video_fps else 0.0
+            result.append(FrameVectorData(
+                vector=vec,
+                timestamp=ts,
+                frame_id=sf.frame_id,
+                source_path=sf.source_path,
+                total_frames=sf.total_frames,
+                video_fps=sf.video_fps,
+                duration=sf.duration,
+            ))
+        return result
