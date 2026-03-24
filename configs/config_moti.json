@@ -3,7 +3,7 @@
     "log_file": "logs/stream_input.log",
     "video_source": "file",
     "video_file_path": "demo/assets/cooking.mp4",
-    "reader_type": "cv2",
+    "reader_type": "decord",
     "original_fps": false,
     "target_fps": 8
     },
@@ -79,8 +79,8 @@
     "dataset_path": "local_datasets",
     "video_dir_egoschema": "local_datasets/egoschema/videos",
     "video_dir_videomme": "local_datasets/Video-MME/data",
-    "db_dir_egoschema": "motivation_results",
-    "db_dir_videomme": "motivation_results",
+    "db_dir_egoschema": "motivation_results/memory/egoschema",
+    "db_dir_videomme": "motivation_results/memory/videomme",
     "batch_size": 16,
     "result_dir": "motivation_results",
     "use_cloud": false

@@ -717,9 +717,11 @@ class SymphonySystemBench(VenusSystemBench):
         total_vectors = 0
         t0 = time.time()
 
-        for gop_frames in self.stream_input.iter_frames_by_gop():
-            total_frames += len(gop_frames)
-            vector_data_list = self.frame_vectorizer.encode_frames_by_gop(gop_frames)
+        for gop_start, gop_end in self.stream_input.iter_gop_ranges():
+            total_frames += gop_end - gop_start
+            vector_data_list = self.frame_vectorizer.encode_frames_by_gop_from_stream(
+                self.stream_input, gop_start, gop_end
+            )
             self.memory_manager.add_vectors_batch(vector_data_list)
             total_vectors += len(vector_data_list)
             self.logger.debug(f"已处理 {total_frames} 帧，插入 {total_vectors} 向量")

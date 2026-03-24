@@ -12,7 +12,7 @@ import glob
 import os
 # 本项目
 from src.config import Config
-from src.stream_input import FrameData, SymFrameData
+from src.stream_input import FrameData, SymFrameData, SymStreamInput
 from models.bge.modeling_MMRet_CLIP import CLIPModel
 
 @dataclass
@@ -389,15 +389,45 @@ class SymFrameVectorizer(FrameVectorizer):
         super().__init__(config)
         self.select_strategy = config.frame_select_strategy  # "random" | "first" | "pktsize"
 
+    def select_frame_indices_in_gop(
+        self,
+        gop_start: int,
+        gop_end: int,
+        frame_types: List[str],
+        pkt_sizes: List[int],
+    ) -> List[int]:
+        """
+        根据 select_strategy 返回该 GOP 内要解码的帧索引（先筛选再解码，避免解码全部帧）。
+
+        Args:
+            gop_start: GOP 起始帧索引（含）
+            gop_end: GOP 结束帧索引（不含）
+            frame_types: 全视频的 pict_type 列表
+            pkt_sizes: 全视频的 pkt_size 列表
+
+        Returns:
+            要提取的帧索引列表
+        """
+        n = gop_end - gop_start
+        if n <= 0:
+            return []
+
+        if self.select_strategy == "first":
+            return [gop_start]
+        elif self.select_strategy == "random":
+            idx = random.randint(0, n - 1)
+            return [gop_start + idx]
+        elif self.select_strategy == "pktsize":
+            raise NotImplementedError("select_strategy 'pktsize' 暂未实现")
+        else:
+            if hasattr(self, "logger"):
+                self.logger.warning(f"未知的 select_strategy '{self.select_strategy}'，回退为 first")
+            return [gop_start]
+
     def select_frame_in_gop(self, gop_frames: List[SymFrameData]) -> List[SymFrameData]:
         """
         根据 select_strategy 从 GOP 帧列表中筛选要编码的帧。
-
-        Args:
-            gop_frames: 一个 GOP 内的帧列表（SymFrameData）
-
-        Returns:
-            筛选后的帧列表
+        注意：会先解码全部帧再筛选，仅当已有完整帧数据时使用；否则用 encode_frames_by_gop_from_stream。
         """
         if not gop_frames:
             return []
@@ -412,6 +442,57 @@ class SymFrameVectorizer(FrameVectorizer):
             if hasattr(self, "logger"):
                 self.logger.warning(f"未知的 select_strategy '{self.select_strategy}'，回退为 first")
             return [gop_frames[0]]
+
+    def encode_frames_by_gop_from_stream(
+        self, stream_input: SymStreamInput, gop_start: int, gop_end: int
+    ) -> List[FrameVectorData]:
+        """
+        对单个 GOP 先按 select_strategy 选索引，仅解码选中帧，再编码。
+        避免解码全部 2227 帧，大幅提升速度。
+
+        Args:
+            stream_input: SymStreamInput 实例（含 frame_types、pkt_sizes）
+            gop_start: GOP 起始帧索引
+            gop_end: GOP 结束帧索引
+
+        Returns:
+            编码后的 FrameVectorData 列表
+        """
+        indices = self.select_frame_indices_in_gop(
+            gop_start, gop_end,
+            stream_input.frame_types, stream_input.pkt_sizes,
+        )
+        if not indices:
+            return []
+
+        selected = [stream_input._extract_video_frame_at(i) for i in indices]
+        selected = [s for s in selected if s is not None]
+        if not selected:
+            return []
+
+        if self.vectorizer is None:
+            self._initialize_vectorizer()
+
+        frames = [self._preprocess_single_frame(sf.frame) for sf in selected]
+        vector_tensors = self.vectorizer.encode_batch(frames)
+        vectors_np = vector_tensors.cpu().numpy()
+
+        result = []
+        for i, sf in enumerate(selected):
+            vec = vectors_np[i] if len(vectors_np.shape) > 1 else vectors_np
+            if len(vec.shape) == 1:
+                vec = vec.reshape(1, -1)
+            ts = sf.frame_id / sf.video_fps if sf.video_fps else 0.0
+            result.append(FrameVectorData(
+                vector=vec,
+                timestamp=ts,
+                frame_id=sf.frame_id,
+                source_path=sf.source_path,
+                total_frames=sf.total_frames,
+                video_fps=sf.video_fps,
+                duration=sf.duration,
+            ))
+        return result
 
     def encode_frames_by_gop(self, gop_frames: List[SymFrameData]) -> List[FrameVectorData]:
         """
@@ -451,3 +532,4 @@ class SymFrameVectorizer(FrameVectorizer):
                 duration=sf.duration,
             ))
         return result
+

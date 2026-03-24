@@ -14,8 +14,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.config import Config
-from src.venus_system_motivation import VenusSystemMoti
+from src.config import SymConfig
+from src.venus_system_motivation import SymphonySystemMoti
 
 
 def parse_args():
@@ -29,7 +29,7 @@ def parse_args():
     parser.add_argument(
         "--output_path",
         type=str,
-        default="motivation_results/retrieve",
+        default="motivation_results_symphony/retrieve",
         help="输出图片路径",
     )
     return parser.parse_args()
@@ -53,10 +53,10 @@ def main():
         captured["query_vector"] = query_vector.copy()
         captured["all_scores"] = all_scores.copy()
 
-    config=Config(config_path="configs/config_moti_retrieve.json")
+    config = SymConfig(config_path="configs/symconfig_moti.json")
     # config.benchmark_use_cloud = False
 
-    moti = VenusSystemMoti(config)
+    moti = SymphonySystemMoti(config)
     moti.register_retrieve_hook(capture_all_scores)
 
     result = moti.run_video_flow(
@@ -64,8 +64,8 @@ def main():
         video_id="44ivpEIcBhE",
         questions=[
             {
-                # "question": "Which instrument is the performer on the stage holding in the video?",
-                "question": "Instrument?",
+                "question": "Which instrument is the performer on the stage holding in the video?",
+                # "question": "Instrument?",
                 "options": [
                     "A. Trumpet.",
                     "B. Saxophone.",

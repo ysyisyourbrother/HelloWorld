@@ -479,13 +479,13 @@ class SymStreamInput(StreamInput):
         self.i_frame_indices, self.frame_types, self.pkt_sizes = get_frame_info_for_stream(video_file_path)
         self.logger.info(f"ffprobe: I 帧数 {len(self.i_frame_indices)}, 总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}")
 
-    def iter_frames_by_gop(self) -> Iterator[List[SymFrameData]]:
+    def iter_gop_ranges(self) -> Iterator[tuple[int, int]]:
         """
-        按 GOP（两个 I 帧之间）迭代帧，留头去尾：含起始 I 帧，不含下一 I 帧。
+        按 GOP 迭代，仅返回 (start, end) 索引范围，不解码帧。
         需先调用 init_for_file(video_path)。
 
         Yields:
-            每个 GOP 的 SymFrameData 列表，即 [I, P, P, B, ...] 直到下一 I 之前
+            (start, end) 元组，表示该 GOP 的帧索引范围 [start, end)
         """
         if not self.i_frame_indices:
             self.logger.warning("无 I 帧信息，无法按 GOP 迭代")
@@ -494,6 +494,21 @@ class SymStreamInput(StreamInput):
         for k in range(len(self.i_frame_indices)):
             start = self.i_frame_indices[k]
             end = self.i_frame_indices[k + 1] if k + 1 < len(self.i_frame_indices) else self.total_frames
+            yield start, end
+
+    def iter_frames_by_gop(self) -> Iterator[List[SymFrameData]]:
+        """
+        按 GOP（两个 I 帧之间）迭代帧，留头去尾：含起始 I 帧，不含下一 I 帧。
+        会解码该 GOP 内每一帧，仅当需要完整帧数据时使用；否则优先用 iter_gop_ranges + 按需解码。
+
+        Yields:
+            每个 GOP 的 SymFrameData 列表，即 [I, P, P, B, ...] 直到下一 I 之前
+        """
+        if not self.i_frame_indices:
+            self.logger.warning("无 I 帧信息，无法按 GOP 迭代")
+            return
+
+        for start, end in self.iter_gop_ranges():
             group: List[SymFrameData] = []
             for idx in range(start, end):
                 fd = self._extract_video_frame_at(idx)
