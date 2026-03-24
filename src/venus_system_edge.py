@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import Config
 from src.api_server_e import APIServerE
-from src.stream_input import StreamInput
+from src.video_input import VideoInput
 from src.frame_vectorizer import FrameVectorizer
 from src.memory_manager import MemoryManager
 from src.query_vectorizer import QueryVectorizer
@@ -40,7 +40,7 @@ class VenusSystemEdge:
         
         # 组件
         self.api_server: Optional[APIServerE] = None
-        self.stream_input: Optional[StreamInput] = None
+        self.video_input: Optional[VideoInput] = None
         self.frame_vectorizer: Optional[FrameVectorizer] = None
         self.memory_manager: Optional[MemoryManager] = None
         self.query_vectorizer: Optional[QueryVectorizer] = None
@@ -102,17 +102,17 @@ class VenusSystemEdge:
             raise ValueError(f"不支持的 edge_mode: {self.edge_mode}")
     
     def _initialize_query_while_inject(self):
-        """query_while_inject：StreamInput, FrameVectorizer, QueryVectorizer, MemoryManager, APIServerE"""
+        """query_while_inject：VideoInput, FrameVectorizer, QueryVectorizer, MemoryManager, APIServerE"""
         self.config.memory_mode = "both"
         
-        self.stream_input = StreamInput(self.config)
+        self.video_input = VideoInput(self.config)
         self.frame_vectorizer = FrameVectorizer(self.config)
         self.query_vectorizer = QueryVectorizer(self.config)
         self.memory_manager = MemoryManager(self.config)
         self.api_server = APIServerE(self.config)
         
-        # 队列连接：StreamInput -> FrameVectorizer -> MemoryManager
-        self.frame_vectorizer.set_frame_queue(self.stream_input.frame_queue)
+        # 队列连接：VideoInput -> FrameVectorizer -> MemoryManager
+        self.frame_vectorizer.set_frame_queue(self.video_input.frame_queue)
         self.memory_manager.set_frame_vector_queue(self.frame_vectorizer.get_vector_queue())
         
         # 队列连接：APIServerE -> QueryVectorizer -> MemoryManager -> APIServerE
@@ -140,14 +140,14 @@ class VenusSystemEdge:
         self.logger.info("query_with_memory 组件初始化完成")
     
     def _initialize_only_inject(self):
-        """only_inject：StreamInput, FrameVectorizer, MemoryManager；仅编码与建索引"""
+        """only_inject：VideoInput, FrameVectorizer, MemoryManager；仅编码与建索引"""
         self.config.memory_mode = "only_inject"
         
-        self.stream_input = StreamInput(self.config)
+        self.video_input = VideoInput(self.config)
         self.frame_vectorizer = FrameVectorizer(self.config)
         self.memory_manager = MemoryManager(self.config)
         
-        self.frame_vectorizer.set_frame_queue(self.stream_input.frame_queue)
+        self.frame_vectorizer.set_frame_queue(self.video_input.frame_queue)
         self.memory_manager.set_frame_vector_queue(self.frame_vectorizer.get_vector_queue())
         
         self.logger.info("only_inject 组件初始化完成")
@@ -213,9 +213,9 @@ class VenusSystemEdge:
         if self.frame_vectorizer is not None:
             self.logger.debug("启动 FrameVectorizer...")
             self.frame_vectorizer.start()
-        if self.stream_input is not None:
-            self.logger.debug("启动 StreamInput...")
-            self.stream_input.start()
+        if self.video_input is not None:
+            self.logger.debug("启动 VideoInput...")
+            self.video_input.start()
         
         if self.api_server is not None:
             self.api_server.start()
@@ -248,13 +248,13 @@ class VenusSystemEdge:
         if self.frame_vectorizer is not None:
             self.logger.debug("启动 FrameVectorizer...")
             self.frame_vectorizer.start()
-        if self.stream_input is not None:
-            self.logger.debug("启动 StreamInput...")
-            self.stream_input.start()
+        if self.video_input is not None:
+            self.logger.debug("启动 VideoInput...")
+            self.video_input.start()
         
         self.logger.info("only_inject：正在对视频进行编码与建索引，等待完成...")
-        if self.stream_input is not None and hasattr(self.stream_input, 'process') and self.stream_input.process is not None:
-            self.stream_input.process.join()
+        if self.video_input is not None and hasattr(self.video_input, 'process') and self.video_input.process is not None:
+            self.video_input.process.join()
         # 给流水线一点时间排空
         import time
         time.sleep(3.0)
@@ -274,12 +274,12 @@ class VenusSystemEdge:
         self.logger.info("正在关闭边端系统...")
         self.running = False
         
-        if self.stream_input is not None:
+        if self.video_input is not None:
             try:
-                self.stream_input.stop()
-                self.logger.debug("StreamInput 已停止")
+                self.video_input.stop()
+                self.logger.debug("VideoInput 已停止")
             except Exception as e:
-                self.logger.error(f"停止 StreamInput 时出错: {e}")
+                self.logger.error(f"停止 VideoInput 时出错: {e}")
         
         if self.frame_vectorizer is not None:
             try:

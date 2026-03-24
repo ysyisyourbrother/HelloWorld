@@ -1,9 +1,7 @@
 {
-  "stream_input": {
-    "log_file": "logs/stream_input.log",
-    "video_source": "file",
+  "video_input": {
+    "log_file": "logs/video_input.log",
     "video_file_path": "demo/assets/cooking.mp4",
-    "reader_type": "decord",
     "original_fps": false,
     "target_fps": 8
     },

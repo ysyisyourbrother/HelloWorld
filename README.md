@@ -1,6 +1,6 @@
 # 即将更新
 1. 把Reasoner部署成类似于vllm的服务.
-2. 给stream_input.py、frame_vectorizer.py、memory_manager.py增加离线批量编码功能，并将编码增量存储到faiss中
+2. 给video_input.py、frame_vectorizer.py、memory_manager.py增加离线批量编码功能，并将编码增量存储到faiss中
 3. config增加一个选项用于只推理不同时加memory
 
 # 代码结构
@@ -22,9 +22,9 @@
 
 在客户端(边端)把整个系统按阶段分为：
 
-1. **StreamInput**: 负责从视频流中提取帧. 给FrameVectorizer提供帧数据. 视频流可以是摄像头的实时视频流, 也可以用本地的视频文件模拟视频流. 根据Config中的参数, 支持不同的FPS. 提供一个进程, 负责从视频流中提取帧, 并把提取到的帧发送给FrameVectorizer.
+1. **VideoInput**: 负责从本地视频文件提取帧. 给FrameVectorizer提供帧数据. 根据Config中的参数, 支持不同的FPS. 提供一个进程, 负责按配置从视频读取帧, 并把提取到的帧发送给FrameVectorizer.
 
-2. **FrameVectorizer**: 负责把提取到的帧转换为某种语义向量(用作记忆模块的语义索引)和时间索引, 给MemoryManager提供向量数据. 根据Config中的参数, 可以选择不同的编码模型, 比如ViT; 也可以选择不同的提取策略, 比如每帧提取一个向量, 还是每n帧提取一个向量(此时要记录关键帧位置), 还是Early-exit策略; 也可以选择使用小型VLM, 提取这些视觉tokens的KVCache均值. 提供一个进程, 负责从StreamInput接收帧数据(进行机内进程间通讯), 并把提取到的向量发送给MemoryManager.
+2. **FrameVectorizer**: 负责把提取到的帧转换为某种语义向量(用作记忆模块的语义索引)和时间索引, 给MemoryManager提供向量数据. 根据Config中的参数, 可以选择不同的编码模型, 比如ViT; 也可以选择不同的提取策略, 比如每帧提取一个向量, 还是每n帧提取一个向量(此时要记录关键帧位置), 还是Early-exit策略; 也可以选择使用小型VLM, 提取这些视觉tokens的KVCache均值. 提供一个进程, 负责从VideoInput接收帧数据(进行机内进程间通讯), 并把提取到的向量发送给MemoryManager.
 
 3. **QueryVectorizer**: 负责把用户的自然语言查询转换为某种语义向量(用作记忆模块的查询索引), 给MemoryManager提供向量数据. 根据Config中的参数, 可以选择不同的编码模型; 提供一个进程, 负责从APIServerE接收查询数据(进行机内进程间通讯), 并把提取到的向量发送给MemoryManager.
 

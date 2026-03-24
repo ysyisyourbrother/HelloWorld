@@ -12,7 +12,7 @@ import glob
 import os
 # 本项目
 from src.config import Config
-from src.stream_input import FrameData, SymFrameData, SymStreamInput
+from src.video_input import FrameData, SymFrameData, SymVideoInput
 from models.bge.modeling_MMRet_CLIP import CLIPModel
 
 @dataclass
@@ -126,7 +126,7 @@ class FrameVectorizer:
         self.frame_model_path = config.frame_model_path
         
         self.vectorizer = None
-        self.frame_queue = None  # 需要由stream_input设置
+        self.frame_queue = None  # 需要由 VideoInput 设置
         # 创建向量队列，使用multiprocessing.Queue以支持多进程间通信
         self.frame_vector_queue = mp.Queue(maxsize=100)
         self.running = False
@@ -427,7 +427,7 @@ class SymFrameVectorizer(FrameVectorizer):
     def select_frame_in_gop(self, gop_frames: List[SymFrameData]) -> List[SymFrameData]:
         """
         根据 select_strategy 从 GOP 帧列表中筛选要编码的帧。
-        注意：会先解码全部帧再筛选，仅当已有完整帧数据时使用；否则用 encode_frames_by_gop_from_stream。
+        注意：会先解码全部帧再筛选，仅当已有完整帧数据时使用；否则用 encode_frames_by_gop_from_video_input。
         """
         if not gop_frames:
             return []
@@ -443,15 +443,15 @@ class SymFrameVectorizer(FrameVectorizer):
                 self.logger.warning(f"未知的 select_strategy '{self.select_strategy}'，回退为 first")
             return [gop_frames[0]]
 
-    def encode_frames_by_gop_from_stream(
-        self, stream_input: SymStreamInput, gop_start: int, gop_end: int
+    def encode_frames_by_gop_from_video_input(
+        self, video_input: SymVideoInput, gop_start: int, gop_end: int
     ) -> List[FrameVectorData]:
         """
         对单个 GOP 先按 select_strategy 选索引，仅解码选中帧，再编码。
         避免解码全部 2227 帧，大幅提升速度。
 
         Args:
-            stream_input: SymStreamInput 实例（含 frame_types、pkt_sizes）
+            video_input: SymVideoInput 实例（含 frame_types、pkt_sizes）
             gop_start: GOP 起始帧索引
             gop_end: GOP 结束帧索引
 
@@ -460,12 +460,12 @@ class SymFrameVectorizer(FrameVectorizer):
         """
         indices = self.select_frame_indices_in_gop(
             gop_start, gop_end,
-            stream_input.frame_types, stream_input.pkt_sizes,
+            video_input.frame_types, video_input.pkt_sizes,
         )
         if not indices:
             return []
 
-        selected = [stream_input._extract_video_frame_at(i) for i in indices]
+        selected = [video_input._extract_video_frame_at(i) for i in indices]
         selected = [s for s in selected if s is not None]
         if not selected:
             return []

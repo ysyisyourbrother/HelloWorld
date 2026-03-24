@@ -28,14 +28,12 @@ class Config:
     
     def _set_attributes(self):
         """将配置设置为类属性"""
-        # Stream Input配置
-        stream_config = self._config.get("stream_input", {})
-        self.stream_log_file = stream_config.get("log_file", "logs/stream_input.log")
-        self.stream_video_source = stream_config.get("video_source", "camera") # "camera" or "file"
-        self.stream_video_file_path = stream_config.get("video_file_path", "demo/assets/cooking.mp4")
-        self.stream_reader_type = stream_config.get("reader_type", "cv2")  # 视频读取器类型: "cv2" 或 "decord"
-        self.stream_original_fps = stream_config.get("original_fps", True)  # 是否按原帧率入队
-        self.stream_target_fps = stream_config.get("target_fps", 8)  # 特定帧率
+        # Video Input 配置（video_input 段；兼容旧键名 stream_input）
+        video_config = self._config.get("video_input") or self._config.get("stream_input", {})
+        self.video_log_file = video_config.get("log_file", "logs/video_input.log")
+        self.video_file_path = video_config.get("video_file_path", "demo/assets/cooking.mp4")
+        self.video_original_fps = video_config.get("original_fps", True)  # 是否按原帧率入队
+        self.video_target_fps = video_config.get("target_fps", 8)  # 特定帧率
 
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})
@@ -138,9 +136,9 @@ class Config:
             return self._config.get(section, {})
         return self._config
     
-    def get_stream_config(self):
-        """获取stream_input配置"""
-        return self._config.get("stream_input", {})
+    def get_video_config(self):
+        """获取 video_input 配置"""
+        return self._config.get("video_input") or self._config.get("stream_input", {})
     
     def get_frame_config(self):
         """获取frame_vectorizer配置"""
@@ -177,4 +175,4 @@ class SymConfig(Config):
     def __init__(self, config_path="configs/symconfig.json"):
         super().__init__(config_path)
         frame_config = self._config.get("frame_vectorizer", {})
-        self.frame_select_strategy = frame_config.get("select_strategy", "first")  # "random" | "first" | "pktsize"
+        self.frame_select_strategy = frame_config.get("select_strategy", "random")  # "random" | "first" | "pktsize"

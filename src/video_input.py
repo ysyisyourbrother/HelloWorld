@@ -1,4 +1,3 @@
-import cv2
 import os
 import glob
 import multiprocessing as mp
@@ -27,12 +26,12 @@ class FrameData:
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
     duration: Optional[float] = None     # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
 
-class StreamInput:
+class VideoInput:
     def __init__(self, config=None):
         """
-        初始化StreamInput模块
-        负责从视频流中提取帧，支持摄像头实时视频流或本地视频文件
-        
+        初始化 VideoInput 模块
+        负责从本地视频文件提取帧并送入队列。
+
         Args:
             config (Config): 配置对象实例
         """
@@ -40,13 +39,10 @@ class StreamInput:
             config = Config()
 
         # 从Config对象获取配置
-        self.video_source = config.stream_video_source
-        self.video_file_path = config.stream_video_file_path
-        # 获取视频读取器类型
-        self.reader_type = config.stream_reader_type
-        self.log_file = config.stream_log_file
-        self.is_original_fps = config.stream_original_fps
-        self.target_fps = config.stream_target_fps
+        self.video_file_path = config.video_file_path
+        self.log_file = config.video_log_file
+        self.is_original_fps = config.video_original_fps
+        self.target_fps = config.video_target_fps
 
         # 使用multiprocessing.Queue以支持多进程间通信
         self.frame_queue = mp.Queue(maxsize=100)
@@ -90,31 +86,8 @@ class StreamInput:
     
     def _initialize_video_source(self):
         """初始化视频源"""
-        if self.video_source == "camera":
-            # 摄像头仍然使用cv2，因为decord不支持实时流
-            self.logger.info(f"使用cv2初始化摄像头视频源")
-            self.cap = cv2.VideoCapture(0)
-            if not self.cap.isOpened():
-                raise Exception(f"无法打开摄像头: {self.video_source}")
-            
-        elif self.video_source == "file":
-            self.logger.info(f"使用{self.reader_type}初始化文件视频源")
-            if self.reader_type == 'decord':
-                self._decord_load_video(self.video_file_path)
-            else:
-                self._cv2_load_video(self.video_file_path)
+        self._decord_load_video(self.video_file_path)
         self.current_frame_idx = 0
-
-    def _cv2_load_video(self, video_file_path: str) -> bool:
-        """使用cv2加载视频文件"""
-        self.cap = cv2.VideoCapture(video_file_path)
-        
-        self.video_fps = self.cap.get(cv2.CAP_PROP_FPS)
-        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.video_duration = self.total_frames / self.video_fps if self.video_fps and self.video_fps > 0 else 0
-        
-        self.logger.info(f"视频加载成功: 总帧数 {self.total_frames}, FPS: {self.video_fps}, 时长: {self.video_duration:.2f}s")
-        return True
     
     def _decord_load_video(self, video_file_path: str) -> bool:
         """使用decord加载视频文件"""
@@ -142,19 +115,7 @@ class StreamInput:
             video_fps=video_fps,
             duration=duration
         )
-    
-    def _extract_camera_frame(self, current_time):
-        """
-        从摄像头提取帧
-        """
-        ret, frame = self.cap.read()
-        if not ret:
-            return None
-        # 摄像头模式没有原始帧索引，所以不传入frame_index
-        # 传入"camera"作为source_path
-        frame_data = self._to_frame_data(frame, current_time, source_path="camera")
-        
-        return frame_data
+
     
     def _extract_video_frame(self, current_time):
         # 检查是否超出视频范围
@@ -164,20 +125,8 @@ class StreamInput:
         # 保存当前帧索引，用于设置frame_id
         original_frame_idx = self.current_frame_idx
         
-        if self.reader_type == 'decord' and self.vr is not None:
+        if self.vr is not None:
             frame = self.vr[original_frame_idx].asnumpy() # RGB, [H,W,C], uint8
-        elif self.reader_type == 'cv2' and self.cap is not None:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-            ret, frame = self.cap.read()  # BGR, [H,W,C], uint8
-            if not ret:
-                self.logger.error(f"cv2读取帧失败, 返回ret={ret}")
-                return None
-            # 转换为RGB
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        else:
-            self.logger.error(f"未知的reader_type: {self.reader_type}")
-            return None
-        
         self.logger.debug(f"成功提取帧 {original_frame_idx}, 帧形状: {frame.shape}, 帧数据类型: {frame.dtype}")
         
         # 传入原始帧索引作为frame_id、视频文件路径作为source_path，以及视频总帧数、FPS和时长
@@ -203,53 +152,36 @@ class StreamInput:
         
         # 对于视频文件，使用原始视频的fps来控制帧率
         # 对于摄像头，使用默认的1/30秒间隔
-        frame_interval = 1.0 / self.video_fps if self.video_source == "file" and self.video_fps and self.video_fps > 0 else 1.0 / 30.0
-        
-        if self.video_source == "camera":
-            while self.running_event.is_set():
-                frame_start = time.time()
-                frame_data = self._extract_camera_frame(time.time())
-                try:
-                    self._put_frame_safely(frame_data, timeout=1.0)
-                    frames_processed += 1
-                    break
-                except Exception as e:
-                    self.logger.error(f"将摄像头帧放入队列时出错: {e}")
-                    # 队列仍然满，继续尝试，不跳过帧
-                if frame_data is None:
-                    # 摄像头读取失败，短暂等待后重试
-                    time.sleep(0.1)
+        frame_interval = 1.0 / self.video_fps if self.video_fps and self.video_fps > 0 else 1.0 / 30.0
 
-
-        if self.video_source == "file":
-            while self.running_event.is_set():
-                frame_start = time.time()
-                frame_data = self._extract_video_frame(time.time())
-                if frame_data is None:
-                    # 视频读取完毕，跳出循环
-                    self.logger.info(f"帧数据为None, 可能已到达视频末尾, 跳出循环")
-                    break
-                
-                # TODO: 这里可以有两种处理方式：
-                # 1. 确保所有帧都被处理, 不跳过任何帧, 队列满了就阻塞等待
-                # 2. 模拟视频播放, 按视频原始帧率处理帧, 队列满了就丢包
-                if True:
-                    # 队列满了就会卡在这里, 这是正常的
-                    self._put_frame_safely(frame_data)
-                    frames_processed += 1
+        while self.running_event.is_set():
+            frame_start = time.time()
+            frame_data = self._extract_video_frame(time.time())
+            if frame_data is None:
+                # 视频读取完毕，跳出循环
+                self.logger.info(f"帧数据为None, 可能已到达视频末尾, 跳出循环")
+                break
+            
+            # TODO: 这里可以有两种处理方式：
+            # 1. 确保所有帧都被处理, 不跳过任何帧, 队列满了就阻塞等待
+            # 2. 模拟视频播放, 按视频原始帧率处理帧, 队列满了就丢包
+            if True:
+                # 队列满了就会卡在这里, 这是正常的
+                self._put_frame_safely(frame_data)
+                frames_processed += 1
+            else:
+                # 满了就丢包
+                pass
+            
+            # 帧率控制 - 确保不超过视频原始FPS
+            if self.is_original_fps:
+                frame_elapsed = time.time() - frame_start
+                if frame_elapsed < frame_interval:
+                    sleep_time = frame_interval - frame_elapsed
+                    time.sleep(sleep_time)
                 else:
-                    # 满了就丢包
-                    pass
-                
-                # 帧率控制 - 确保不超过视频原始FPS
-                if self.is_original_fps:
-                    frame_elapsed = time.time() - frame_start
-                    if frame_elapsed < frame_interval:
-                        sleep_time = frame_interval - frame_elapsed
-                        time.sleep(sleep_time)
-                    else:
-                        additional_wait_time = frame_elapsed - frame_interval
-                        self.logger.debug(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
+                    additional_wait_time = frame_elapsed - frame_interval
+                    self.logger.debug(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
 
         
         # 线程结束时打印最终统计信息
@@ -323,20 +255,12 @@ class StreamInput:
     
     def get_video_info(self):
         """获取视频信息"""
-        if self.video_source == "file":
-            return {
-                'total_frames': self.total_frames,
-                'video_fps': self.video_fps,
-                'duration': self.total_frames / self.video_fps if self.video_fps and self.video_fps > 0 else 0,
-                'source': 'file',
-                'reader_type': self.reader_type
-            }
-        elif self.video_source == "camera":
-            return {
-                'source': 'camera',
-                'reader_type': 'cv2'  # 摄像头始终使用cv2
-            }
-        return None
+        return {
+            'total_frames': self.total_frames,
+            'video_fps': self.video_fps,
+            'duration': self.total_frames / self.video_fps if self.video_fps and self.video_fps > 0 else 0,
+            'source': 'file'
+        }
     
     def get_frame(self):
         """获取一帧数据"""
@@ -353,7 +277,6 @@ class StreamInput:
         """为 benchmark 同步模式初始化视频文件源（不启动子进程）"""
         if not hasattr(self, "logger") or self.logger is None:
             self._set_logger()
-        self.video_source = "file"
         self.video_file_path = video_file_path
         self._initialize_video_source()
 
@@ -404,9 +327,9 @@ class SymFrameData:
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
     duration: Optional[float] = None    # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
 
-class SymStreamInput(StreamInput):
+class SymVideoInput(VideoInput):
     """
-    继承 StreamInput，按 p_type 分组返回帧：每次迭代返回两个 I 帧之间的帧（留头去尾）。
+    继承 VideoInput，按 p_type 分组返回帧：每次迭代返回两个 I 帧之间的帧（留头去尾）。
     """
 
     def __init__(self, config=None):
@@ -447,14 +370,8 @@ class SymStreamInput(StreamInput):
         else:
             p_type_int = PICT_TYPE_TO_INT.get(self.frame_types[frame_idx], P_TYPE_I)
 
-        if self.reader_type == "decord" and self.vr is not None:
+        if self.vr is not None:
             frame = self.vr[frame_idx].asnumpy()
-        elif self.reader_type == "cv2" and self.cap is not None:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, frame = self.cap.read()
-            if not ret:
-                return None
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         else:
             return None
 
@@ -474,7 +391,7 @@ class SymStreamInput(StreamInput):
         )
 
     def init_for_file(self, video_file_path: str):
-        """为 SymStreamInput 同步模式初始化视频文件源，并获取 ffprobe 的 I 帧、pict_type、pkt_size 信息"""
+        """为 SymVideoInput 同步模式初始化视频文件源，并获取 ffprobe 的 I 帧、pict_type、pkt_size 信息"""
         super().init_for_file(video_file_path)
         self.i_frame_indices, self.frame_types, self.pkt_sizes = get_frame_info_for_stream(video_file_path)
         self.logger.info(f"ffprobe: I 帧数 {len(self.i_frame_indices)}, 总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}")

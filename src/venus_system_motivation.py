@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import Config, SymConfig
-from src.stream_input import StreamInput, SymStreamInput
+from src.video_input import VideoInput, SymVideoInput
 from src.benchmark.utils import build_rag_prompt
 from src.frame_vectorizer import FrameVectorizer, SymFrameVectorizer
 from src.memory_manager import MemoryManager
@@ -42,7 +42,7 @@ class VenusSystemMoti:
         self._setup_logger()
 
         # 组件（同步模式）
-        self.stream_input: Optional[StreamInput] = None
+        self.video_input: Optional[VideoInput] = None
         self.frame_vectorizer: Optional[FrameVectorizer] = None
         self.memory_manager: Optional[MemoryManager] = None
         self.query_vectorizer: Optional[QueryVectorizer] = None
@@ -174,18 +174,17 @@ class VenusSystemMoti:
         self.query_vectorizer._initialize_vectorizer()
 
         if video_path:
-            self.config.stream_video_source = "file"
-            self.config.stream_video_file_path = video_path
-            self.stream_input = StreamInput(self.config)
+            self.config.video_file_path = video_path
+            self.video_input = VideoInput(self.config)
             self.frame_vectorizer = FrameVectorizer(self.config)
             for fn, need_hs, need_attn in self._encode_hooks:
                 self.frame_vectorizer.register_encode_hook(
                     fn, need_hidden_states=need_hs, need_attentions=need_attn
                 )
-            self.stream_input.init_for_file(video_path)
+            self.video_input.init_for_file(video_path)
             self.frame_vectorizer._initialize_vectorizer()
         else:
-            self.stream_input = None
+            self.video_input = None
             self.frame_vectorizer = None
 
     def _run_inject_phase(
@@ -229,8 +228,8 @@ class VenusSystemMoti:
         t0 = time.time()
 
         step = max(1, self.frame_interval)
-        num_encoded = (self.stream_input.total_frames + step - 1) // step
-        batch_iter = self.stream_input.iter_frames_batch(
+        num_encoded = (self.video_input.total_frames + step - 1) // step
+        batch_iter = self.video_input.iter_frames_batch(
             batch_size=self.batch_size, frame_interval=self.frame_interval
         )
         with tqdm(total=num_encoded, unit="frame", desc="Encoding") as pbar:
@@ -265,8 +264,8 @@ class VenusSystemMoti:
 
     def _get_video_time(self, map_path: Optional[str] = None) -> Optional[float]:
         """获取视频时长（秒）"""
-        if self.stream_input is not None and hasattr(self.stream_input, "video_duration"):
-            return getattr(self.stream_input, "video_duration", None) or 0
+        if self.video_input is not None and hasattr(self.video_input, "video_duration"):
+            return getattr(self.video_input, "video_duration", None) or 0
         if map_path and os.path.isfile(map_path):
             try:
                 with open(map_path, "r", encoding="utf-8") as f:
@@ -498,7 +497,7 @@ class VenusSystemMoti:
 
 class SymphonySystemMoti(VenusSystemMoti):
     """
-    继承 VenusSystemMoti，使用 SymStreamInput 和 SymFrameVectorizer 按 GOP 进行 inject。
+    继承 VenusSystemMoti，使用 SymVideoInput 和 SymFrameVectorizer 按 GOP 进行 inject。
     按 select_strategy 从每个 GOP 中选帧后编码，不依赖编码钩子。
     """
 
@@ -523,7 +522,7 @@ class SymphonySystemMoti(VenusSystemMoti):
         faiss_path: Optional[str] = None,
         map_path: Optional[str] = None,
     ):
-        """初始化各组件，使用 SymStreamInput 和 SymFrameVectorizer（不注册编码钩子）"""
+        """初始化各组件，使用 SymVideoInput 和 SymFrameVectorizer（不注册编码钩子）"""
         self.config.memory_mode = "both"
         if faiss_path is not None:
             self.config.memory_faiss_file_path = faiss_path
@@ -539,18 +538,17 @@ class SymphonySystemMoti(VenusSystemMoti):
         self.query_vectorizer._initialize_vectorizer()
 
         if video_path:
-            self.config.stream_video_source = "file"
-            self.config.stream_video_file_path = video_path
-            self.stream_input = SymStreamInput(self.config)
+            self.config.video_file_path = video_path
+            self.video_input = SymVideoInput(self.config)
             self.frame_vectorizer = SymFrameVectorizer(self.config)
             for fn, need_hs, need_attn in self._encode_hooks:
                 self.frame_vectorizer.register_encode_hook(
                     fn, need_hidden_states=need_hs, need_attentions=need_attn
                 )
-            self.stream_input.init_for_file(video_path)
+            self.video_input.init_for_file(video_path)
             self.frame_vectorizer._initialize_vectorizer()
         else:
-            self.stream_input = None
+            self.video_input = None
             self.frame_vectorizer = None
 
     def _run_inject_phase(
@@ -593,12 +591,12 @@ class SymphonySystemMoti(VenusSystemMoti):
         total_vectors = 0
         t0 = time.time()
 
-        num_gops = len(self.stream_input.i_frame_indices)
+        num_gops = len(self.video_input.i_frame_indices)
         with tqdm(total=num_gops, unit="gop", desc="Encoding") as pbar:
-            for gop_start, gop_end in self.stream_input.iter_gop_ranges():
+            for gop_start, gop_end in self.video_input.iter_gop_ranges():
                 total_frames += gop_end - gop_start
-                vector_data_list = self.frame_vectorizer.encode_frames_by_gop_from_stream(
-                    self.stream_input, gop_start, gop_end
+                vector_data_list = self.frame_vectorizer.encode_frames_by_gop_from_video_input(
+                    self.video_input, gop_start, gop_end
                 )
                 self.memory_manager.add_vectors_batch(vector_data_list)
                 total_vectors += len(vector_data_list)
