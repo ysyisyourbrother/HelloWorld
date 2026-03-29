@@ -7,7 +7,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 
-video_path = "local_datasets/Video-MME/data/44ivpEIcBhE.mp4"
+# video_path = "local_datasets/Video-MME/data/44ivpEIcBhE.mp4"
+video_path = "test_rtsp/recordings/segment_00000.mp4"
 output_json = "motion_vectors.json"
 output_plot = "moti_ffprobe_frame_type.png"
 

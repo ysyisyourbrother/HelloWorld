@@ -1,8 +1,8 @@
 opencv-python>=4.5.0
 numpy>=1.21.0,<2.0
-# 在windows系统上使用faiss-cpu, 在linux系统上使用faiss-gpu
-# faiss-cpu>=1.7.0
-faiss-gpu>=1.7.0
+# 在windows系统上, Jetson设备上使用faiss-cpu, 在linux系统上使用faiss-gpu
+faiss-cpu>=1.7.0
+# faiss-gpu>=1.7.0
 flask>=2.0.0
 flask-cors>=3.0.0
 requests>=2.25.0
@@ -12,9 +12,10 @@ torchvision>=0.13.0
 transformers>=4.20.0
 accelerate>=0.16.0
 Pillow>=8.0.0
-matplotlib>=3.5.0
+# matplotlib>=3.5.0
 av>=9.0.0
-decord>=0.6.0
+# Jetson设备上先不安装decord
+# decord>=0.6.0
 grpcio>=1.50.0
 grpcio-tools>=1.50.0
 # 需与 proto 生成时的版本兼容，否则会出现 "Couldn't parse file content!"

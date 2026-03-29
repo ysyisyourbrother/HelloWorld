@@ -21,7 +21,11 @@ P_TYPE_COLOR_EDGE = {"I": "red", "P": "gray", "B": "gray"}
 
 def parse_args():
     parser = argparse.ArgumentParser(description="可视化视频各帧的 pkt_size（按 I/P/B 类型）")
-    parser.add_argument("--video_path", type=str, default="local_datasets/Video-MME/data/44ivpEIcBhE.mp4", help="视频文件路径")
+    parser.add_argument("--video_path", 
+        type=str, 
+        # default="local_datasets/Video-MME/data/44ivpEIcBhE.mp4", 
+        default="test_rtsp/recordings/segment_00000.mp4", 
+        help="视频文件路径")
     parser.add_argument("-o", "--output", type=str, default="moti_ffprobe_frame_pkt_size.png",
                         help="输出图片路径")
     return parser.parse_args()

@@ -1,0 +1,15 @@
+database
+__pycache__/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.out
+*.pid
+benchmark_results/
+motivation_results_symphony/
+motivation_results/
+motivation_scripts/
+logs/
+.git/

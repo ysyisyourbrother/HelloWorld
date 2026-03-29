@@ -12,8 +12,8 @@ import glob
 import os
 # 本项目
 from src.config import Config
+from src.image_bge_vectorizer import ImageBGEVectorizer
 from src.video_input import FrameData, SymFrameData, SymVideoInput
-from models.bge.modeling_MMRet_CLIP import CLIPModel
 
 @dataclass
 class FrameVectorData:
@@ -48,64 +48,6 @@ class FrameVectorData:
             duration=frame_data.duration,
         )
 
-class ImageBGEVectorizer():
-    """BGE模型向量化器"""
-    def __init__(self, device: str, model_path: str, attn_implementation: str = "sdpa"):
-        self.device = device
-        self.attn_implementation = attn_implementation
-
-        # 加载CLIPModel，attn_implementation="eager" 时支持 output_attentions
-        self.model = CLIPModel.from_pretrained(
-            model_path,
-            attn_implementation=attn_implementation,
-        ).to(self.device)
-        self.model.set_processor(model_path)
-        self.processor = self.model.processor  # 确保processor作为类属性存在
-        self.model.eval()
-
-    def encode(self, frame):
-        # 使用processor处理图像
-        img = self.processor(images=frame, return_tensors="pt")['pixel_values'].to(self.device)
-        with torch.no_grad():
-            vector = self.model.encode_image(images=img)
-        return vector
-
-    def encode_batch(self, frames: list):
-        """批量编码多帧图像，frames 为 numpy 数组列表 [H,W,C] RGB"""
-        if not frames:
-            return torch.empty(0)
-        img = self.processor(images=frames, return_tensors="pt")['pixel_values'].to(self.device)
-        with torch.no_grad():
-            vectors = self.model.encode_image(images=img)
-        return vectors
-
-    def encode_batch_with_vision_outputs(
-        self,
-        frames: list,
-        output_hidden_states: bool = False,
-        output_attentions: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[object]]:
-        """
-        批量编码并返回 vision_model 的 hidden_states 和 attentions。
-        当 output_attentions=True 时，需使用 attn_implementation="eager" 初始化。
-
-        Returns:
-            (vectors, vision_outputs): vectors 为归一化后的嵌入；vision_outputs 含 .hidden_states 和 .attentions
-        """
-        if not frames:
-            return torch.empty(0), None
-        img = self.processor(images=frames, return_tensors="pt")["pixel_values"].to(self.device)
-        with torch.no_grad():
-            vision_outputs = self.model.vision_model(
-                pixel_values=img,
-                output_hidden_states=output_hidden_states,
-                output_attentions=output_attentions,
-            )
-            pooled_output = vision_outputs[1]
-            image_features = self.model.visual_projection(pooled_output)
-            vectors = torch.nn.functional.normalize(image_features, dim=-1)
-        return vectors, vision_outputs
-    
 class FrameVectorizer:
     def __init__(self, config: Config = None):
         """
