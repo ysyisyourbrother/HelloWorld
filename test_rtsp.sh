@@ -23,5 +23,13 @@ RTSP_URL="rtsp://admin:smc123456@192.168.123.98:554/stream1"
 # 2) RTSP 按约 1 分钟分段保存为 MP4（输出目录可改；Ctrl+C 退出）
 # "$PY_SYS" test_rtsp/rtsp_segment_record.py -u "$RTSP_URL" -o ./test_rtsp/recordings --tcp
 
-# 3) 原：智能抽帧（FFmpeg 方案）
-python test_rtsp/smart_frame_extractor.py -u "$RTSP_URL" -n 100
+# 3) 按 IPB 类型统计（Ctrl+C 退出）
+/usr/bin/python3 test_rtsp/rtsp_record_IPB_info_simple.py \
+  -u "$RTSP_URL" \
+  --tcp \
+  --latency 200 \
+  --relaxed-caps \
+  --xvfb
+
+# 4) 打印码率
+# /usr/bin/python3 test_rtsp/rtsp_print_bitrate.py -u "$RTSP_URL" --tcp
