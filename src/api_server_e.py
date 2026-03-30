@@ -16,6 +16,7 @@ import cv2
 from src.config import Config
 from src.query_vectorizer import QueryVectorizer, QueryData
 from src.memory_manager import MemoryManager, MemoryResult
+from src.video_utils.about_frame import extract_frame_by_index
 
 # 导入生成的 gRPC 代码
 import sys
@@ -40,6 +41,7 @@ class APIServerE:
         self.test_mode = config.api_e_test_mode
 
         self.cloud_server_url = config.cloud_server_url
+        self.frame_decode_backend = getattr(config, "frame_decode_backend", "cv2")
         
         self.grpc_channel: Optional[grpc.Channel] = None
         self.grpc_stub: Optional[query_service_pb2_grpc.QueryServiceStub] = None
@@ -144,7 +146,8 @@ class APIServerE:
             query=query_text,
             query_id=query_id,
             dialog_id=dialog_id,
-            timestamp=timestamp
+            timestamp=timestamp,
+            trace_ts={"api_query_enqueued_at": timestamp},
         )
         self.query_queue.put(query_data)
         self.logger.debug(f"查询 {query_id} 已放入向量化队列")
@@ -153,15 +156,40 @@ class APIServerE:
         if query_result.query_id != query_id:
             self.logger.warning(f"查询ID不匹配: 期望 {query_id}, 收到 {query_result.query_id}")
 
-        frame_data_list = query_result.frame_data_list
+        metadata_list = query_result.metadata_list or []
+        # 按检索元数据逐条读取帧（BGR），并按历史行为序列化上传云端
+        frame_data_list = []
+        for m in metadata_list:
+            source_path = m.get("source_path")
+            frame_id = m.get("frame_id")
+            if not source_path or frame_id is None:
+                continue
+            try:
+                frame = extract_frame_by_index(
+                    video_path=source_path,
+                    frame_index=int(frame_id),
+                    backend=self.frame_decode_backend,
+                )
+                frame_data_list.append(frame)
+            except Exception:
+                continue
         memory_results_bytes = pickle.dumps(frame_data_list) if frame_data_list else b""
         self.logger.debug(f"序列化了 {len(frame_data_list) if frame_data_list else 0} 帧数据")
+        trace_ts = dict(query_result.trace_ts or {})
+        trace_ts["api_query_result_dequeue_at"] = time.time()
+        if "api_query_enqueued_at" in trace_ts:
+            self.logger.info(
+                f"[Latency][Query] edge_local_pipeline query_id={query_id} "
+                f"{(trace_ts['api_query_result_dequeue_at'] - trace_ts['api_query_enqueued_at']) * 1000:.2f} ms"
+            )
 
         return self._send_grpc_and_return(
             query_text=query_text,
             memory_results_bytes=memory_results_bytes,
             query_id=query_id,
-            dialog_id=dialog_id
+            dialog_id=dialog_id,
+            metadata_list=metadata_list,
+            trace_ts=trace_ts,
         )
 
     def query_test(self, query_text: str, image_path: Optional[str] = None, dialog_id: int = 0) -> dict:
@@ -212,9 +240,12 @@ class APIServerE:
         query_text: str,
         memory_results_bytes: bytes,
         query_id: int,
-        dialog_id: int
+        dialog_id: int,
+        metadata_list: Optional[list] = None,
+        trace_ts: Optional[dict] = None,
     ) -> dict:
         """构建 gRPC 请求、发送并返回结果"""
+        grpc_send_start = time.time()
         grpc_request = query_service_pb2.QueryRequest(
             query_text=query_text,
             memory_results=memory_results_bytes,
@@ -223,11 +254,22 @@ class APIServerE:
         )
         self.logger.info(f"发送查询 {query_id} 到云端")
         grpc_response = self.grpc_stub.Query(grpc_request, timeout=300)
+        grpc_recv_at = time.time()
+        self.logger.info(
+            f"[Latency][Query] edge->cloud_rpc query_id={query_id} "
+            f"{(grpc_recv_at - grpc_send_start) * 1000:.2f} ms"
+        )
+        if trace_ts and "api_query_enqueued_at" in trace_ts:
+            self.logger.info(
+                f"[Latency][Query] edge_e2e_until_rpc_resp query_id={query_id} "
+                f"{(grpc_recv_at - trace_ts['api_query_enqueued_at']) * 1000:.2f} ms"
+            )
         return {
             "query_id": grpc_response.query_id,
             "result": grpc_response.result,
             "error": grpc_response.error if grpc_response.error else None,
-            "timestamp": grpc_response.timestamp
+            "timestamp": grpc_response.timestamp,
+            "metadata_list": metadata_list or [],
         }
     
     def query_stream(self, query_text: str, dialog_id: int = 0):

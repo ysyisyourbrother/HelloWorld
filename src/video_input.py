@@ -8,7 +8,7 @@ import torch
 import logging
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
-from typing import Optional, List, Iterator
+from typing import Optional, List, Iterator, Dict
 from decord import VideoReader
 
 # 本项目
@@ -18,13 +18,14 @@ from src.video_utils.ffprobe_utils import get_frame_info_for_stream
 @dataclass
 class FrameData:
     """帧数据结构体, 包含帧numpy数组数据、时间戳、帧ID、视频来源、视频总帧数、视频FPS和视频时长"""
-    frame: np.ndarray               # 帧numpy数组数据
+    frame: Optional[np.ndarray]     # 帧numpy数组数据；跨进程链路默认不传像素，仅传引用
     timestamp: float                # 时间戳, 用于系统测时
     frame_id: int                   # 帧ID
     source_path: str                # 视频来源: "camera"或视频文件路径
     total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
     duration: Optional[float] = None     # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
+    trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
 class VideoInput:
     def __init__(self, config=None):
@@ -52,6 +53,8 @@ class VideoInput:
         self.total_frames = 0
         self.video_fps = None
         self.video_duration = 0
+        # 边端实时默认仅跨进程传引用，避免传输 ndarray 的 pickle 拷贝成本
+        self.ipc_send_frame = getattr(config, "video_ipc_send_frame", False)
         
     def _set_logger(self):
         """设置日志记录器"""
@@ -113,7 +116,8 @@ class VideoInput:
             source_path=source_path,
             total_frames=total_frames,
             video_fps=video_fps,
-            duration=duration
+            duration=duration,
+            trace_ts={"video_extracted_at": timestamp}
         )
 
     
@@ -130,8 +134,10 @@ class VideoInput:
         self.logger.debug(f"成功提取帧 {original_frame_idx}, 帧形状: {frame.shape}, 帧数据类型: {frame.dtype}")
         
         # 传入原始帧索引作为frame_id、视频文件路径作为source_path，以及视频总帧数、FPS和时长
+        # 多进程实时链路默认仅传引用；同步/benchmark 路径保留帧像素
+        should_send_frame_payload = self.ipc_send_frame or (not hasattr(self, "running_event"))
         frame_data = self._to_frame_data(
-            frame, 
+            frame if should_send_frame_payload else None,
             current_time, 
             original_frame_idx, 
             source_path=self.video_file_path,
@@ -318,7 +324,7 @@ PICT_TYPE_TO_INT = {"I": P_TYPE_I, "P": P_TYPE_P, "B": P_TYPE_B}
 
 @dataclass
 class SymFrameData:
-    frame: np.ndarray               # 帧numpy数组数据
+    frame: Optional[np.ndarray]     # 帧numpy数组数据；可为 None（仅传引用）
     frame_id: int                   # 帧ID
     p_type: int                     # 在压缩算法中的类型 (0=I, 1=P, 2=B)
     source_path: str                # 视频来源: "camera"或视频文件路径
@@ -326,6 +332,7 @@ class SymFrameData:
     total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
     duration: Optional[float] = None    # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
+    trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
 class SymVideoInput(VideoInput):
     """
@@ -340,7 +347,7 @@ class SymVideoInput(VideoInput):
 
     def _to_sym_frame_data(
         self,
-        frame: np.ndarray,
+        frame: Optional[np.ndarray],
         frame_id: int,
         p_type: int,
         source_path: str,
@@ -348,6 +355,7 @@ class SymVideoInput(VideoInput):
         total_frames: int | None = None,
         video_fps: float | None = None,
         duration: float | None = None,
+        trace_ts: Optional[Dict[str, float]] = None,
     ) -> SymFrameData:
         """构造 SymFrameData，包含 p_type 与 pkt_size 信息"""
         return SymFrameData(
@@ -359,6 +367,7 @@ class SymVideoInput(VideoInput):
             total_frames=total_frames,
             video_fps=video_fps,
             duration=duration,
+            trace_ts=trace_ts,
         )
 
     def _extract_video_frame_at(self, frame_idx: int) -> SymFrameData | None:
@@ -388,6 +397,7 @@ class SymVideoInput(VideoInput):
             total_frames=self.total_frames,
             video_fps=self.video_fps,
             duration=self.video_duration,
+            trace_ts={"video_extracted_at": time.time()},
         )
 
     def init_for_file(self, video_file_path: str):

@@ -8,7 +8,7 @@ import queue
 import glob
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict
 # 本项目
 from src.config import Config
 from models.bge.modeling_MMRet_CLIP import CLIPModel, CLIPProcessor
@@ -20,6 +20,7 @@ class QueryData:
     query_id: int             # 查询ID
     dialog_id: int            # 对话ID
     timestamp: float          # 时间戳, 用于系统测时
+    trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
 @dataclass
 class QueryVectorData:
@@ -28,6 +29,7 @@ class QueryVectorData:
     query_id: int             # 查询ID
     dialog_id: int            # 对话ID
     timestamp: float          # 时间戳
+    trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
 class TextBGEVectorizer:
     """BGE模型向量化器"""
@@ -129,9 +131,22 @@ class QueryVectorizer:
             query_id = query_data.query_id
             dialog_id = query_data.dialog_id
             timestamp = query_data.timestamp
+            trace_ts = dict(query_data.trace_ts or {})
+            trace_ts["query_vectorizer_dequeue_at"] = time.time()
+            if "api_query_enqueued_at" in trace_ts:
+                self.logger.info(
+                    f"[Latency][Query] api->query_vectorizer_queue query_id={query_id} "
+                    f"{(trace_ts['query_vectorizer_dequeue_at'] - trace_ts['api_query_enqueued_at']) * 1000:.2f} ms"
+                )
             
             # 向量化
+            encode_start = time.time()
             vector = self.vectorizer.encode(query)
+            trace_ts["query_vectorizer_encoded_at"] = time.time()
+            self.logger.info(
+                f"[Latency][Query] query_vectorize query_id={query_id} "
+                f"{(trace_ts['query_vectorizer_encoded_at'] - encode_start) * 1000:.2f} ms"
+            )
             self.logger.debug(f"查询 {query_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
             
             # 创建向量数据对象
@@ -139,7 +154,8 @@ class QueryVectorizer:
                 vector=vector,
                 query_id=query_id,
                 dialog_id=dialog_id,
-                timestamp=timestamp
+                timestamp=timestamp,
+                trace_ts=trace_ts,
             )
             
             # 放入向量队列

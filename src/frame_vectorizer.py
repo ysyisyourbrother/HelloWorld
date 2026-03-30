@@ -7,9 +7,10 @@ from logging.handlers import RotatingFileHandler
 import time
 import queue
 from dataclasses import dataclass
-from typing import Any, Optional, List, Callable, Tuple
+from typing import Any, Optional, List, Callable, Tuple, Dict
 import glob
 import os
+from decord import VideoReader
 # 本项目
 from src.config import Config
 from src.image_bge_vectorizer import ImageBGEVectorizer
@@ -25,6 +26,7 @@ class FrameVectorData:
     total_frames: Optional[int] = None  # 视频总帧数，仅视频文件模式有值
     video_fps: Optional[float] = None   # 视频FPS，仅视频文件模式有值
     duration: Optional[float] = None     # 视频总时长(秒)，仅视频文件模式有值
+    trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
     
     @classmethod
     def from_frame(cls, frame_data: FrameData, vector: np.ndarray = None):
@@ -74,6 +76,7 @@ class FrameVectorizer:
         self.running = False
         self.vectorized_frame_count = 0
         self.all_frame_count = 0
+        self._video_readers = {}
 
         # 编码钩子：在 encode_frames_batch 时调用，fn(frame_data_list, vectors, hidden_states, attentions)
         self._encode_hooks: List[Callable] = []
@@ -158,6 +161,24 @@ class FrameVectorizer:
         # frame = Image.fromarray(frame)
         return frame
 
+    def _resolve_frame_from_reference(self, frame_data: FrameData) -> Optional[np.ndarray]:
+        """当队列中仅传引用时，在本进程按 source_path+frame_id 解码帧。"""
+        if frame_data.frame is not None:
+            return frame_data.frame
+        source_path = frame_data.source_path
+        frame_id = frame_data.frame_id
+        if not source_path or frame_id is None:
+            return None
+        try:
+            vr = self._video_readers.get(source_path)
+            if vr is None:
+                vr = VideoReader(source_path)
+                self._video_readers[source_path] = vr
+            return vr[frame_id].asnumpy()
+        except Exception as e:
+            self.logger.error(f"按引用解码帧失败 source={source_path}, frame_id={frame_id}: {e}")
+            return None
+
     def _vectorize_frames(self):
         """处理帧的主循环"""
         start_time = time.time()
@@ -166,17 +187,34 @@ class FrameVectorizer:
             self.logger.debug(f"尝试从帧队列获取数据... 当前队列大小: {self.frame_queue.qsize()}")
             frame_data: FrameData = self.frame_queue.get() 
             # 直接尝试访问FrameData对象的属性
-            frame = frame_data.frame
+            frame = self._resolve_frame_from_reference(frame_data)
             timestamp = frame_data.timestamp
             frame_id = frame_data.frame_id
+            trace_ts = dict(frame_data.trace_ts or {})
+            trace_ts["frame_vectorizer_dequeue_at"] = time.time()
+            if "video_extracted_at" in trace_ts:
+                self.logger.info(
+                    f"[Latency][Inject] video->vectorizer_queue frame_id={frame_id} "
+                    f"{(trace_ts['frame_vectorizer_dequeue_at'] - trace_ts['video_extracted_at']) * 1000:.2f} ms"
+                )
+            if frame is None:
+                self.logger.warning(f"跳过无像素帧 frame_id={frame_id}, source={frame_data.source_path}")
+                self.all_frame_count += 1
+                continue
             
             # 根据提取策略决定是否处理当前帧
             if self._should_process_frame(frame_data):
                 # 预处理
                 frame = self._preprocess_single_frame(frame)
                 # 向量化
+                encode_start = time.time()
                 vector_tensor = self.vectorizer.encode(frame)
                 vector = vector_tensor.cpu().numpy()
+                trace_ts["frame_vectorizer_encoded_at"] = time.time()
+                self.logger.info(
+                    f"[Latency][Inject] vectorize frame_id={frame_id} "
+                    f"{(trace_ts['frame_vectorizer_encoded_at'] - encode_start) * 1000:.2f} ms"
+                )
                 self.logger.debug(f"帧 {frame_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
 
                 # 创建VectorData对象
@@ -187,7 +225,8 @@ class FrameVectorizer:
                     source_path=frame_data.source_path,
                     total_frames=frame_data.total_frames,
                     video_fps=frame_data.video_fps,
-                    duration=frame_data.duration
+                    duration=frame_data.duration,
+                    trace_ts=trace_ts,
                 )
                 
                 # 放入向量队列
@@ -331,6 +370,23 @@ class SymFrameVectorizer(FrameVectorizer):
         super().__init__(config)
         self.select_strategy = config.frame_select_strategy  # "random" | "first" | "pktsize"
 
+    def _resolve_sym_frame_from_reference(self, frame_data: SymFrameData) -> Optional[np.ndarray]:
+        """Sym 帧在仅传引用时，按 source_path+frame_id 解码。"""
+        if frame_data.frame is not None:
+            return frame_data.frame
+        source_path = frame_data.source_path
+        frame_id = frame_data.frame_id
+        if not source_path or frame_id is None:
+            return None
+        try:
+            vr = self._video_readers.get(source_path)
+            if vr is None:
+                vr = VideoReader(source_path)
+                self._video_readers[source_path] = vr
+            return vr[frame_id].asnumpy()
+        except Exception:
+            return None
+
     def select_frame_indices_in_gop(
         self,
         gop_start: int,
@@ -415,7 +471,12 @@ class SymFrameVectorizer(FrameVectorizer):
         if self.vectorizer is None:
             self._initialize_vectorizer()
 
-        frames = [self._preprocess_single_frame(sf.frame) for sf in selected]
+        resolved_frames = [self._resolve_sym_frame_from_reference(sf) for sf in selected]
+        selected_and_frames = [(sf, f) for sf, f in zip(selected, resolved_frames) if f is not None]
+        if not selected_and_frames:
+            return []
+        selected = [x[0] for x in selected_and_frames]
+        frames = [self._preprocess_single_frame(x[1]) for x in selected_and_frames]
         vector_tensors = self.vectorizer.encode_batch(frames)
         vectors_np = vector_tensors.cpu().numpy()
 
@@ -454,7 +515,12 @@ class SymFrameVectorizer(FrameVectorizer):
         if self.vectorizer is None:
             self._initialize_vectorizer()
 
-        frames = [self._preprocess_single_frame(sf.frame) for sf in selected]
+        resolved_frames = [self._resolve_sym_frame_from_reference(sf) for sf in selected]
+        selected_and_frames = [(sf, f) for sf, f in zip(selected, resolved_frames) if f is not None]
+        if not selected_and_frames:
+            return []
+        selected = [x[0] for x in selected_and_frames]
+        frames = [self._preprocess_single_frame(x[1]) for x in selected_and_frames]
         vector_tensors = self.vectorizer.encode_batch(frames)
         vectors_np = vector_tensors.cpu().numpy()
 

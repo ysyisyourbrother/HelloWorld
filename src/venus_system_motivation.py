@@ -299,52 +299,35 @@ class VenusSystemMoti:
         """单次查询：编码 -> 检索 -> 推理"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
-        frame_list, scores, frames_metadata = self.memory_manager.retrieve_sync(query_vector)
+        scores, frames_metadata = self.memory_manager.retrieve_sync(query_vector)
         retrieve_time = time.time() - t0
 
         result = {
             "question": question,
             "retrieve_time_sec": retrieve_time,
             "scores": scores,
-            "retrieved_frames": frame_list if frame_list else [],
+            "retrieved_frames": [],
             "retrieved_frames_metadata": frames_metadata if frames_metadata else [],
         }
 
         query_text = question
-        select_frame_num = len(frame_list) if frame_list else 0
-        if video_time is not None and frame_list and sample is not None:
+        select_frame_num = len(frames_metadata) if frames_metadata else 0
+        if video_time is not None and frames_metadata and sample is not None:
             options = sample.get("options", [])
             if not isinstance(options, list):
                 options = list(options) if options else []
             query_text = build_rag_prompt(
                 video_time=video_time,
-                num_selected_frame=len(frame_list),
+                num_selected_frame=len(frames_metadata),
                 question=question,
                 options=options,
             )
         result["rag_question"] = query_text
         result["select_frame_num"] = select_frame_num
 
-        if self.use_cloud and frame_list:
-            frames_rgb = [
-                cv2.cvtColor(f, cv2.COLOR_BGR2RGB) if f.ndim == 3 else cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
-                for f in frame_list
-            ]
-            query_request = QueryRequest(
-                query_text=query_text,
-                memory_results=frames_rgb,
-                query_id=hash(sample_id) % (2**31) if sample_id else int(time.time()),
-                dialog_id=0,
-            )
-            reasoner = self._get_reasoner()
-            response = reasoner.infer_sync(query_request)
-            result["cloud_result"] = response.result
-            result["cloud_error"] = response.error
-            result["total_time_sec"] = time.time() - t0
-        else:
-            result["cloud_result"] = None
-            result["cloud_error"] = "use_cloud=False 或 无检索帧"
-            result["total_time_sec"] = retrieve_time
+        result["cloud_result"] = None
+        result["cloud_error"] = "实时模式已切换为仅返回检索元数据，不再返回检索帧"
+        result["total_time_sec"] = retrieve_time
 
         return result
 

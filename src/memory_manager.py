@@ -9,7 +9,7 @@ import glob
 import os
 import faiss
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Sequence, Callable
+from typing import List, Optional, Tuple, Sequence, Callable, Dict
 from contextlib import contextmanager
 import multiprocessing as mp
 
@@ -20,16 +20,16 @@ from src.query_vectorizer import QueryVectorData
 
 # 视频读取库
 import cv2
-import decord
 
 @dataclass
 class MemoryResult:
     """查询结果结构体, 包含查询ID、对话ID和匹配的向量ID列表"""
-    frame_data_list: List[any]  # 匹配的帧数据列表
+    metadata_list: List[dict]   # 匹配结果元数据列表（不含像素帧）
     timestamp: float          # 时间戳
     query_id: int             # 查询ID
     dialog_id: int            # 对话ID
     scores: List[float]       # 匹配分数列表
+    trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
 class ThreadSafeFaiss:
     """线程安全的Faiss索引类"""
@@ -377,6 +377,13 @@ class MemoryManager:
         self.databasemap.append(db_record)
         
         self.vector_count += 1
+        trace_ts = dict(vector_data.trace_ts or {})
+        trace_ts["memory_inject_added_at"] = time.time()
+        if "frame_vectorizer_encoded_at" in trace_ts:
+            self.logger.info(
+                f"[Latency][Inject] vectorizer->memory_queue+add frame_id={vector_data.frame_id} "
+                f"{(trace_ts['memory_inject_added_at'] - trace_ts['frame_vectorizer_encoded_at']) * 1000:.2f} ms"
+            )
         
         self.logger.debug(f"向量添加成功, ID: {self.vector_count-1}, 总向量数: {self.vector_count}")
     
@@ -489,11 +496,11 @@ class MemoryManager:
 
     def _retrieve(
         self, query_vector: np.ndarray, top_k: int = 5
-    ) -> Tuple[List[np.ndarray], List[float], List[dict]]:
+    ) -> Tuple[List[float], List[dict]]:
         """根据查询向量检索匹配的帧数据
 
         Returns:
-            tuple: (帧列表, 分数列表, 元数据列表)，元数据每项为 {frame_id, video_fps}
+            tuple: (分数列表, 元数据列表)，元数据每项为 {frame_id, video_fps, source_path}
         """
         # 若有注册的钩子，计算全量相似度并调用
         if self._retrieve_hooks:
@@ -514,20 +521,12 @@ class MemoryManager:
             metadata_list.append({
                 "frame_id": rec["frame_id"],
                 "video_fps": rec.get("video_fps") or 1.0,
+                "source_path": rec.get("source_path"),
             })
 
-        # 读取帧（返回完整列表以保持与 vector_ids 对齐）
-        frame_data_list = self._read_frame_from_video(vector_ids)
-        # 过滤读取失败的帧，同步过滤元数据
-        frame_list, scores_filtered, metadata_filtered = [], [], []
-        for f, s, m in zip(frame_data_list, scores, metadata_list):
-            if f is not None:
-                frame_list.append(f)
-                scores_filtered.append(s)
-                metadata_filtered.append(m)
-
-        self.logger.debug(f"成功读取 {len(frame_list)} 个实际帧")
-        return frame_list, scores_filtered, metadata_filtered
+        # 边端实时优先：查询阶段只返回元数据，不读取像素帧
+        self.logger.debug(f"查询阶段返回元数据 {len(metadata_list)} 条（不含像素帧）")
+        return scores, metadata_list
     
     def _thread_query_vectors(self):
         """处理查询向量的线程"""
@@ -541,22 +540,36 @@ class MemoryManager:
             query_id = query_data.query_id
             dialog_id = query_data.dialog_id
             timestamp = query_data.timestamp
+            trace_ts = dict(query_data.trace_ts or {})
+            trace_ts["memory_query_dequeue_at"] = time.time()
+            if "query_vectorizer_encoded_at" in trace_ts:
+                self.logger.info(
+                    f"[Latency][Query] query_vectorizer->memory_queue query_id={query_id} "
+                    f"{(trace_ts['memory_query_dequeue_at'] - trace_ts['query_vectorizer_encoded_at']) * 1000:.2f} ms"
+                )
             
             # 执行查询
-            frame_data_list, scores, _ = self._retrieve(query_vector, self.memory_topk)
+            retrieve_start = time.time()
+            scores, metadata_list = self._retrieve(query_vector, self.memory_topk)
+            trace_ts["memory_query_retrieved_at"] = time.time()
+            self.logger.info(
+                f"[Latency][Query] memory_retrieve query_id={query_id} "
+                f"{(trace_ts['memory_query_retrieved_at'] - retrieve_start) * 1000:.2f} ms"
+            )
 
             # 创建查询结果
             result = MemoryResult(
                 query_id=query_id,
                 dialog_id=dialog_id,
                 scores=scores,
-                frame_data_list=frame_data_list,
-                timestamp=timestamp
+                metadata_list=metadata_list,
+                timestamp=timestamp,
+                trace_ts=trace_ts,
             )
             
             # 将结果放入结果队列
             self.query_result_queue.put(result)
-            self.logger.info(f"查询 {query_id} 处理完成，返回 {len(frame_data_list)} 个结果")
+            self.logger.info(f"查询 {query_id} 处理完成，返回 {len(metadata_list)} 个结果")
     
     def _process_main(self):
         """子进程，根据配置启动相应的线程"""
@@ -668,8 +681,8 @@ class MemoryManager:
 
     def retrieve_sync(
         self, query_vector: np.ndarray, top_k: int = None
-    ) -> Tuple[List, List[float], List[dict]]:
-        """同步检索，供 benchmark 使用。返回 (帧列表, 分数列表, 元数据列表)。"""
+    ) -> Tuple[List[float], List[dict]]:
+        """同步检索，供 benchmark 使用。返回 (分数列表, 元数据列表)。"""
         k = top_k if top_k is not None else self.memory_topk
         return self._retrieve(query_vector, k)
 
