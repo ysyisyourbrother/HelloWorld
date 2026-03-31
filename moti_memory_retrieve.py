@@ -14,8 +14,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.config import SymConfig
-from src.venus_system_motivation import SymphonySystemMoti
+from src.config import Config
+from src.venus_system_motivation import VenusSystemMoti
 
 
 def parse_args():
@@ -44,7 +44,7 @@ def _question_to_folder_name(question: str, max_len: int = 50) -> str:
     return s or "question"
 
 
-def main():
+if __name__ == "__main__":
     args = parse_args()
 
     captured = {}
@@ -53,10 +53,10 @@ def main():
         captured["query_vector"] = query_vector.copy()
         captured["all_scores"] = all_scores.copy()
 
-    config = SymConfig(config_path="configs/symconfig_moti.json")
+    config = Config(config_path="configs/config_moti.json")
     # config.benchmark_use_cloud = False
 
-    moti = SymphonySystemMoti(config)
+    moti = VenusSystemMoti(config)
     moti.register_retrieve_hook(capture_all_scores)
 
     result = moti.run_video_flow(
@@ -65,7 +65,6 @@ def main():
         questions=[
             {
                 "question": "Which instrument is the performer on the stage holding in the video?",
-                # "question": "Instrument?",
                 "options": [
                     "A. Trumpet.",
                     "B. Saxophone.",
@@ -81,12 +80,12 @@ def main():
 
     if not captured:
         print("未抓取到相似度数据，请检查钩子是否生效")
-        return
+        raise SystemExit(0)
 
     all_scores = captured["all_scores"]
     frames = np.arange(len(all_scores))
 
-    plt.figure(figsize=(12, 4),dpi=300)
+    plt.figure(figsize=(12, 4), dpi=300)
     plt.plot(frames, all_scores, "b-", linewidth=1, label="Similarity")
 
     if args.topk > 0:
@@ -125,7 +124,6 @@ def main():
     print(f"相似度折线图已保存至: {plot_path}")
 
     # 保存检索到的视频帧：检索排名_原视频帧数_原视频秒数.png
-    query_results = result.get("query_results", [])
     for qr in query_results:
         frames = qr.get("retrieved_frames", [])
         metadata = qr.get("retrieved_frames_metadata", [])
@@ -143,7 +141,3 @@ def main():
             else:
                 cv2.imwrite(path, np.array(frame))
         print(f"检索帧已保存至: {frame_dir} ({len(frames)} 帧)")
-
-
-if __name__ == "__main__":
-    main()

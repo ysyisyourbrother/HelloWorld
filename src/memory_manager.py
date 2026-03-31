@@ -15,8 +15,9 @@ import multiprocessing as mp
 
 # 本项目
 from src.config import Config
-from src.frame_vectorizer import FrameVectorData
-from src.query_vectorizer import QueryVectorData
+from src.frame_vectorizer import FrameVectorData, FrameVectorizer
+from src.query_vectorizer import QueryData, QueryVectorizer
+from src.video_input import FrameData
 
 # 视频读取库
 import cv2
@@ -224,7 +225,8 @@ class MemoryManager:
         """
         if config is None:
             config = Config()
-        
+        self._config = config
+
         # 从Config对象获取配置
         self.database_type = config.memory_database_type # 向量 或 其他
         
@@ -239,16 +241,16 @@ class MemoryManager:
         self.dimension = config.memory_dimension  # 向量维度
         self.databasemap_file_path = config.memory_databasemap_file_path  # databasemap文件路径
         self.databasemap = None  # 线程安全的databasemap
-        self.retrieval_strategy = config.memory_retrieval_strategy
-        self.max_size = config.memory_max_size
         self.memory_topk = config.memory_topk  # topk参数
         
-        # 队列相关
+        # 队列相关（与 VideoInput.frame_queue 对接，由编排层注入）
         self.memory_mode = config.memory_mode
-        self.frame_vector_queue = None  # 需要由frame_vectorizer设置
-        self.query_vector_queue = None  # 需要由query_vectorizer设置
-        self.query_result_queue = mp.Queue(maxsize=100)  # 用于返回查询结果
-        
+        self.frame_queue = None  # multiprocessing.Queue[FrameData]，原先进 FrameVectorizer
+
+        self._frame_encoder: Optional[FrameVectorizer] = None
+        self._query_encoder: Optional[QueryVectorizer] = None
+        self._ready_event = threading.Event()
+
         self.running = False
         self.current_video_name = None
         self.vector_count = 0
@@ -381,26 +383,27 @@ class MemoryManager:
         trace_ts["memory_inject_added_at"] = time.time()
         if "frame_vectorizer_encoded_at" in trace_ts:
             self.logger.info(
-                f"[Latency][Inject] vectorizer->memory_queue+add frame_id={vector_data.frame_id} "
+                f"[Latency][Inject] frame_encode->faiss_add frame_id={vector_data.frame_id} "
                 f"{(trace_ts['memory_inject_added_at'] - trace_ts['frame_vectorizer_encoded_at']) * 1000:.2f} ms"
             )
         
         self.logger.debug(f"向量添加成功, ID: {self.vector_count-1}, 总向量数: {self.vector_count}")
     
     def _thread_frame_vectors(self):
-        """处理帧向量的线程"""
+        """处理帧向量的线程（从 frame_queue 取 FrameData，经 FrameVectorizer 编码后入库）"""
         self.logger.info(f"帧向量处理线程启动, 线程名: {threading.current_thread().name}")
         
         save_interval = 30  # 默认30秒保存一次
         
         while self.running_event.is_set():
             try:
-                # 尝试从队列获取数据，超时时间设置为save_interval
-                vector_data: FrameVectorData = self.frame_vector_queue.get(timeout=save_interval)
-                self._add_vector(vector_data)
+                frame_data: FrameData = self.frame_queue.get(timeout=save_interval)
+                vector_data = self._frame_encoder.encode_frame_from_stream(frame_data)
+                if vector_data is not None:
+                    self._add_vector(vector_data)
             except queue.Empty:
                 # 队列超时，保存数据库
-                self.logger.debug("帧向量队列超时，保存数据库")
+                self.logger.debug("帧输入队列超时，保存数据库")
                 self._save_database()
             except Exception as e:
                 self.logger.error(f"处理帧向量时出错: {e}")
@@ -528,49 +531,6 @@ class MemoryManager:
         self.logger.debug(f"查询阶段返回元数据 {len(metadata_list)} 条（不含像素帧）")
         return scores, metadata_list
     
-    def _thread_query_vectors(self):
-        """处理查询向量的线程"""
-        self.logger.info(f"查询向量处理线程启动, 线程名: {threading.current_thread().name}")
-        
-        while self.running_event.is_set():
-            # 从队列获取查询向量数据
-            self.logger.info(f"等待查询向量...")
-            query_data: QueryVectorData = self.query_vector_queue.get()
-            query_vector = query_data.vector
-            query_id = query_data.query_id
-            dialog_id = query_data.dialog_id
-            timestamp = query_data.timestamp
-            trace_ts = dict(query_data.trace_ts or {})
-            trace_ts["memory_query_dequeue_at"] = time.time()
-            if "query_vectorizer_encoded_at" in trace_ts:
-                self.logger.info(
-                    f"[Latency][Query] query_vectorizer->memory_queue query_id={query_id} "
-                    f"{(trace_ts['memory_query_dequeue_at'] - trace_ts['query_vectorizer_encoded_at']) * 1000:.2f} ms"
-                )
-            
-            # 执行查询
-            retrieve_start = time.time()
-            scores, metadata_list = self._retrieve(query_vector, self.memory_topk)
-            trace_ts["memory_query_retrieved_at"] = time.time()
-            self.logger.info(
-                f"[Latency][Query] memory_retrieve query_id={query_id} "
-                f"{(trace_ts['memory_query_retrieved_at'] - retrieve_start) * 1000:.2f} ms"
-            )
-
-            # 创建查询结果
-            result = MemoryResult(
-                query_id=query_id,
-                dialog_id=dialog_id,
-                scores=scores,
-                metadata_list=metadata_list,
-                timestamp=timestamp,
-                trace_ts=trace_ts,
-            )
-            
-            # 将结果放入结果队列
-            self.query_result_queue.put(result)
-            self.logger.info(f"查询 {query_id} 处理完成，返回 {len(metadata_list)} 个结果")
-    
     def _process_main(self):
         """子进程，根据配置启动相应的线程"""
         self._set_logger()
@@ -583,6 +543,19 @@ class MemoryManager:
         memory_mode = self.memory_mode
         
         self.logger.info(f"MemoryManager模式: {memory_mode}")
+
+        if memory_mode in ("only_inject", "both"):
+            self._frame_encoder = FrameVectorizer(self._config)
+            self._frame_encoder._set_logger()
+            self._frame_encoder._initialize_vectorizer()
+            if self.frame_queue is None:
+                raise RuntimeError("inject 模式需要设置 frame_queue（通常为 VideoInput.frame_queue）")
+        if memory_mode in ("only_query", "both"):
+            self._query_encoder = QueryVectorizer(self._config)
+            self._query_encoder._set_logger()
+            self._query_encoder._initialize_vectorizer()
+
+        self._ready_event.set()
         
         threads = []
         
@@ -593,15 +566,10 @@ class MemoryManager:
             threads.append(frame_thread)
             self.logger.info("帧向量处理线程已创建")
         
-        # 启动查询向量处理线程（用于query）
-        if memory_mode in ["only_query", "both"]:
-            query_thread = threading.Thread(target=self._thread_query_vectors, daemon=True)
-            query_thread.name = "QueryThread"
-            threads.append(query_thread)
-            self.logger.info("查询向量处理线程已创建")
-        
         # 验证至少启动了一个线程
-        if len(threads) == 0:
+        if len(threads) == 0 and memory_mode == "only_query":
+            self.logger.info("only_query 模式：使用同步 query_text_sync，不启动后台线程")
+        elif len(threads) == 0:
             self.logger.error("没有启动任何线程，请检查memory_mode配置")
             return
         
@@ -615,16 +583,16 @@ class MemoryManager:
             time.sleep(1.0)
     
     def start(self):
-        """启动MemoryManager"""
-        # 创建一个事件对象来控制线程运行
-        self.running_event = mp.Event()
+        """启动MemoryManager（同进程后台线程）"""
+        self.running_event = threading.Event()
         self.running_event.set()
-        
-        # 在子进程中运行_process_main
-        self.process = mp.Process(target=self._process_main, daemon=True)
-        if hasattr(self.process, 'name'):
-            self.process.name = "MemoryManager-Processor"
-        self.process.start()
+        self._ready_event.clear()
+        self.worker_thread = threading.Thread(
+            target=self._process_main,
+            daemon=True,
+            name="MemoryManager-Main",
+        )
+        self.worker_thread.start()
     
     def start_single_thread(self):
         """启动单线程运行MemoryManager"""
@@ -644,30 +612,13 @@ class MemoryManager:
         if self.index is not None:
             self._save_database()
         
-        # 等待子进程结束（仅当当前进程是子进程的父进程时才可安全 join）
-        if not hasattr(self, 'process'):
-            return
-        try:
-            parent_pid = getattr(self.process, '_parent_pid', None)
-            if parent_pid is None or parent_pid != os.getpid():
-                return
-            if self.process.is_alive():
-                self.process.join(timeout=5)
-        except (AssertionError, ValueError) as e:
-            logging.getLogger(__name__).debug("停止子进程时跳过 join: %s", e)
+        if hasattr(self, "worker_thread") and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=5)
         
     
-    def set_frame_vector_queue(self, frame_vector_queue: mp.Queue):
-        """设置帧向量队列"""
-        self.frame_vector_queue = frame_vector_queue
-    
-    def set_query_vector_queue(self, query_vector_queue: mp.Queue):
-        """设置查询向量队列"""
-        self.query_vector_queue = query_vector_queue
-    
-    def get_query_result_queue(self):
-        """获取查询结果队列"""
-        return self.query_result_queue
+    def set_frame_queue(self, frame_queue: mp.Queue):
+        """设置帧输入队列（VideoInput 产出 FrameData，原 FrameVectorizer 消费端）"""
+        self.frame_queue = frame_queue
 
     def init_sync(self):
         """同步初始化数据库（在主进程调用，供 benchmark 使用）"""
@@ -685,6 +636,55 @@ class MemoryManager:
         """同步检索，供 benchmark 使用。返回 (分数列表, 元数据列表)。"""
         k = top_k if top_k is not None else self.memory_topk
         return self._retrieve(query_vector, k)
+
+    def query_text_sync(
+        self,
+        query_text: str,
+        query_id: int,
+        dialog_id: int,
+        timestamp: float,
+        trace_ts: Optional[Dict[str, float]] = None,
+    ) -> MemoryResult:
+        """
+        同步查询：文本编码 + 检索，供 APIServerE 直接调用（无 query 队列往返）。
+        """
+        if not self._ready_event.is_set():
+            # query_with_memory 等场景未启动后台线程时，按需同步初始化数据库
+            if self.index is None or self.databasemap is None:
+                self.init_sync()
+            self._ready_event.set()
+
+        if self._query_encoder is None:
+            self._query_encoder = QueryVectorizer(self._config)
+            self._query_encoder._set_logger()
+            self._query_encoder._initialize_vectorizer()
+
+        qd = QueryData(
+            query=query_text,
+            query_id=query_id,
+            dialog_id=dialog_id,
+            timestamp=timestamp,
+            trace_ts=dict(trace_ts or {}),
+        )
+        qvd = self._query_encoder.encode_query_data(qd)
+        merged_trace = dict(qd.trace_ts or {})
+        merged_trace.update(qvd.trace_ts or {})
+        merged_trace["memory_query_dequeue_at"] = time.time()
+        retrieve_start = time.time()
+        scores, metadata_list = self._retrieve(qvd.vector, self.memory_topk)
+        merged_trace["memory_query_retrieved_at"] = time.time()
+        self.logger.info(
+            f"[Latency][Query] memory_retrieve query_id={qvd.query_id} "
+            f"{(merged_trace['memory_query_retrieved_at'] - retrieve_start) * 1000:.2f} ms"
+        )
+        return MemoryResult(
+            metadata_list=metadata_list,
+            timestamp=qvd.timestamp,
+            query_id=qvd.query_id,
+            dialog_id=qvd.dialog_id,
+            scores=scores,
+            trace_ts=merged_trace,
+        )
 
     def save_database_sync(self):
         """同步保存数据库"""

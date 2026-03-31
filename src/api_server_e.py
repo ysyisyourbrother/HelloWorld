@@ -1,6 +1,5 @@
 import pickle
 import time
-import queue
 import logging
 from logging.handlers import RotatingFileHandler
 import glob
@@ -8,13 +7,12 @@ import os
 import grpc
 from typing import Optional
 import threading
-import multiprocessing as mp
 
 import cv2
 
 # 本项目
 from src.config import Config
-from src.query_vectorizer import QueryVectorizer, QueryData
+from src.query_vectorizer import QueryData
 from src.memory_manager import MemoryManager, MemoryResult
 from src.video_utils.about_frame import extract_frame_by_index
 
@@ -49,8 +47,7 @@ class APIServerE:
         self.query_id_counter = 0
         self.query_id_lock = threading.Lock()
 
-        self.query_queue = mp.Queue(maxsize=100)  # 用户查询队列
-        self.query_result_queue = None  # 需要由memory_manager设置
+        self.memory_manager: Optional[MemoryManager] = None
 
         self._set_logger()
     
@@ -86,10 +83,9 @@ class APIServerE:
         self.logger.addHandler(file_handler)
         self.logger.propagate = False
     
-    def set_query_result_queue(self, query_result_queue):
-        """
-        """
-        self.query_result_queue = query_result_queue
+    def set_memory_manager(self, memory_manager: MemoryManager):
+        """设置本地记忆管理器（同步调用）"""
+        self.memory_manager = memory_manager
     
     def _get_next_query_id(self) -> int:
         """获取下一个查询ID"""
@@ -149,12 +145,15 @@ class APIServerE:
             timestamp=timestamp,
             trace_ts={"api_query_enqueued_at": timestamp},
         )
-        self.query_queue.put(query_data)
-        self.logger.debug(f"查询 {query_id} 已放入向量化队列")
-
-        query_result: MemoryResult = self.query_result_queue.get(timeout=300)
-        if query_result.query_id != query_id:
-            self.logger.warning(f"查询ID不匹配: 期望 {query_id}, 收到 {query_result.query_id}")
+        if self.memory_manager is None:
+            raise ValueError("memory_manager 未设置，请先调用 set_memory_manager()")
+        query_result: MemoryResult = self.memory_manager.query_text_sync(
+            query_text=query_text,
+            query_id=query_id,
+            dialog_id=dialog_id,
+            timestamp=timestamp,
+            trace_ts=query_data.trace_ts,
+        )
 
         metadata_list = query_result.metadata_list or []
         # 按检索元数据逐条读取帧（BGR），并按历史行为序列化上传云端
@@ -271,47 +270,6 @@ class APIServerE:
             "timestamp": grpc_response.timestamp,
             "metadata_list": metadata_list or [],
         }
-    
-    def query_stream(self, query_text: str, dialog_id: int = 0):
-        """
-        服务器端流式RPC查询（预留接口）
-        
-        Args:
-            query_text: 用户查询文本
-            dialog_id: 对话ID
-            
-        Yields:
-            查询响应流
-        """
-        # TODO: 实现服务器端流式RPC
-        self.logger.warning("query_stream 方法尚未实现")
-        yield {
-            "query_id": 0,
-            "result": "",
-            "error": "query_stream 方法尚未实现",
-            "timestamp": time.time()
-        }
-    
-    def query_bidi_stream(self, query_texts: list, dialog_id: int = 0):
-        """
-        双向流式RPC查询（预留接口）
-        
-        Args:
-            query_texts: 查询文本列表
-            dialog_id: 对话ID
-            
-        Yields:
-            查询响应流
-        """
-        # TODO: 实现双向流式RPC
-        self.logger.warning("query_bidi_stream 方法尚未实现")
-        for query_text in query_texts:
-            yield {
-                "query_id": 0,
-                "result": "",
-                "error": "query_bidi_stream 方法尚未实现",
-                "timestamp": time.time()
-            }
     
     def start(self):
         """启动边端 API 服务器"""

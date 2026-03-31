@@ -1,10 +1,8 @@
-import multiprocessing as mp
 import numpy as np
 import time
 import torch
 import logging
 from logging.handlers import RotatingFileHandler
-import queue
 import glob
 import os
 from dataclasses import dataclass
@@ -76,10 +74,6 @@ class QueryVectorizer:
         self.query_model_path = config.query_model_path
         
         self.vectorizer = None
-        self.query_queue = None  # 需要由api_server_e设置
-        # 创建向量队列，使用multiprocessing.Queue以支持多进程间通信
-        self.query_vector_queue = mp.Queue(maxsize=100)
-        self.running = False
         self.vectorized_query_count = 0
         self.all_query_count = 0
     
@@ -119,103 +113,47 @@ class QueryVectorizer:
             self.vectorizer = TextBGEVectorizer(self.query_device, self.query_model_path)
         else:
             raise ValueError(f"不支持的模型类型: {self.model_type}")
-    
-    def _vectorize_queries(self):
-        """处理查询的主循环"""
-        start_time = time.time()
-        last_vectorized_time = start_time
-        while self.running_event.is_set():
-            self.logger.debug(f"尝试从查询队列获取数据... 当前队列大小: {self.query_queue.qsize()}")
-            query_data: QueryData = self.query_queue.get()
-            query = query_data.query
-            query_id = query_data.query_id
-            dialog_id = query_data.dialog_id
-            timestamp = query_data.timestamp
-            trace_ts = dict(query_data.trace_ts or {})
-            trace_ts["query_vectorizer_dequeue_at"] = time.time()
-            if "api_query_enqueued_at" in trace_ts:
-                self.logger.info(
-                    f"[Latency][Query] api->query_vectorizer_queue query_id={query_id} "
-                    f"{(trace_ts['query_vectorizer_dequeue_at'] - trace_ts['api_query_enqueued_at']) * 1000:.2f} ms"
-                )
-            
-            # 向量化
-            encode_start = time.time()
-            vector = self.vectorizer.encode(query)
-            trace_ts["query_vectorizer_encoded_at"] = time.time()
+
+    def encode_query_data(self, query_data: QueryData) -> QueryVectorData:
+        """
+        将 QueryData 编码为 QueryVectorData，供 MemoryManager 查询线程调用。
+        需先调用 _set_logger() 与 _initialize_vectorizer()（由 MemoryManager 在子进程内完成）。
+        """
+        if not hasattr(self, "logger") or self.logger is None:
+            self._set_logger()
+        if self.vectorizer is None:
+            self._initialize_vectorizer()
+
+        query = query_data.query
+        query_id = query_data.query_id
+        dialog_id = query_data.dialog_id
+        timestamp = query_data.timestamp
+        trace_ts = dict(query_data.trace_ts or {})
+        trace_ts["query_vectorizer_dequeue_at"] = time.time()
+        if "api_query_enqueued_at" in trace_ts:
             self.logger.info(
-                f"[Latency][Query] query_vectorize query_id={query_id} "
-                f"{(trace_ts['query_vectorizer_encoded_at'] - encode_start) * 1000:.2f} ms"
+                f"[Latency][Query] api->memory_query_vectorizer query_id={query_id} "
+                f"{(trace_ts['query_vectorizer_dequeue_at'] - trace_ts['api_query_enqueued_at']) * 1000:.2f} ms"
             )
-            self.logger.debug(f"查询 {query_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
-            
-            # 创建向量数据对象
-            vector_data = QueryVectorData(
-                vector=vector,
-                query_id=query_id,
-                dialog_id=dialog_id,
-                timestamp=timestamp,
-                trace_ts=trace_ts,
-            )
-            
-            # 放入向量队列
-            self.logger.debug(f"尝试将查询 {query_id} 的向量化数据放入向量队列...")
-            self.query_vector_queue.put(vector_data)
-            self.logger.debug(f"查询 {query_id} 的向量化数据成功放入向量队列")
-            self.vectorized_query_count += 1
-            
-            # 计算并打印处理速度
-            current_time = time.time()
-            queries_per_second = 1.0 / (current_time - last_vectorized_time)
-            self.logger.debug(f"当前编码速度: {queries_per_second:.2f} 查询/秒")
-            self.last_vectorized_query_count = self.vectorized_query_count
-            last_vectorized_time = current_time
-            
-            self.all_query_count += 1
-    
-    def _process_main(self):
-        """处理查询的主循环"""
-        self._set_logger()
-        self.logger.info(f"子进程启动, 进程ID: {mp.current_process().pid}")
-        self._initialize_vectorizer()
-        assert self.query_queue is not None
-        self._vectorize_queries()
-    
-    def start(self):
-        """启动向量化进程"""
-        # 创建一个共享变量来控制子进程运行
-        self.running_event = mp.Event()
-        self.running_event.set()
-        # 设置线程为daemon模式，确保主程序退出时线程也会退出
-        self.process = mp.Process(target=self._process_main, daemon=True)
-        if hasattr(self.process, 'name'):
-            self.process.name = "QueryVectorizer-Processor"
-        self.process.start()
-    
-    def start_single_process(self):
-        """启动单进程向量化"""
-        # 创建一个事件对象来控制进程运行
-        self.running_event = mp.Event()
-        self.running_event.set()
-        self._process_main()
-    
-    def stop(self):
-        """停止向量化进程"""
-        # 清除running_event标志，通知子进程停止
-        if hasattr(self, 'running_event'):
-            self.running_event.clear()
-        # 等待子进程结束
-        if hasattr(self, 'process') and self.process.is_alive():
-            self.process.join(timeout=5)
-        print("QueryVectorizer进程已停止")
-    
-    def set_query_queue(self, query_queue):
-        """设置查询队列"""
-        self.query_queue = query_queue
-    
-    def get_vector_queue(self):
-        """获取向量队列供后续处理使用"""
-        return self.query_vector_queue
+
+        encode_start = time.time()
+        vector = self.vectorizer.encode(query)
+        trace_ts["query_vectorizer_encoded_at"] = time.time()
+        self.logger.info(
+            f"[Latency][Query] query_vectorize query_id={query_id} "
+            f"{(trace_ts['query_vectorizer_encoded_at'] - encode_start) * 1000:.2f} ms"
+        )
+        self.logger.debug(f"查询 {query_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
+        self.vectorized_query_count += 1
+        self.all_query_count += 1
+
+        return QueryVectorData(
+            vector=vector,
+            query_id=query_id,
+            dialog_id=dialog_id,
+            timestamp=timestamp,
+            trace_ts=trace_ts,
+        )
 
     def encode_query_sync(self, query_text: str) -> np.ndarray:
         """同步编码查询文本，供 benchmark 使用。需先调用 _initialize_vectorizer()。"""

@@ -1,4 +1,3 @@
-import multiprocessing as mp
 import signal
 import sys
 import os
@@ -11,9 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config import Config
 from src.api_server_e import APIServerE
 from src.video_input import VideoInput
-from src.frame_vectorizer import FrameVectorizer
 from src.memory_manager import MemoryManager
-from src.query_vectorizer import QueryVectorizer
 
 
 # 支持的边端模式
@@ -41,9 +38,7 @@ class VenusSystemEdge:
         # 组件
         self.api_server: Optional[APIServerE] = None
         self.video_input: Optional[VideoInput] = None
-        self.frame_vectorizer: Optional[FrameVectorizer] = None
         self.memory_manager: Optional[MemoryManager] = None
-        self.query_vectorizer: Optional[QueryVectorizer] = None
         
         # 状态
         self.running = False
@@ -102,53 +97,36 @@ class VenusSystemEdge:
             raise ValueError(f"不支持的 edge_mode: {self.edge_mode}")
     
     def _initialize_query_while_inject(self):
-        """query_while_inject：VideoInput, FrameVectorizer, QueryVectorizer, MemoryManager, APIServerE"""
-        self.config.memory_mode = "both"
-        
+        """query_while_inject：VideoInput, MemoryManager（内含帧/查询编码）, APIServerE"""
         self.video_input = VideoInput(self.config)
-        self.frame_vectorizer = FrameVectorizer(self.config)
-        self.query_vectorizer = QueryVectorizer(self.config)
         self.memory_manager = MemoryManager(self.config)
         self.api_server = APIServerE(self.config)
         
-        # 队列连接：VideoInput -> FrameVectorizer -> MemoryManager
-        self.frame_vectorizer.set_frame_queue(self.video_input.frame_queue)
-        self.memory_manager.set_frame_vector_queue(self.frame_vectorizer.get_vector_queue())
-        
-        # 队列连接：APIServerE -> QueryVectorizer -> MemoryManager -> APIServerE
-        self.query_vectorizer.set_query_queue(self.api_server.query_queue)
-        self.memory_manager.set_query_vector_queue(self.query_vectorizer.get_vector_queue())
-        self.api_server.set_query_result_queue(self.memory_manager.get_query_result_queue())
+        # VideoInput -> MemoryManager 注入线程；APIServerE 同步调用 MemoryManager 查询
+        self.memory_manager.set_frame_queue(self.video_input.frame_queue)
+        self.api_server.set_memory_manager(self.memory_manager)
         
         self.logger.info("query_while_inject 组件初始化完成")
     
     def _initialize_query_with_memory(self):
-        """query_with_memory：QueryVectorizer, MemoryManager, APIServerE；必须已有向量文件和 map 文件"""
+        """query_with_memory：MemoryManager, APIServerE；必须已有向量文件和 map 文件"""
         if not self._check_vector_and_map_files():
             raise FileNotFoundError("query_with_memory 模式需要已存在的向量文件和 databasemap 文件")
-        
-        self.config.memory_mode = "only_query"
-        
-        self.query_vectorizer = QueryVectorizer(self.config)
+
         self.memory_manager = MemoryManager(self.config)
         self.api_server = APIServerE(self.config)
-        
-        self.query_vectorizer.set_query_queue(self.api_server.query_queue)
-        self.memory_manager.set_query_vector_queue(self.query_vectorizer.get_vector_queue())
-        self.api_server.set_query_result_queue(self.memory_manager.get_query_result_queue())
+        # 查询模式无需启动 MemoryManager 子线程，按需在 APIServerE 查询时同步检索
+        self.memory_manager.init_sync()
+        self.api_server.set_memory_manager(self.memory_manager)
         
         self.logger.info("query_with_memory 组件初始化完成")
     
     def _initialize_only_inject(self):
-        """only_inject：VideoInput, FrameVectorizer, MemoryManager；仅编码与建索引"""
-        self.config.memory_mode = "only_inject"
-        
+        """only_inject：VideoInput, MemoryManager；仅编码与建索引"""
         self.video_input = VideoInput(self.config)
-        self.frame_vectorizer = FrameVectorizer(self.config)
         self.memory_manager = MemoryManager(self.config)
         
-        self.frame_vectorizer.set_frame_queue(self.video_input.frame_queue)
-        self.memory_manager.set_frame_vector_queue(self.frame_vectorizer.get_vector_queue())
+        self.memory_manager.set_frame_queue(self.video_input.frame_queue)
         
         self.logger.info("only_inject 组件初始化完成")
     
@@ -207,12 +185,6 @@ class VenusSystemEdge:
         if self.memory_manager is not None:
             self.logger.debug("启动 MemoryManager...")
             self.memory_manager.start()
-        if self.query_vectorizer is not None:
-            self.logger.debug("启动 QueryVectorizer...")
-            self.query_vectorizer.start()
-        if self.frame_vectorizer is not None:
-            self.logger.debug("启动 FrameVectorizer...")
-            self.frame_vectorizer.start()
         if self.video_input is not None:
             self.logger.debug("启动 VideoInput...")
             self.video_input.start()
@@ -226,13 +198,6 @@ class VenusSystemEdge:
         """启动基于已有向量库的检索与询问流程"""
         self.running = True
         
-        if self.memory_manager is not None:
-            self.logger.debug("启动 MemoryManager...")
-            self.memory_manager.start()
-        if self.query_vectorizer is not None:
-            self.logger.debug("启动 QueryVectorizer...")
-            self.query_vectorizer.start()
-        
         if self.api_server is not None:
             self.api_server.start()
             self.logger.info("边端已就绪，可对已有向量库进行提问")
@@ -245,9 +210,6 @@ class VenusSystemEdge:
         if self.memory_manager is not None:
             self.logger.debug("启动 MemoryManager...")
             self.memory_manager.start()
-        if self.frame_vectorizer is not None:
-            self.logger.debug("启动 FrameVectorizer...")
-            self.frame_vectorizer.start()
         if self.video_input is not None:
             self.logger.debug("启动 VideoInput...")
             self.video_input.start()
@@ -280,20 +242,6 @@ class VenusSystemEdge:
                 self.logger.debug("VideoInput 已停止")
             except Exception as e:
                 self.logger.error(f"停止 VideoInput 时出错: {e}")
-        
-        if self.frame_vectorizer is not None:
-            try:
-                self.frame_vectorizer.stop()
-                self.logger.debug("FrameVectorizer 已停止")
-            except Exception as e:
-                self.logger.error(f"停止 FrameVectorizer 时出错: {e}")
-        
-        if self.query_vectorizer is not None:
-            try:
-                self.query_vectorizer.stop()
-                self.logger.debug("QueryVectorizer 已停止")
-            except Exception as e:
-                self.logger.error(f"停止 QueryVectorizer 时出错: {e}")
         
         if self.memory_manager is not None:
             try:

@@ -1,11 +1,9 @@
-import multiprocessing as mp
 import numpy as np
 import random
 import torch
 import logging
 from logging.handlers import RotatingFileHandler
 import time
-import queue
 from dataclasses import dataclass
 from typing import Any, Optional, List, Callable, Tuple, Dict
 import glob
@@ -70,10 +68,6 @@ class FrameVectorizer:
         self.frame_model_path = config.frame_model_path
         
         self.vectorizer = None
-        self.frame_queue = None  # 需要由 VideoInput 设置
-        # 创建向量队列，使用multiprocessing.Queue以支持多进程间通信
-        self.frame_vector_queue = mp.Queue(maxsize=100)
-        self.running = False
         self.vectorized_frame_count = 0
         self.all_frame_count = 0
         self._video_readers = {}
@@ -179,128 +173,61 @@ class FrameVectorizer:
             self.logger.error(f"按引用解码帧失败 source={source_path}, frame_id={frame_id}: {e}")
             return None
 
-    def _vectorize_frames(self):
-        """处理帧的主循环"""
-        start_time = time.time()
-        last_vectorized_time = start_time
-        while self.running_event.is_set():
-            self.logger.debug(f"尝试从帧队列获取数据... 当前队列大小: {self.frame_queue.qsize()}")
-            frame_data: FrameData = self.frame_queue.get() 
-            # 直接尝试访问FrameData对象的属性
-            frame = self._resolve_frame_from_reference(frame_data)
-            timestamp = frame_data.timestamp
-            frame_id = frame_data.frame_id
-            trace_ts = dict(frame_data.trace_ts or {})
-            trace_ts["frame_vectorizer_dequeue_at"] = time.time()
-            if "video_extracted_at" in trace_ts:
-                self.logger.info(
-                    f"[Latency][Inject] video->vectorizer_queue frame_id={frame_id} "
-                    f"{(trace_ts['frame_vectorizer_dequeue_at'] - trace_ts['video_extracted_at']) * 1000:.2f} ms"
-                )
-            if frame is None:
-                self.logger.warning(f"跳过无像素帧 frame_id={frame_id}, source={frame_data.source_path}")
-                self.all_frame_count += 1
-                continue
-            
-            # 根据提取策略决定是否处理当前帧
-            if self._should_process_frame(frame_data):
-                # 预处理
-                frame = self._preprocess_single_frame(frame)
-                # 向量化
-                encode_start = time.time()
-                vector_tensor = self.vectorizer.encode(frame)
-                vector = vector_tensor.cpu().numpy()
-                trace_ts["frame_vectorizer_encoded_at"] = time.time()
-                self.logger.info(
-                    f"[Latency][Inject] vectorize frame_id={frame_id} "
-                    f"{(trace_ts['frame_vectorizer_encoded_at'] - encode_start) * 1000:.2f} ms"
-                )
-                self.logger.debug(f"帧 {frame_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
-
-                # 创建VectorData对象
-                vector_data = FrameVectorData(
-                    vector=vector,
-                    timestamp=timestamp,
-                    frame_id=frame_id,
-                    source_path=frame_data.source_path,
-                    total_frames=frame_data.total_frames,
-                    video_fps=frame_data.video_fps,
-                    duration=frame_data.duration,
-                    trace_ts=trace_ts,
-                )
-                
-                # 放入向量队列
-                self.frame_vector_queue.put(vector_data)  
-                self.logger.debug(f"帧 {frame_id} 的向量化数据成功放入向量队列")
-                self.vectorized_frame_count += 1
-
-                # 计算并打印处理速度
-                current_time = time.time()
-                frames_per_second = 1.0 / (current_time - last_vectorized_time)
-                self.logger.debug(f"当前编码速度(FPS): {frames_per_second:.2f} 帧/秒")
-                last_vectorized_time = current_time
-            else:
-                self.logger.debug(f"跳过帧数据: frame_id={frame_id}")
-            self.all_frame_count += 1
-
-        return
-
-    def _process_main(self):
-        """处理帧的主循环"""
-        self._set_logger()
-        self.logger.info(f"子进程启动, 进程ID: {mp.current_process().pid}")
-        self._initialize_vectorizer()
-        assert self.frame_queue is not None
-        self._vectorize_frames()
-
     def _should_process_frame(self, frame_data: FrameData = None):
         """根据帧间隔决定是否处理当前帧"""
         return self.all_frame_count % self.frame_interval == 0
-    
-    def start(self):
-        """启动向量化进程"""
-        # 创建一个共享变量来控制子进程运行
-        self.running_event = mp.Event()
-        self.running_event.set()
-        # 设置线程为daemon模式，确保主程序退出时线程也会退出
-        self.process = mp.Process(target=self._process_main, daemon=True)
-        if hasattr(self.process, 'name'):
-            self.process.name = f"{self.__class__.__name__}-Processor"
-        self.process.start()
-    
-    def start_single_process(self):
-        """启动单进程向量化"""
-        self.running_event = mp.Event()
-        self.running_event.set()
-        self._process_main()
 
-    def _is_process_parent(self):
-        """当前进程是否为子进程的父进程（只有父进程才能安全调用 is_alive/join）"""
-        if not hasattr(self, 'process'):
-            return False
-        parent_pid = getattr(self.process, '_parent_pid', None)
-        return parent_pid is not None and parent_pid == os.getpid()
+    def encode_frame_from_stream(self, frame_data: FrameData) -> Optional[FrameVectorData]:
+        """
+        对单条入队帧做间隔筛选与编码，供 MemoryManager 注入线程调用。
+        需先调用 _set_logger() 与 _initialize_vectorizer()（由 MemoryManager 在子进程内完成）。
+        """
+        if not hasattr(self, "logger") or self.logger is None:
+            self._set_logger()
+        if self.vectorizer is None:
+            self._initialize_vectorizer()
 
-    def stop(self):
-        """停止向量化进程"""
-        if not hasattr(self, 'process'):
-            return
-        try:
-            if not self._is_process_parent():
-                return
-            if self.process.is_alive():
-                self.process.join(timeout=5)
-        except (AssertionError, ValueError) as e:
-            # 非父进程调用 is_alive/join 会触发 "can only test/join a child process"
-            logging.getLogger(__name__).debug("停止子进程时跳过 join: %s", e)
-    
-    def set_frame_queue(self, frame_queue):
-        """设置帧队列"""
-        self.frame_queue = frame_queue
+        frame = self._resolve_frame_from_reference(frame_data)
+        timestamp = frame_data.timestamp
+        frame_id = frame_data.frame_id
+        trace_ts = dict(frame_data.trace_ts or {})
+        trace_ts["frame_vectorizer_dequeue_at"] = time.time()
+        if "video_extracted_at" in trace_ts:
+            self.logger.info(
+                f"[Latency][Inject] video->memory_frame_vectorizer frame_id={frame_id} "
+                f"{(trace_ts['frame_vectorizer_dequeue_at'] - trace_ts['video_extracted_at']) * 1000:.2f} ms"
+            )
+        if frame is None:
+            self.logger.warning(f"跳过无像素帧 frame_id={frame_id}, source={frame_data.source_path}")
+            self.all_frame_count += 1
+            return None
 
-    def get_vector_queue(self):
-        """获取向量队列供MemoryManager使用"""
-        return self.frame_vector_queue
+        if self._should_process_frame(frame_data):
+            frame = self._preprocess_single_frame(frame)
+            encode_start = time.time()
+            vector_tensor = self.vectorizer.encode(frame)
+            vector = vector_tensor.cpu().numpy()
+            trace_ts["frame_vectorizer_encoded_at"] = time.time()
+            self.logger.info(
+                f"[Latency][Inject] vectorize frame_id={frame_id} "
+                f"{(trace_ts['frame_vectorizer_encoded_at'] - encode_start) * 1000:.2f} ms"
+            )
+            self.logger.debug(f"帧 {frame_id} 向量化完成, {vector.shape}, {vector.dtype}, {type(vector)}")
+            self.vectorized_frame_count += 1
+            self.all_frame_count += 1
+            return FrameVectorData(
+                vector=vector,
+                timestamp=timestamp,
+                frame_id=frame_id,
+                source_path=frame_data.source_path,
+                total_frames=frame_data.total_frames,
+                video_fps=frame_data.video_fps,
+                duration=frame_data.duration,
+                trace_ts=trace_ts,
+            )
+        self.logger.debug(f"跳过帧数据: frame_id={frame_id}")
+        self.all_frame_count += 1
+        return None
 
     def encode_frames_batch(self, frame_data_list: List[FrameData]) -> List[FrameVectorData]:
         """

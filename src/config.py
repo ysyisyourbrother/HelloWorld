@@ -40,7 +40,6 @@ class Config:
         self.frame_log_file = frame_config.get("log_file", "logs/frame_vectorizer.log")
         self.frame_model_type = frame_config.get("model_type", "BGE")
         self.frame_interval = frame_config.get("frame_interval", 1)
-        self.frame_use_vlm = frame_config.get("use_vlm", False)
         self.frame_device = frame_config.get("device", "cuda")
         self.frame_model_path = frame_config.get("model_path", "/mnt/share/cache/models/BGE-VL-base")
         
@@ -49,24 +48,18 @@ class Config:
         self.query_log_file = query_config.get("log_file", "logs/query_vectorizer.log")
         self.query_model_type = query_config.get("model_type", "BGE")
         self.query_model_path = query_config.get("model_path", "/mnt/share/cache/models/BGE-VL-base")
-        self.query_dimension = query_config.get("dimension", 512)
         self.query_device = query_config.get("device", "cuda")
         
         # Memory Manager配置
         memory_config = self._config.get("memory_manager", {})
         self.memory_log_file = memory_config.get("log_file", "logs/memory_manager.log")
-        self.memory_resume = memory_config.get("resume", False)
         self.memory_database_type = memory_config.get("database_type", "vector")
         self.memory_faiss_index_type = memory_config.get("faiss_index_type", "FlatIP")
         self.memory_faiss_file_path = memory_config.get("faiss_file_path", "database/database.faiss")
         self.memory_databasemap_file_path = memory_config.get("databasemap_file_path", "database/databasemap.json")
         self.memory_dimension = memory_config.get("dimension", 512)
-        self.memory_retrieval_strategy = memory_config.get("retrieval_strategy", "topk")
         self.memory_topk = memory_config.get("topk", 5)
-        self.memory_max_size = memory_config.get("max_memory_size", 10000)
-        memory_mode = memory_config.get("mode", "both")
-        
-        self.memory_mode = memory_mode #  ["only_query", "only_inject", "both"]
+        self.memory_mode = memory_config.get("mode", "both")  # ["only_query", "only_inject", "both"]
         
         # Reasoner配置
         reasoner_config = self._config.get("reasoner", {})
@@ -93,11 +86,9 @@ class Config:
         
         # API Server E配置
         api_e_config = self._config.get("api_server_e", {})
-        self.communication_mode = api_e_config.get("communication_mode", "unary")  # "unary", "server_stream", "bidi_stream"
         self.cloud_server_url = api_e_config.get("cloud_server_url", "localhost:9000")
         self.api_e_log_file = api_e_config.get("log_file", "logs/api_server_e.log")
         self.api_e_test_mode = api_e_config.get("test_mode", False)
-        self.api_e_dialog_mode = api_e_config.get("dialog_mode", "single")  # "single" 或 "multi"
         
         # API Server C配置
         api_c_config = self._config.get("api_server_c", {})

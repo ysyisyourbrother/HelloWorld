@@ -10,8 +10,7 @@
     "model_type": "BGE",
     "model_path": "/mnt/share/cache/models/BGE-VL-base",
     "frame_interval": 10,
-    "device": "cuda",
-    "use_vlm": false
+    "device": "cuda"
   },
   "query_vectorizer": {
     "log_file": "logs/query_vectorizer.log",
@@ -21,15 +20,12 @@
   },
   "memory_manager": {
     "log_file": "logs/memory_manager.log",
-    "resume": false,
     "database_type": "vector",
     "faiss_file_path": "database/database.faiss",
     "databasemap_file_path": "database/databasemap.json",
     "faiss_index_type": "FlatIP",
     "dimension": 512,
-    "retrieval_strategy": "topk",
     "topk": 5,
-    "max_memory_size": null,
     "mode": "both"
   },
   "reasoner": {
@@ -57,9 +53,7 @@
   "api_server_e": {
     "log_file": "logs/api_server_e.log",
     "cloud_server_url": "127.0.0.1:9000",
-    "test_mode": false,
-    "dialog_mode": "single",
-    "communication_mode": "unary"
+    "test_mode": false
   },
   "api_server_c": {
     "log_file": "logs/api_server_c.log",
