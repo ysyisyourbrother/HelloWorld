@@ -11,7 +11,7 @@ import os
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from src.venus_system_cloud import VenusSystemCloud
+from src.system.venus.cloud import VenusSystemCloud
 from src.config import Config
 
 

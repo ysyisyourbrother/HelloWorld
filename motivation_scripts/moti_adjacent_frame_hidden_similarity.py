@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config import Config
-from src.venus_system_motivation import VenusSystemMoti
+from src.system.venus.motivation import VenusSystemMoti
 
 
 def make_accumulating_hidden_states_hook(captured: dict, layer_idx: int):

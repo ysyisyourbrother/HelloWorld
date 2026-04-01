@@ -10,7 +10,7 @@ import os
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from src.venus_system_benchmark import VenusSystemBench
+from src.system.venus.benchmark import VenusSystemBench
 from src.config import Config
 
 def main():

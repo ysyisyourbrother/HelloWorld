@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from src.config import Config
-from src.venus_system_motivation import VenusSystemMoti
+from src.system.venus.motivation import VenusSystemMoti
 
 
 def parse_args():
