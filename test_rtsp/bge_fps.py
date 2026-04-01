@@ -22,7 +22,7 @@ def _ensure_project_root_on_syspath():
 
 
 _ensure_project_root_on_syspath()
-from src.image_bge_vectorizer import ImageBGEVectorizer  # noqa: E402
+from src.memory.image_bge_vectorizer import ImageBGEVectorizer  # noqa: E402
 
 
 def parse_args():

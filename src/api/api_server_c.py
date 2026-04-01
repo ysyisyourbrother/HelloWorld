@@ -12,11 +12,11 @@ import multiprocessing as mp
 
 # 本项目
 from src.config import Config
-from src.reasoner import QueryRequest, QueryResponse
+from src.llm.reasoner import QueryRequest, QueryResponse
 
 # 导入生成的 gRPC 代码
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from proto import query_service_pb2
 from proto import query_service_pb2_grpc
 

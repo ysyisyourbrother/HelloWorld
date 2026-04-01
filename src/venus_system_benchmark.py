@@ -25,12 +25,12 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import Config
-from src.video_input import VideoInput, SymVideoInput
+from src.video_input.video_input import VideoInput, SymVideoInput
 from src.benchmark.utils import build_rag_prompt
-from src.frame_vectorizer import FrameVectorizer, SymFrameVectorizer
-from src.memory_manager import MemoryManager
-from src.query_vectorizer import QueryVectorizer
-from src.reasoner import Reasoner, QueryRequest
+from src.memory.frame_vectorizer import FrameVectorizer, SymFrameVectorizer
+from src.memory.memory_manager import MemoryManager
+from src.memory.query_vectorizer import QueryVectorizer
+from src.llm.reasoner import Reasoner, QueryRequest
 
 
 class VenusSystemBench:

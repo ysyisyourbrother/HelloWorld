@@ -8,9 +8,9 @@ from typing import Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import Config
-from src.api_server_e import APIServerE
-from src.video_input import VideoInput
-from src.memory_manager import MemoryManager
+from src.api.api_server_e import APIServerE
+from src.video_input.video_input import VideoInput
+from src.memory.memory_manager import MemoryManager
 
 
 # 支持的边端模式

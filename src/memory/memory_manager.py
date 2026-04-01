@@ -15,9 +15,9 @@ import multiprocessing as mp
 
 # 本项目
 from src.config import Config
-from src.frame_vectorizer import FrameVectorData, FrameVectorizer
-from src.query_vectorizer import QueryData, QueryVectorizer
-from src.video_input import FrameData
+from src.memory.frame_vectorizer import FrameVectorData, FrameVectorizer
+from src.memory.query_vectorizer import QueryData, QueryVectorizer
+from src.video_input.video_input import FrameData
 
 # 视频读取库
 import cv2

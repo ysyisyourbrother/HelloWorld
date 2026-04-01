@@ -9,8 +9,8 @@ from typing import Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import Config
-from src.api_server_c import APIServerC
-from src.reasoner import Reasoner
+from src.api.api_server_c import APIServerC
+from src.llm.reasoner import Reasoner
 
 
 class VenusSystemCloud:

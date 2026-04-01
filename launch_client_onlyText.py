@@ -1,6 +1,6 @@
 import sys
 import argparse
-from src.api_server_e import APIServerE
+from src.api.api_server_e import APIServerE
 from src.config import Config
 
 def qa_loop_example(dialog_id: int = 1, cloud_url: str = None):

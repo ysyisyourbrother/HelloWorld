@@ -12,13 +12,13 @@ import cv2
 
 # 本项目
 from src.config import Config
-from src.query_vectorizer import QueryData
-from src.memory_manager import MemoryManager, MemoryResult
+from src.memory.query_vectorizer import QueryData
+from src.memory.memory_manager import MemoryManager, MemoryResult
 from src.video_utils.about_frame import extract_frame_by_index
 
 # 导入生成的 gRPC 代码
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from proto import query_service_pb2
 from proto import query_service_pb2_grpc
 

@@ -16,8 +16,8 @@ from typing import List
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config import Config
-from src.video_input import VideoInput, FrameData
-from src.frame_vectorizer import FrameVectorizer, FrameVectorData
+from src.video_input.video_input import VideoInput, FrameData
+from src.memory.frame_vectorizer import FrameVectorizer, FrameVectorData
 
 
 def parse_args():
