@@ -1,6 +1,28 @@
 import json
 import os
 
+
+def _default_bge_vl_model_path():
+    """
+    本地 BGE-VL 权重目录默认值。
+    优先环境变量 BGE_VL_MODEL_PATH 或 HELLOWORLD_BGE_VL_MODEL_PATH；
+    否则在常见部署路径中选第一个已存在的目录（如 Jetson Orin 上常为 SSD 路径）。
+    """
+    env = os.environ.get("BGE_VL_MODEL_PATH") or os.environ.get(
+        "HELLOWORLD_BGE_VL_MODEL_PATH"
+    )
+    if env:
+        return env
+    candidates = (
+        "/mnt/share/cache/models/BGE-VL-base",
+        "/mnt/ssd/huggingface/model/BGE-VL-base",
+    )
+    for p in candidates:
+        if os.path.isdir(p):
+            return p
+    return candidates[0]
+
+
 class Config:
     def __init__(self, config_path="configs/config.json"):
         """
@@ -43,13 +65,20 @@ class Config:
         self.frame_model_type = frame_config.get("model_type", "BGE")
         self.frame_interval = frame_config.get("frame_interval", 10)
         self.frame_device = frame_config.get("device", "cuda")
-        self.frame_model_path = frame_config.get("model_path", "/mnt/share/cache/models/BGE-VL-base")
-        
+        self.frame_model_path = frame_config.get(
+            "model_path", _default_bge_vl_model_path()
+        )
+        self.frame_attn_implementation = frame_config.get(
+            "attn_implementation", "eager"
+        )
+
         # Query Vectorizer配置
         query_config = self._config.get("query_vectorizer", {})
         self.query_log_file = query_config.get("log_file", "logs/query_vectorizer.log")
         self.query_model_type = query_config.get("model_type", "BGE")
-        self.query_model_path = query_config.get("model_path", "/mnt/share/cache/models/BGE-VL-base")
+        self.query_model_path = query_config.get(
+            "model_path", _default_bge_vl_model_path()
+        )
         self.query_device = query_config.get("device", "cuda")
         
         # Memory Manager配置

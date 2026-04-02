@@ -66,7 +66,8 @@ class FrameVectorizer:
         self.log_file = config.frame_log_file
         self.frame_device = config.frame_device
         self.frame_model_path = config.frame_model_path
-        
+        self.frame_attn_implementation = config.frame_attn_implementation
+
         self.vectorizer = None
         self.vectorized_frame_count = 0
         self.all_frame_count = 0
@@ -136,7 +137,9 @@ class FrameVectorizer:
 
     def _initialize_vectorizer(self):
         """初始化向量化器"""
-        attn_impl = "eager" if self._encode_hooks_need_attentions else "sdpa"
+        attn_impl = self.frame_attn_implementation
+        if self._encode_hooks_need_attentions:
+            attn_impl = "eager"
         if self.model_type == "BGE":
             self.vectorizer = ImageBGEVectorizer(
                 self.frame_device, self.frame_model_path, attn_implementation=attn_impl
