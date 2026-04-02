@@ -61,7 +61,7 @@ if __name__ == "__main__":
     moti.register_retrieve_hook(capture_all_scores)
 
     result = moti.run_video_flow(
-        video_path="local_datasets/Video-MME/data/44ivpEIcBhE.mp4",
+        video_path="demo/assets/44ivpEIcBhE.mp4",
         video_id="44ivpEIcBhE",
         questions=[
             {

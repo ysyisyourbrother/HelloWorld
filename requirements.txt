@@ -1,3 +1,5 @@
+# Python 3.6 无标准库 dataclasses，需回移植包
+dataclasses>=0.8; python_version<'3.7'
 opencv-python>=4.5.0
 numpy>=1.21.0,<2.0
 # 在windows系统上, Jetson设备上使用faiss-cpu, 在linux系统上使用faiss-gpu

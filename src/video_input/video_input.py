@@ -8,11 +8,10 @@ import torch
 import logging
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
-from typing import Optional, List, Iterator, Dict
-from decord import VideoReader
-
+from typing import Optional, List, Iterator, Dict, Tuple
 # 本项目
 from src.config import Config
+from src.video_utils.file_video_reader import open_file_video_reader
 from src.video_utils.ffprobe_utils import get_frame_info_for_stream
 
 @dataclass
@@ -46,7 +45,8 @@ class VideoInputBase:
         self.target_fps = config.video_target_fps
 
         self.cap = None  # cv2视频捕获对象
-        self.vr = None  # decord视频读取器对象
+        self.vr = None  # 文件视频读取器（decord/cv2 适配，与 decord.VideoReader 索引接口一致）
+        self._file_reader_backend = getattr(config, "video_reader_backend", "auto")
         self.current_frame_idx = 0 # 读取到的帧索引
         self.total_frames = 0
         self.video_fps = None
@@ -87,13 +87,12 @@ class VideoInputBase:
     
     def _initialize_video_source(self):
         """初始化视频源"""
-        self._decord_load_video(self.video_file_path)
+        self._open_file_video_reader(self.video_file_path)
         self.current_frame_idx = 0
     
-    def _decord_load_video(self, video_file_path: str) -> bool:
-        """使用decord加载视频文件"""
-        # 使用decord的VideoReader加载视频
-        self.vr = VideoReader(video_file_path)
+    def _open_file_video_reader(self, video_file_path: str) -> bool:
+        """使用 file_video_reader（decord 或 cv2）加载本地视频文件"""
+        self.vr = open_file_video_reader(video_file_path, self._file_reader_backend)
         
         self.video_fps = self.vr.get_avg_fps()
         self.total_frames = len(self.vr)
@@ -288,6 +287,11 @@ class VideoInputOnline(VideoInputBase):
         except (AssertionError, ValueError) as e:
             logging.getLogger(__name__).debug("停止子进程时跳过 join: %s", e)
         self.cap = None
+        if self.vr is not None and hasattr(self.vr, "close"):
+            try:
+                self.vr.close()
+            except Exception:
+                pass
         self.vr = None
 
     def get_frame(self):
@@ -325,9 +329,9 @@ class SymVideoInput(VideoInputBase):
 
     def __init__(self, config=None):
         super().__init__(config)
-        self.i_frame_indices: list[int] = []
-        self.frame_types: list[str] = []
-        self.pkt_sizes: list[int] = []
+        self.i_frame_indices: List[int] = []
+        self.frame_types: List[str] = []
+        self.pkt_sizes: List[int] = []
 
     def _to_sym_frame_data(
         self,
@@ -335,10 +339,10 @@ class SymVideoInput(VideoInputBase):
         frame_id: int,
         p_type: int,
         source_path: str,
-        pkt_size: int | None = None,
-        total_frames: int | None = None,
-        video_fps: float | None = None,
-        duration: float | None = None,
+        pkt_size: Optional[int] = None,
+        total_frames: Optional[int] = None,
+        video_fps: Optional[float] = None,
+        duration: Optional[float] = None,
         trace_ts: Optional[Dict[str, float]] = None,
     ) -> SymFrameData:
         """构造 SymFrameData，包含 p_type 与 pkt_size 信息"""
@@ -354,7 +358,7 @@ class SymVideoInput(VideoInputBase):
             trace_ts=trace_ts,
         )
 
-    def _extract_video_frame_at(self, frame_idx: int) -> SymFrameData | None:
+    def _extract_video_frame_at(self, frame_idx: int) -> Optional[SymFrameData]:
         """按索引提取单帧，返回 SymFrameData（含 p_type），不修改 current_frame_idx"""
         if frame_idx < 0 or frame_idx >= self.total_frames:
             return None
@@ -390,7 +394,7 @@ class SymVideoInput(VideoInputBase):
         self.i_frame_indices, self.frame_types, self.pkt_sizes = get_frame_info_for_stream(video_file_path)
         self.logger.info(f"ffprobe: I 帧数 {len(self.i_frame_indices)}, 总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}")
 
-    def iter_gop_ranges(self) -> Iterator[tuple[int, int]]:
+    def iter_gop_ranges(self) -> Iterator[Tuple[int, int]]:
         """
         按 GOP 迭代，仅返回 (start, end) 索引范围，不解码帧。
         需先调用 init_for_file(video_path)。

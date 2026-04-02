@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 import warnings
+from typing import Tuple
 
 import matplotlib
 matplotlib.use("Agg")
@@ -26,7 +27,7 @@ def get_token_encodings(
     token_idx: int,
     model_path: str,
     device: str = "cuda",
-) -> tuple[np.ndarray, np.ndarray, str]:
+) -> Tuple[np.ndarray, np.ndarray, str]:
     """
     获取 BGE 推理前，指定位置 token 的位置编码和语义编码。
 

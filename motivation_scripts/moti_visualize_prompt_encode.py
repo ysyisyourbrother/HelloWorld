@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 import warnings
+from typing import Any, List, Optional, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
@@ -26,7 +27,7 @@ def get_last_layer_and_pooled(
     model_path: str,
     device: str = "cuda",
     output_attentions: bool = False,
-) -> tuple[np.ndarray, np.ndarray, list[str], tuple | None]:
+) -> Tuple[np.ndarray, np.ndarray, List[str], Optional[Any]]:
     """
     获取 BGE 最后一层每个 token 的编码和 pooling 后的最终输出。
 
@@ -93,7 +94,7 @@ def visualize_token_encode(
     model_path: str,
     output_path: str,
     device: str = "cuda",
-    attn_layer: int | None = -1,
+    attn_layer: Optional[int] = -1,
 ):
     """
     上中下三个子图：上图为各 token 编码与 pooling 输出；中图为各 token 与 EOT 的余弦相似度；

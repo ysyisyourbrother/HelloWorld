@@ -1,6 +1,7 @@
 {
   "video_input": {
-    "original_fps": false
+    "original_fps": false,
+    "reader_backend": "auto"
   },
   "frame_vectorizer": {
     "frame_interval": 10

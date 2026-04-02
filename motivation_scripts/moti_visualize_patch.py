@@ -3,12 +3,13 @@ import argparse
 import json
 import os
 import sys
+from typing import Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.config import Config
 
 
-def _load_bge_patch_params(config_path: str) -> tuple[int, int]:
+def _load_bge_patch_params(config_path: str) -> Tuple[int, int]:
     """从 BGE 模型配置中读取 image_size 和 patch_size"""
     config = Config(config_path)
     model_path = config.frame_model_path

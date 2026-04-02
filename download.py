@@ -10,6 +10,7 @@ import sys
 import subprocess
 import logging
 import argparse
+from typing import Optional
 
 BASE_DIR = "/mnt/share/cache"
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
@@ -89,8 +90,8 @@ def detect_repo_type(repo_id: str) -> str:
 # Download function
 # --------------------------
 def download_repo(repo_id: str,
-                  token: str | None,
-                  repo_type: str | None = None,
+                  token: Optional[str],
+                  repo_type: Optional[str] = None,
                   base_dir: str = BASE_DIR):
     # Login if token is provided
     if token:

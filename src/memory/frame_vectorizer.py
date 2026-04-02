@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from typing import Any, Optional, List, Callable, Tuple, Dict
 import glob
 import os
-from decord import VideoReader
 # 本项目
 from src.config import Config
 from src.memory.image_bge_vectorizer import ImageBGEVectorizer
 from src.video_input.video_input import FrameData, SymFrameData, SymVideoInput
+from src.video_utils.file_video_reader import open_file_video_reader
 
 @dataclass
 class FrameVectorData:
@@ -76,7 +76,8 @@ class FrameVectorizer:
         self._encode_hooks: List[Callable] = []
         self._encode_hooks_need_hidden_states = False
         self._encode_hooks_need_attentions = False
-        
+        self._video_reader_backend = getattr(config, "video_reader_backend", "auto")
+
     def _set_logger(self):
         """设置日志记录器"""
         log_file = self.log_file
@@ -137,12 +138,6 @@ class FrameVectorizer:
             self.vectorizer = ImageBGEVectorizer(
                 self.frame_device, self.frame_model_path, attn_implementation=attn_impl
             )
-        elif self.model_type == "ViT":
-            # 为了兼容性保留ViT选项，但实际上使用BGE
-            print("注意: 当前配置为ViT: 但将使用BGE模型")
-            self.vectorizer = ImageBGEVectorizer(
-                self.frame_device, self.frame_model_path, attn_implementation=attn_impl
-            )
         else:
             raise ValueError(f"不支持的模型类型: {self.model_type}")
     
@@ -166,7 +161,7 @@ class FrameVectorizer:
         try:
             vr = self._video_readers.get(source_path)
             if vr is None:
-                vr = VideoReader(source_path)
+                vr = open_file_video_reader(source_path, self._video_reader_backend)
                 self._video_readers[source_path] = vr
             return vr[frame_id].asnumpy()
         except Exception as e:
@@ -308,7 +303,7 @@ class SymFrameVectorizer(FrameVectorizer):
         try:
             vr = self._video_readers.get(source_path)
             if vr is None:
-                vr = VideoReader(source_path)
+                vr = open_file_video_reader(source_path, self._video_reader_backend)
                 self._video_readers[source_path] = vr
             return vr[frame_id].asnumpy()
         except Exception:

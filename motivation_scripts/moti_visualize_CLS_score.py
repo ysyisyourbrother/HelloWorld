@@ -5,14 +5,14 @@ import numpy as np
 import os
 import sys
 import torch
-from typing import Union
+from typing import Tuple, Union
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.config import Config
 from models.bge.modeling_MMRet_CLIP import CLIPModel
 
 
-def _hex_to_bgr(hex_str: str) -> tuple[int, int, int]:
+def _hex_to_bgr(hex_str: str) -> Tuple[int, int, int]:
     """#RRGGBB -> (B, G, R)"""
     hex_str = hex_str.lstrip("#")
     r = int(hex_str[0:2], 16)
@@ -24,7 +24,7 @@ def _hex_to_bgr(hex_str: str) -> tuple[int, int, int]:
 def _get_color_from_colormap(
     colormap: Union[int, dict],
     v_norm: float,
-) -> tuple[int, int, int]:
+) -> Tuple[int, int, int]:
     """
     根据归一化值 v_norm in [0, 1] 获取 BGR 颜色。
 
@@ -54,7 +54,7 @@ def _get_color_from_colormap(
         return tuple(cv2.applyColorMap(np.array([[v_uint8]], dtype=np.uint8), colormap)[0, 0])
 
 
-def _load_bge_patch_params(config_path: str) -> tuple[int, int]:
+def _load_bge_patch_params(config_path: str) -> Tuple[int, int]:
     """从 BGE 模型配置中读取 image_size 和 patch_size"""
     config = Config(config_path)
     model_path = config.frame_model_path

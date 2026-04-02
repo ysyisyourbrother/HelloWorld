@@ -6,10 +6,15 @@
 #
 # 选项:
 #   -n, --dry-run          仅打印将要传输的内容，不实际同步
-#   -d, --dest PATH        远端目录（默认: ~/HelloWorld）
+#   -d, --dest PATH        远端目录（默认: ~/CodeSpace/Symphony）
 #   -e, --exclude PATTERN  排除规则，可重复；传给 rsync 的 --exclude
 #   -f, --exclude-from FILE  从文件读取排除规则（每行一条，# 开头为注释）
+#   --delete-excluded      在 Orin 上删除与排除规则匹配的已有文件/目录（rsync --delete-excluded）；默认关闭
 #   -h, --help             显示帮助
+#
+# 删除行为:
+#   始终使用 rsync --delete：本地已删除且未被排除的路径，会在 Orin 上被删除。
+#   加上 --delete-excluded 后，Orin 上曾被同步、现落在排除列表内的路径也会被删除（仅写进排除列表默认不会删远端旧文件）。
 #
 # 环境变量:
 #   ORIN_HOST   SSH Host 名（默认: orin）
@@ -25,11 +30,12 @@ PROJECT_ROOT="$SCRIPT_DIR"
 ORIN_HOST="${ORIN_HOST:-orin}"
 ORIN_DEST="${ORIN_DEST:-~/CodeSpace/Symphony}"
 DRY_RUN=()
+DELETE_EXCLUDED=()
 EXCLUDES=()
 EXCLUDE_FILES=()
 
 usage() {
-  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -49,6 +55,10 @@ while [[ $# -gt 0 ]]; do
     -f | --exclude-from)
       EXCLUDE_FILES+=(--exclude-from "${2:?需要 --exclude-from 参数}")
       shift 2
+      ;;
+    --delete-excluded)
+      DELETE_EXCLUDED=(--delete-excluded)
+      shift
       ;;
     -h | --help)
       usage
@@ -72,6 +82,7 @@ BUILTIN_EXCLUDES=(
 )
 
 rsync -avz --delete \
+  "${DELETE_EXCLUDED[@]}" \
   "${DRY_RUN[@]}" \
   "${BUILTIN_EXCLUDES[@]}" \
   "${EXCLUDES[@]}" \

@@ -3,9 +3,10 @@
 import json
 import subprocess
 from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
 
-def get_i_frame_indices(video_path: str) -> list[int]:
+def get_i_frame_indices(video_path: str) -> List[int]:
     """
     使用 ffprobe 获取视频中 pict_type 为 I 的帧编号（0-based 索引），以列表形式返回。
 
@@ -37,7 +38,7 @@ def get_i_frame_indices(video_path: str) -> list[int]:
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        universal_newlines=True,
         check=True,
     )
 
@@ -47,7 +48,7 @@ def get_i_frame_indices(video_path: str) -> list[int]:
     return [i for i, f in enumerate(frames) if f.get("pict_type") == "I"]
 
 
-def get_frame_types(video_path: str) -> list[str]:
+def get_frame_types(video_path: str) -> List[str]:
     """
     使用 ffprobe 获取视频每一帧的 pict_type（I/P/B），按显示顺序返回。
 
@@ -79,7 +80,7 @@ def get_frame_types(video_path: str) -> list[str]:
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        universal_newlines=True,
         check=True,
     )
 
@@ -88,7 +89,7 @@ def get_frame_types(video_path: str) -> list[str]:
 
     return [f.get("pict_type", "?") for f in frames]
 
-def get_pkt_size(video_path: str) -> list[int]:
+def get_pkt_size(video_path: str) -> List[int]:
     """
     使用 ffprobe 获取视频中每个 packet 的 size（字节），按顺序返回。
 
@@ -119,7 +120,7 @@ def get_pkt_size(video_path: str) -> list[int]:
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        universal_newlines=True,
         check=True,
     )
 
@@ -127,7 +128,7 @@ def get_pkt_size(video_path: str) -> list[int]:
     return [int(line.split(",")[2]) for line in lines if line.strip()]
 
 
-def get_frame_info_with_pkt_size(video_path: str) -> list[dict]:
+def get_frame_info_with_pkt_size(video_path: str) -> List[Dict[str, Any]]:
     """
     使用 ffprobe 获取视频每一帧的 pict_type、pkt_pts_time、pkt_size，按显示顺序返回。
 
@@ -158,7 +159,7 @@ def get_frame_info_with_pkt_size(video_path: str) -> list[dict]:
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        universal_newlines=True,
         check=True,
     )
 
@@ -175,7 +176,7 @@ def get_frame_info_with_pkt_size(video_path: str) -> list[dict]:
     ]
 
 
-def get_frame_info_for_stream(video_path: str) -> tuple[list[int], list[str], list[int]]:
+def get_frame_info_for_stream(video_path: str) -> Tuple[List[int], List[str], List[int]]:
     """
     一次 ffprobe 调用返回 I 帧索引、帧类型、每帧 pkt_size。
     等价于 (get_i_frame_indices, get_frame_types, get_pkt_size) 的合并结果。

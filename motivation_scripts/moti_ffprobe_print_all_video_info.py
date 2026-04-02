@@ -2,12 +2,13 @@ import subprocess
 import argparse
 from pathlib import Path
 from collections import Counter
+from typing import Optional
 
 # 常见视频扩展名
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"}
 
 
-def get_video_codec(video_path: str) -> str | None:
+def get_video_codec(video_path: str) -> Optional[str]:
     """使用 ffprobe 获取视频编码方式，失败返回 None"""
     cmd = [
         "ffprobe",
@@ -20,8 +21,9 @@ def get_video_codec(video_path: str) -> str | None:
     try:
         result = subprocess.run(
             cmd,
-            capture_output=True,
-            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
             check=True,
         )
         # 输出格式为 "codec_name=xxx"，取等号后的部分

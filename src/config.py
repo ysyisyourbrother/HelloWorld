@@ -34,6 +34,8 @@ class Config:
         self.video_file_path = video_config.get("video_file_path", "demo/assets/cooking.mp4")
         self.video_original_fps = video_config.get("original_fps", True)  # 是否按原帧率入队
         self.video_target_fps = video_config.get("target_fps", 8)  # 特定帧率
+        # 本地 mp4 解码：auto（有 decord 用 decord，否则 cv2）| decord | cv2；可被环境变量 VIDEO_READER_BACKEND 覆盖（auto 时）
+        self.video_reader_backend = video_config.get("reader_backend", "auto")
 
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})

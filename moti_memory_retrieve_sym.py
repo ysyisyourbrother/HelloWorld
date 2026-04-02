@@ -27,6 +27,7 @@ def parse_args():
         help="将相似度最高的 k 个帧标记为五角星，0 表示不标记",
     )
     parser.add_argument(
+        "-o",
         "--output_path",
         type=str,
         default="motivation_results_symphony/retrieve",
@@ -60,7 +61,7 @@ def main():
     moti.register_retrieve_hook(capture_all_scores)
 
     result = moti.run_video_flow(
-        video_path="local_datasets/Video-MME/data/44ivpEIcBhE.mp4",
+        video_path="demo/assets/44ivpEIcBhE.mp4",
         video_id="44ivpEIcBhE",
         questions=[
             {
