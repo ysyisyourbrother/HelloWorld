@@ -162,6 +162,9 @@ class APIServerC:
         self.logger.addHandler(console_handler)
 
         # 文件处理器
+        log_dir = os.path.dirname(log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
         file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(file_formatter)
