@@ -20,6 +20,7 @@ motivation_results_symphony/retrieve
 motivation_results_symphony/short
 motivation_results_symphony/*.json
 motivation_results_symphony/*.png
+motivation_results_symphony/memory
 motivation_results/adjacent_frame_attn_weights
 motivation_results/adjacent_frame_hidden_states
 motivation_results/ffprobe
@@ -30,3 +31,4 @@ motivation_results/*.json
 motivation_results/*.png
 motivation_results/text_embedding
 motivation_results/text_encode
+motivation_results/memory

@@ -1,0 +1,21 @@
+{
+  "video_input": {
+    "original_fps": false
+  },
+  "frame_vectorizer": {
+    "select_strategy": "random"
+  },
+  "memory_manager": {
+    "save_retrieved_frames": true,
+    "save_injected_frames": false
+  },
+  "reasoner": {
+    "max_history_turns": 10
+  },
+  "benchmark": {
+    "db_dir_egoschema": "motivation_results_symphony/memory/egoschema",
+    "db_dir_videomme": "motivation_results_symphony/memory/videomme",
+    "result_dir": "motivation_results_symphony",
+    "use_cloud": false
+  }
+}
