@@ -39,7 +39,7 @@ class Config:
         frame_config = self._config.get("frame_vectorizer", {})
         self.frame_log_file = frame_config.get("log_file", "logs/frame_vectorizer.log")
         self.frame_model_type = frame_config.get("model_type", "BGE")
-        self.frame_interval = frame_config.get("frame_interval", 1)
+        self.frame_interval = frame_config.get("frame_interval", 10)
         self.frame_device = frame_config.get("device", "cuda")
         self.frame_model_path = frame_config.get("model_path", "/mnt/share/cache/models/BGE-VL-base")
         
@@ -60,6 +60,8 @@ class Config:
         self.memory_dimension = memory_config.get("dimension", 512)
         self.memory_topk = memory_config.get("topk", 5)
         self.memory_mode = memory_config.get("mode", "both")  # ["only_query", "only_inject", "both"]
+        self.memory_save_retrieved_frames = memory_config.get("save_retrieved_frames", True)
+        self.memory_save_injected_frames = memory_config.get("save_injected_frames", False)
         
         # Reasoner配置
         reasoner_config = self._config.get("reasoner", {})
@@ -82,18 +84,18 @@ class Config:
         self.reasoner_top_p = reasoner_config.get("top_p", 0.1)
         self.reasoner_num_beams = reasoner_config.get("num_beams", 1)
         self.reasoner_do_sample = reasoner_config.get("do_sample", False)
-        self.reasoner_max_history_turns = reasoner_config.get("max_history_turns", None)  # None 表示不限制轮数
+        self.reasoner_max_history_turns = reasoner_config.get("max_history_turns", 10)  # None 表示不限制轮数
         
         # API Server E配置
         api_e_config = self._config.get("api_server_e", {})
-        self.cloud_server_url = api_e_config.get("cloud_server_url", "localhost:9000")
+        self.cloud_server_url = api_e_config.get("cloud_server_url", "127.0.0.1:9000")
         self.api_e_log_file = api_e_config.get("log_file", "logs/api_server_e.log")
         self.api_e_test_mode = api_e_config.get("test_mode", False)
         
         # API Server C配置
         api_c_config = self._config.get("api_server_c", {})
         self.api_c_log_file = api_c_config.get("log_file", "logs/api_server_c.log")
-        self.server_host = api_c_config.get("host", "0.0.0.0")
+        self.server_host = api_c_config.get("host", "127.0.0.1")
         self.server_port = api_c_config.get("port", 9000)
         
         # Cloud Server配置
@@ -109,12 +111,12 @@ class Config:
         self.benchmark_subset = bench_config.get("subset", "short")  # egoschema: "Subset"; Video-MME: "short"|"medium"|"long"
         self.benchmark_dataset_path = bench_config.get("dataset_path", "local_datasets")
         self.benchmark_batch_size = bench_config.get("batch_size", 16)
-        self.benchmark_result_dir = bench_config.get("result_dir", "benchmark_results")
+        self.benchmark_result_dir = bench_config.get("result_dir", "benchmark_results/venus")
         self.benchmark_use_cloud = bench_config.get("use_cloud", True)
         self.benchmark_video_dir_egoschema = bench_config.get("video_dir_egoschema", "local_datasets/egoschema/videos")
         self.benchmark_video_dir_videomme = bench_config.get("video_dir_videomme", "local_datasets/Video-MME/data")
-        self.benchmark_db_dir_egoschema = bench_config.get("db_dir_egoschema", "database/egoschema")
-        self.benchmark_db_dir_videomme = bench_config.get("db_dir_videomme", "database/videomme")
+        self.benchmark_db_dir_egoschema = bench_config.get("db_dir_egoschema", "database/egoschema/venus")
+        self.benchmark_db_dir_videomme = bench_config.get("db_dir_videomme", "database/videomme/venus")
 
     def reload(self):
         """重新加载配置"""

@@ -13,7 +13,7 @@ import cv2
 # 本项目
 from src.config import Config
 from src.memory.query_vectorizer import QueryData
-from src.memory.memory_manager import MemoryManager, MemoryResult
+from src.memory.memory_manager import MemoryManagerBase, MemoryResult
 from src.video_utils.about_frame import extract_frame_by_index
 
 # 导入生成的 gRPC 代码
@@ -47,7 +47,7 @@ class APIServerE:
         self.query_id_counter = 0
         self.query_id_lock = threading.Lock()
 
-        self.memory_manager: Optional[MemoryManager] = None
+        self.memory_manager: Optional[MemoryManagerBase] = None
 
         self._set_logger()
     
@@ -83,7 +83,7 @@ class APIServerE:
         self.logger.addHandler(file_handler)
         self.logger.propagate = False
     
-    def set_memory_manager(self, memory_manager: MemoryManager):
+    def set_memory_manager(self, memory_manager: MemoryManagerBase):
         """设置本地记忆管理器（同步调用）"""
         self.memory_manager = memory_manager
     

@@ -51,7 +51,7 @@ class QueryResponse:
     timestamp: float             # 时间戳
 
 
-class Reasoner:
+class ReasonerBase:
     def __init__(self, config: Config = None):
         """
         初始化Reasoner模块
@@ -95,15 +95,8 @@ class Reasoner:
         self.image_processor = None
         self.max_length = None
         
-        # 队列相关
-        self.prompt_queue = mp.Queue(maxsize=100)
-        self.result_queue = mp.Queue(maxsize=100)
-        
         # 按 dialog_id 维护对话历史：(user_turn, assistant_turn) 列表
         self.dialog_histories: Dict[int, List[Tuple[str, str]]] = {}
-        
-        self.running = False
-        self.running_event = None
         
     def _set_logger(self):
         """设置日志记录器"""
@@ -288,142 +281,6 @@ class Reasoner:
         text_outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
         return text_outputs
     
-    def _process_query(self, query_request: QueryRequest):
-        """
-        处理单个查询请求
-        
-        Args:
-            query_request: 查询请求对象
-        """
-        try:
-            query_id = query_request.query_id
-            query_text = query_request.query_text
-            memory_results = query_request.memory_results
-            dialog_id = getattr(query_request, "dialog_id", 0)
-            
-            self.logger.info(f"开始处理查询 {query_id}: {query_text} (dialog_id={dialog_id})")
-            
-            # 测试模式：直接返回测试文本，不加载模型
-            if self.test_mode:
-                self.logger.info(f"测试模式：查询 {query_id} 直接返回测试文本")
-                response = QueryResponse(
-                    query_id=query_id,
-                    result=self.test_response,
-                    error=None,
-                    timestamp=time.time()
-                )
-                self.result_queue.put(response)
-                self.logger.info(f"测试模式：查询 {query_id} 处理完成")
-                return
-            
-            # 正常模式：使用模型进行推理
-            # 预处理帧数据
-            frames_tensor = None
-            if memory_results and len(memory_results) > 0:
-                # 假设memory_results是numpy数组列表（RGB格式）
-                frames_tensor = self._preprocess_frames(memory_results)
-                self.logger.debug(f"预处理了 {len(memory_results)} 帧，张量形状: {frames_tensor.shape}")
-
-            # 当前轮用户提示
-            question = self._build_prompt(query_text, has_frames=(frames_tensor is not None))
-            # 按 dialog_id 取历史（后续可在此处按 max_history_turns 截断）
-            history = self.dialog_histories.get(dialog_id, []) # TODO: 如果是新的对话，把其他对话都删了以释放内存，这在处理benchmark时尤为重要
-            if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
-                history = history[-self.max_history_turns:]
-            
-            # 执行推理（带历史）
-            start_time = time.time()
-            result_text = self._inference_with_history(question, frames_tensor, history=history)
-            inference_time = time.time() - start_time
-            
-            self.logger.debug(f"查询 {query_id} 推理完成，耗时: {inference_time:.2f}s")
-            self.logger.info(f"回答: {result_text}")
-            
-            # 写回历史：dialog_id != 0 时追加本轮；存历史时去掉 <image> 等占位符，避免下一轮无图时 prompt 仍含 image token 导致 CUDA assert
-            if dialog_id != 0:
-                history_user_msg = self._strip_image_placeholders_for_history(question)
-                self.dialog_histories.setdefault(dialog_id, []).append((history_user_msg, result_text))
-                if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
-                    self.dialog_histories[dialog_id] = self.dialog_histories[dialog_id][-self.max_history_turns:]
-            
-            # 构建响应
-            response = QueryResponse(
-                query_id=query_id,
-                result=result_text,
-                error=None,
-                timestamp=time.time()
-            )
-            self.result_queue.put(response)
-            
-        except Exception as e:
-            self.logger.error(f"处理查询 {query_request.query_id} 时出错: {e}", exc_info=True)
-            # 发送错误响应
-            response = QueryResponse(
-                query_id=query_request.query_id,
-                result=None,
-                error=str(e),
-                timestamp=time.time()
-            )
-            self.result_queue.put(response)
-    
-    def _process_queries(self):
-        """处理查询的主循环"""
-        self.logger.info("查询处理线程启动")
-        
-        while self.running_event.is_set():
-            try:
-                # 从队列获取查询请求
-                query_request: QueryRequest = self.prompt_queue.get(timeout=1.0)
-                self._process_query(query_request)
-            except queue.Empty:
-                continue
-            except Exception as e:
-                self.logger.error(f"处理查询时出错: {e}", exc_info=True)
-        
-        self.logger.info("查询处理线程退出")
-    
-    def _process_main(self):
-        """主处理函数"""
-        self._set_logger()
-        self.logger.info(f"Reasoner进程启动, 进程ID: {mp.current_process().pid}")
-        
-        # 测试模式：不加载模型
-        if self.test_mode:
-            self.logger.info("测试模式：不加载模型，直接返回测试文本")
-        else:
-            # 正常模式：初始化模型
-            self._initialize_model()
-        
-        # 启动查询处理循环
-        self._process_queries()
-    
-    def start(self):
-        """启动Reasoner进程"""
-        self.running_event = mp.Event()
-        self.running_event.set()
-        
-        self.process = mp.Process(target=self._process_main, daemon=True)
-        if hasattr(self.process, 'name'):
-            self.process.name = "Reasoner-Processor"
-        self.process.start()
-        self.running = True
-    
-    def start_single_process(self):
-        """启动单进程模式"""
-        self.running_event = mp.Event()
-        self.running_event.set()
-        self._process_main()
-    
-    def stop(self):
-        """停止Reasoner进程"""
-        if hasattr(self, 'running_event'):
-            self.running_event.clear()
-        
-        self.running = False
-        
-        if hasattr(self, 'process') and self.process.is_alive():
-            self.process.join(timeout=5)
-    
     def infer_sync(self, query_request: QueryRequest) -> QueryResponse:
         """
         同步推理，直接返回结果（用于 benchmark 等单进程场景，无需 gRPC/队列）。
@@ -488,27 +345,90 @@ class Reasoner:
                 timestamp=time.time()
             )
 
+class ReasonerOnline(ReasonerBase):
+    """在线推理类：在 Base 同步能力上提供队列与子进程处理。"""
+
+    def __init__(self, config: Config = None):
+        super().__init__(config)
+        self.prompt_queue = mp.Queue(maxsize=100)
+        self.result_queue = mp.Queue(maxsize=100)
+        self.running = False
+        self.running_event = None
+
+    def _process_query(self, query_request: QueryRequest):
+        response = self.infer_sync(query_request)
+        self.result_queue.put(response)
+
+    def _process_queries(self):
+        """处理查询的主循环"""
+        self.logger.info("查询处理线程启动")
+
+        while self.running_event.is_set():
+            try:
+                query_request: QueryRequest = self.prompt_queue.get(timeout=1.0)
+                self._process_query(query_request)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.logger.error(f"处理查询时出错: {e}", exc_info=True)
+
+        self.logger.info("查询处理线程退出")
+
+    def _process_main(self):
+        """主处理函数"""
+        self._set_logger()
+        self.logger.info(f"Reasoner进程启动, 进程ID: {mp.current_process().pid}")
+
+        if self.test_mode:
+            self.logger.info("测试模式：不加载模型，直接返回测试文本")
+        else:
+            self._initialize_model()
+
+        self._process_queries()
+
+    def start(self):
+        """启动Reasoner进程"""
+        self.running_event = mp.Event()
+        self.running_event.set()
+
+        self.process = mp.Process(target=self._process_main, daemon=True)
+        if hasattr(self.process, "name"):
+            self.process.name = "Reasoner-Processor"
+        self.process.start()
+        self.running = True
+
+    def start_single_process(self):
+        """启动单进程模式"""
+        self.running_event = mp.Event()
+        self.running_event.set()
+        self._process_main()
+
+    def stop(self):
+        """停止Reasoner进程"""
+        if hasattr(self, "running_event"):
+            self.running_event.clear()
+
+        self.running = False
+
+        if hasattr(self, "process") and self.process.is_alive():
+            self.process.join(timeout=5)
+
     def add_query(
-        self, 
-        query_text: str, 
-        memory_results: List[Any], 
-        query_id: int
+        self,
+        query_text: str,
+        memory_results: List[Any],
+        query_id: int,
+        dialog_id: int = 0,
     ):
-        """
-        添加查询请求到队列
-        
-        Args:
-            query_text: 查询文本
-            memory_results: 记忆检索结果
-            query_id: 查询ID
-        """
+        """添加查询请求到队列"""
         query_request = QueryRequest(
             query_text=query_text,
             memory_results=memory_results,
-            query_id=query_id
+            query_id=query_id,
+            dialog_id=dialog_id,
         )
         self.prompt_queue.put(query_request)
-    
+
     def get_result_queue(self):
         """获取结果队列"""
         return self.result_queue
@@ -519,7 +439,7 @@ if __name__ == "__main__":
     import cv2
     
     config = Config()
-    reasoner = Reasoner(config)
+    reasoner = ReasonerOnline(config)
     
     try:
         reasoner.start()

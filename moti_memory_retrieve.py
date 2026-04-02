@@ -27,6 +27,7 @@ def parse_args():
         help="将相似度最高的 k 个帧标记为五角星，0 表示不标记",
     )
     parser.add_argument(
+        '-o',
         "--output_path",
         type=str,
         default="motivation_results_symphony/retrieve",
@@ -64,7 +65,8 @@ if __name__ == "__main__":
         video_id="44ivpEIcBhE",
         questions=[
             {
-                "question": "Which instrument is the performer on the stage holding in the video?",
+                # "question": "Which instrument is the performer on the stage holding in the video?",
+                "question": "Instrument?",
                 "options": [
                     "A. Trumpet.",
                     "B. Saxophone.",

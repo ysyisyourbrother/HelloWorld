@@ -27,7 +27,7 @@ class FrameData:
     duration: Optional[float] = None     # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
     trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
-class VideoInput:
+class VideoInputBase:
     def __init__(self, config=None):
         """
         初始化 VideoInput 模块
@@ -45,8 +45,6 @@ class VideoInput:
         self.is_original_fps = config.video_original_fps
         self.target_fps = config.video_target_fps
 
-        # 使用multiprocessing.Queue以支持多进程间通信
-        self.frame_queue = mp.Queue(maxsize=100)
         self.cap = None  # cv2视频捕获对象
         self.vr = None  # decord视频读取器对象
         self.current_frame_idx = 0 # 读取到的帧索引
@@ -151,114 +149,6 @@ class VideoInput:
         
         return frame_data
 
-    def _extract_frames(self):
-        """提取帧的线程函数（不跳过任何帧）"""
-        frames_processed = 0
-        start_time = time.time()
-        
-        # 对于视频文件，使用原始视频的fps来控制帧率
-        # 对于摄像头，使用默认的1/30秒间隔
-        frame_interval = 1.0 / self.video_fps if self.video_fps and self.video_fps > 0 else 1.0 / 30.0
-
-        while self.running_event.is_set():
-            frame_start = time.time()
-            frame_data = self._extract_video_frame(time.time())
-            if frame_data is None:
-                # 视频读取完毕，跳出循环
-                self.logger.info(f"帧数据为None, 可能已到达视频末尾, 跳出循环")
-                break
-            
-            # TODO: 这里可以有两种处理方式：
-            # 1. 确保所有帧都被处理, 不跳过任何帧, 队列满了就阻塞等待
-            # 2. 模拟视频播放, 按视频原始帧率处理帧, 队列满了就丢包
-            if True:
-                # 队列满了就会卡在这里, 这是正常的
-                self._put_frame_safely(frame_data)
-                frames_processed += 1
-            else:
-                # 满了就丢包
-                pass
-            
-            # 帧率控制 - 确保不超过视频原始FPS
-            if self.is_original_fps:
-                frame_elapsed = time.time() - frame_start
-                if frame_elapsed < frame_interval:
-                    sleep_time = frame_interval - frame_elapsed
-                    time.sleep(sleep_time)
-                else:
-                    additional_wait_time = frame_elapsed - frame_interval
-                    self.logger.debug(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
-
-        
-        # 线程结束时打印最终统计信息
-        if frames_processed > 0:
-            elapsed = time.time() - start_time
-            self.logger.info(f"处理完成，共入队列 {frames_processed} 帧，耗时: {elapsed:.2f}s")
-    
-    def start(self):
-        """启动帧提取子进程"""
-        # 创建一个共享变量来控制子进程运行
-        self.running_event = mp.Event()
-        self.running_event.set()
-        # 设置线程为daemon模式，确保主程序退出时线程也会退出
-        # 注意：我们将视频源初始化移到子进程内部，确保资源在子进程上下文中正确创建
-        self.process = mp.Process(target=self._process_main, daemon=True)
-        if hasattr(self.process, 'name'):
-            self.process.name = f"{self.__class__.__name__}-Extractor"
-        self.process.start()
-    
-    def start_single_process(self):
-        """启动单线程处理模式"""
-        self.running_event = mp.Event()
-        self.running_event.set()
-        self._process_main()
-
-    def _process_main(self):
-        """子进程主函数，负责初始化视频源和提取帧"""
-        # 注意：在子进程中需要重新初始化logger
-        self._set_logger()
-        self.logger.info(f"子进程启动, 进程ID: {mp.current_process().pid}")
-        self._initialize_video_source()
-        self._extract_frames()
-    
-    def _put_frame_safely(self, frame_data: FrameData, timeout=None):
-        """安全地将帧放入队列"""
-        try:
-            if timeout is None:
-                self.frame_queue.put(frame_data)
-            else:
-                self.frame_queue.put(frame_data, timeout=timeout)
-            self.logger.debug(f"成功将帧 {frame_data.frame_id} 放入队列")
-        except Exception as e:
-            self.logger.error(f"丢包: {e}")
-
-    def _is_process_parent(self):
-        """当前进程是否为子进程的父进程（只有父进程才能安全调用 is_alive/join）"""
-        if not hasattr(self, 'process'):
-            return False
-        parent_pid = getattr(self.process, '_parent_pid', None)
-        return parent_pid is not None and parent_pid == os.getpid()
-
-    def stop(self):
-        """停止帧提取子进程"""
-        # 使用running_event来停止子进程
-        if hasattr(self, 'running_event'):
-            self.running_event.clear()
-        # 等待子进程结束（仅当当前进程是父进程时才可安全 join）
-        if not hasattr(self, 'process'):
-            return
-        try:
-            if not self._is_process_parent():
-                return
-            if self.process.is_alive():
-                self.process.join(timeout=5)
-        except (AssertionError, ValueError) as e:
-            logging.getLogger(__name__).debug("停止子进程时跳过 join: %s", e)
-        # 注意：在父进程中不释放视频资源，因为它们在子进程中已经被释放
-        # 重置状态以便可能的重新启动
-        self.cap = None
-        self.vr = None
-    
     def get_video_info(self):
         """获取视频信息"""
         return {
@@ -268,17 +158,6 @@ class VideoInput:
             'source': 'file'
         }
     
-    def get_frame(self):
-        """获取一帧数据"""
-        try:
-            return self.frame_queue.get(timeout=1.0)
-        except queue.Empty:
-            return None
-    
-    def get_frame_queue(self):
-        """获取帧队列供其他模块使用"""
-        return self.frame_queue
-
     def init_for_file(self, video_file_path: str):
         """为 benchmark 同步模式初始化视频文件源（不启动子进程）"""
         if not hasattr(self, "logger") or self.logger is None:
@@ -317,6 +196,111 @@ class VideoInput:
         if batch:
             yield batch
 
+
+class VideoInputOnline(VideoInputBase):
+    """在线输入类：在 Base 同步能力上提供进程与队列能力。"""
+
+    def __init__(self, config=None):
+        super().__init__(config)
+        self.frame_queue = mp.Queue(maxsize=100)
+
+    def _extract_frames(self):
+        """提取帧的线程函数（不跳过任何帧）"""
+        frames_processed = 0
+        start_time = time.time()
+
+        frame_interval = 1.0 / self.video_fps if self.video_fps and self.video_fps > 0 else 1.0 / 30.0
+
+        while self.running_event.is_set():
+            frame_start = time.time()
+            frame_data = self._extract_video_frame(time.time())
+            if frame_data is None:
+                self.logger.info("帧数据为None, 可能已到达视频末尾, 跳出循环")
+                break
+
+            self._put_frame_safely(frame_data)
+            frames_processed += 1
+
+            if self.is_original_fps:
+                frame_elapsed = time.time() - frame_start
+                if frame_elapsed < frame_interval:
+                    sleep_time = frame_interval - frame_elapsed
+                    time.sleep(sleep_time)
+                else:
+                    additional_wait_time = frame_elapsed - frame_interval
+                    self.logger.debug(f"发生阻塞, 阻塞时间: {additional_wait_time:.4f}s")
+
+        if frames_processed > 0:
+            elapsed = time.time() - start_time
+            self.logger.info(f"处理完成，共入队列 {frames_processed} 帧，耗时: {elapsed:.2f}s")
+
+    def start(self):
+        """启动帧提取子进程"""
+        self.running_event = mp.Event()
+        self.running_event.set()
+        self.process = mp.Process(target=self._process_main, daemon=True)
+        if hasattr(self.process, "name"):
+            self.process.name = f"{self.__class__.__name__}-Extractor"
+        self.process.start()
+
+    def start_single_process(self):
+        """启动单线程处理模式"""
+        self.running_event = mp.Event()
+        self.running_event.set()
+        self._process_main()
+
+    def _process_main(self):
+        """子进程主函数，负责初始化视频源和提取帧"""
+        self._set_logger()
+        self.logger.info(f"子进程启动, 进程ID: {mp.current_process().pid}")
+        self._initialize_video_source()
+        self._extract_frames()
+
+    def _put_frame_safely(self, frame_data: FrameData, timeout=None):
+        """安全地将帧放入队列"""
+        try:
+            if timeout is None:
+                self.frame_queue.put(frame_data)
+            else:
+                self.frame_queue.put(frame_data, timeout=timeout)
+            self.logger.debug(f"成功将帧 {frame_data.frame_id} 放入队列")
+        except Exception as e:
+            self.logger.error(f"丢包: {e}")
+
+    def _is_process_parent(self):
+        """当前进程是否为子进程的父进程（只有父进程才能安全调用 is_alive/join）"""
+        if not hasattr(self, "process"):
+            return False
+        parent_pid = getattr(self.process, "_parent_pid", None)
+        return parent_pid is not None and parent_pid == os.getpid()
+
+    def stop(self):
+        """停止帧提取子进程"""
+        if hasattr(self, "running_event"):
+            self.running_event.clear()
+        if not hasattr(self, "process"):
+            return
+        try:
+            if not self._is_process_parent():
+                return
+            if self.process.is_alive():
+                self.process.join(timeout=5)
+        except (AssertionError, ValueError) as e:
+            logging.getLogger(__name__).debug("停止子进程时跳过 join: %s", e)
+        self.cap = None
+        self.vr = None
+
+    def get_frame(self):
+        """获取一帧数据"""
+        try:
+            return self.frame_queue.get(timeout=1.0)
+        except queue.Empty:
+            return None
+
+    def get_frame_queue(self):
+        """获取帧队列供其他模块使用"""
+        return self.frame_queue
+
 # pict_type 到整数的映射：I=0, P=1, B=2
 P_TYPE_I, P_TYPE_P, P_TYPE_B = 0, 1, 2
 PICT_TYPE_TO_INT = {"I": P_TYPE_I, "P": P_TYPE_P, "B": P_TYPE_B}
@@ -334,9 +318,9 @@ class SymFrameData:
     duration: Optional[float] = None    # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
     trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
-class SymVideoInput(VideoInput):
+class SymVideoInput(VideoInputBase):
     """
-    继承 VideoInput，按 p_type 分组返回帧：每次迭代返回两个 I 帧之间的帧（留头去尾）。
+    继承 VideoInputBase，按 p_type 分组返回帧：每次迭代返回两个 I 帧之间的帧（留头去尾）。
     """
 
     def __init__(self, config=None):

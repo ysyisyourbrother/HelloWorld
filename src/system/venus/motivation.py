@@ -24,12 +24,12 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from src.config import Config
-from src.video_input.video_input import VideoInput
+from src.video_input.video_input import VideoInputBase
 from src.benchmark.utils import build_rag_prompt
 from src.memory.frame_vectorizer import FrameVectorizer
-from src.memory.memory_manager import MemoryManager
+from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query_vectorizer import QueryVectorizer
-from src.llm.reasoner import Reasoner, QueryRequest
+from src.llm.reasoner import ReasonerBase, QueryRequest
 
 
 class VenusSystemMoti:
@@ -42,11 +42,11 @@ class VenusSystemMoti:
         self._setup_logger()
 
         # 组件（同步模式）
-        self.video_input: Optional[VideoInput] = None
+        self.video_input: Optional[VideoInputBase] = None
         self.frame_vectorizer: Optional[FrameVectorizer] = None
-        self.memory_manager: Optional[MemoryManager] = None
+        self.memory_manager: Optional[MemoryManagerBase] = None
         self.query_vectorizer: Optional[QueryVectorizer] = None
-        self.reasoner: Optional[Reasoner] = None
+        self.reasoner: Optional[ReasonerBase] = None
 
         # 从 config 读取（兼容 benchmark 配置段）
         self.dataset_path = getattr(config, "benchmark_dataset_path", "local_datasets")
@@ -165,7 +165,7 @@ class VenusSystemMoti:
         if map_path is not None:
             self.config.memory_databasemap_file_path = map_path
 
-        self.memory_manager = MemoryManager(self.config)
+        self.memory_manager = MemoryManagerBase(self.config)
         self.query_vectorizer = QueryVectorizer(self.config)
 
         self.memory_manager.init_sync()
@@ -175,7 +175,7 @@ class VenusSystemMoti:
 
         if video_path:
             self.config.video_file_path = video_path
-            self.video_input = VideoInput(self.config)
+            self.video_input = VideoInputBase(self.config)
             self.frame_vectorizer = FrameVectorizer(self.config)
             for fn, need_hs, need_attn in self._encode_hooks:
                 self.frame_vectorizer.register_encode_hook(
@@ -255,10 +255,10 @@ class VenusSystemMoti:
             "skipped": False,
         }
 
-    def _get_reasoner(self) -> Reasoner:
+    def _get_reasoner(self) -> ReasonerBase:
         """懒加载 Reasoner"""
         if self.reasoner is None:
-            self.reasoner = Reasoner(self.config)
+            self.reasoner = ReasonerBase(self.config)
             self.logger.info("已初始化 Reasoner（同步推理）")
         return self.reasoner
 

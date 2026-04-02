@@ -1,79 +1,22 @@
 {
   "video_input": {
-    "log_file": "logs/video_input.log",
-    "video_file_path": "demo/assets/cooking.mp4",
-    "original_fps": false,
-    "target_fps": 8
-    },
-  "frame_vectorizer": {
-    "log_file": "logs/frame_vectorizer.log",
-    "model_type": "BGE",
-    "model_path": "/mnt/share/cache/models/BGE-VL-base",
-    "frame_interval": 10,
-    "device": "cuda"
+    "original_fps": false
   },
-  "query_vectorizer": {
-    "log_file": "logs/query_vectorizer.log",
-    "model_type": "BGE",
-    "model_path": "/mnt/share/cache/models/BGE-VL-base",
-    "device": "cuda"
+  "frame_vectorizer": {
+    "frame_interval": 10
   },
   "memory_manager": {
-    "log_file": "logs/memory_manager.log",
-    "database_type": "vector",
-    "faiss_file_path": "database/database.faiss",
-    "databasemap_file_path": "database/databasemap.json",
-    "faiss_index_type": "FlatIP",
-    "dimension": 512,
-    "topk": 5,
-    "mode": "both"
+    "faiss_file_path": "motivation_results/memory/videomme/short/faiss/44ivpEIcBhE.faiss",
+    "databasemap_file_path": "motivation_results/memory/videomme/short/json/44ivpEIcBhE.json",
+    "save_retrieved_frames": true,
+    "save_injected_frames": false
   },
   "reasoner": {
-    "log_file": "logs/reasoner.log",
-    "max_history_turns": 10,
-    "test_mode": false,
-    "test_response": "这是测试模式的响应文本",
-    "model_path": "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2",
-    "model_name": "llava_qwen",
-    "model_base": null,
-    "torch_dtype": "bfloat16",
-    "load_in_8bit": false,
-    "load_in_4bit": false,
-    "device_map": "auto",
-    "attn_implementation": "eager",
-    "mm_spatial_pool_mode": "average",
-    "conv_template": "qwen_1_5",
-    "device": "cuda",
-    "max_new_tokens": 128,
-    "temperature": 0.0,
-    "top_p": 0.1,
-    "num_beams": 1,
-    "do_sample": false
-  },
-  "api_server_e": {
-    "log_file": "logs/api_server_e.log",
-    "cloud_server_url": "127.0.0.1:9000",
-    "test_mode": false
-  },
-  "api_server_c": {
-    "log_file": "logs/api_server_c.log",
-    "host": "127.0.0.1",
-    "port": 9000
-  },
-  "cloud_server": {
-  },
-  "edge": {
-    "mode": "query_while_inject"
+    "max_history_turns": 10
   },
   "benchmark": {
-    "dataset": "Video-MME",
-    "subset": "short",
-    "dataset_path": "local_datasets",
-    "video_dir_egoschema": "local_datasets/egoschema/videos",
-    "video_dir_videomme": "local_datasets/Video-MME/data",
     "db_dir_egoschema": "motivation_results/memory/egoschema",
     "db_dir_videomme": "motivation_results/memory/videomme",
-    "batch_size": 16,
     "result_dir": "motivation_results",
     "use_cloud": false
   }

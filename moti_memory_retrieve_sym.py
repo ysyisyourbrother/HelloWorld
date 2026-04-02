@@ -64,8 +64,8 @@ def main():
         video_id="44ivpEIcBhE",
         questions=[
             {
-                "question": "Which instrument is the performer on the stage holding in the video?",
-                # "question": "Instrument?",
+                # "question": "Which instrument is the performer on the stage holding in the video?",
+                "question": "Instrument?",
                 "options": [
                     "A. Trumpet.",
                     "B. Saxophone.",

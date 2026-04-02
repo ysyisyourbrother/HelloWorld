@@ -12,6 +12,7 @@ benchmark_results/
 motivation_results/
 motivation_results_symphony/
 test_rtsp/recordings/
+logs/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

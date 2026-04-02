@@ -9,8 +9,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 
 from src.config import Config
 from src.api.api_server_e import APIServerE
-from src.video_input.video_input import VideoInput
-from src.memory.memory_manager import MemoryManager
+from src.video_input.video_input import VideoInputOnline
+from src.memory.memory_manager import MemoryManagerOnline
 
 
 # 支持的边端模式
@@ -37,8 +37,8 @@ class VenusSystemEdge:
         
         # 组件
         self.api_server: Optional[APIServerE] = None
-        self.video_input: Optional[VideoInput] = None
-        self.memory_manager: Optional[MemoryManager] = None
+        self.video_input: Optional[VideoInputOnline] = None
+        self.memory_manager: Optional[MemoryManagerOnline] = None
         
         # 状态
         self.running = False
@@ -98,8 +98,8 @@ class VenusSystemEdge:
     
     def _initialize_query_while_inject(self):
         """query_while_inject：VideoInput, MemoryManager（内含帧/查询编码）, APIServerE"""
-        self.video_input = VideoInput(self.config)
-        self.memory_manager = MemoryManager(self.config)
+        self.video_input = VideoInputOnline(self.config)
+        self.memory_manager = MemoryManagerOnline(self.config)
         self.api_server = APIServerE(self.config)
         
         # VideoInput -> MemoryManager 注入线程；APIServerE 同步调用 MemoryManager 查询
@@ -113,7 +113,7 @@ class VenusSystemEdge:
         if not self._check_vector_and_map_files():
             raise FileNotFoundError("query_with_memory 模式需要已存在的向量文件和 databasemap 文件")
 
-        self.memory_manager = MemoryManager(self.config)
+        self.memory_manager = MemoryManagerOnline(self.config)
         self.api_server = APIServerE(self.config)
         # 查询模式无需启动 MemoryManager 子线程，按需在 APIServerE 查询时同步检索
         self.memory_manager.init_sync()
@@ -123,8 +123,8 @@ class VenusSystemEdge:
     
     def _initialize_only_inject(self):
         """only_inject：VideoInput, MemoryManager；仅编码与建索引"""
-        self.video_input = VideoInput(self.config)
-        self.memory_manager = MemoryManager(self.config)
+        self.video_input = VideoInputOnline(self.config)
+        self.memory_manager = MemoryManagerOnline(self.config)
         
         self.memory_manager.set_frame_queue(self.video_input.frame_queue)
         

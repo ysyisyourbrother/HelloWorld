@@ -16,7 +16,7 @@ from typing import List
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config import Config
-from src.video_input.video_input import VideoInput, FrameData
+from src.video_input.video_input import VideoInputBase, FrameData
 from src.memory.frame_vectorizer import FrameVectorizer, FrameVectorData
 
 
@@ -95,7 +95,7 @@ def iter_frames_from_video(
 ):
     """从视频按 batch 迭代 FrameData"""
     config.video_file_path = video_path
-    video_input = VideoInput(config)
+    video_input = VideoInputBase(config)
     video_input.init_for_file(video_path)
     yield from video_input.iter_frames_batch(
         batch_size=batch_size,

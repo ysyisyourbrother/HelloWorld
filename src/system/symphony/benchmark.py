@@ -14,7 +14,7 @@ import faiss
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from src.memory.frame_vectorizer import SymFrameVectorizer
-from src.memory.memory_manager import MemoryManager
+from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query_vectorizer import QueryVectorizer
 from src.system.venus.benchmark import VenusSystemBench
 from src.video_input.video_input import SymVideoInput
@@ -48,7 +48,7 @@ class SymphonySystemBench(VenusSystemBench):
         if map_path is not None:
             self.config.memory_databasemap_file_path = map_path
 
-        self.memory_manager = MemoryManager(self.config)
+        self.memory_manager = MemoryManagerBase(self.config)
         self.query_vectorizer = QueryVectorizer(self.config)
 
         self.memory_manager.init_sync()

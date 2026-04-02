@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 
 from src.config import Config
 from src.api.api_server_c import APIServerC
-from src.llm.reasoner import Reasoner
+from src.llm.reasoner import ReasonerOnline
 
 
 class VenusSystemCloud:
@@ -29,7 +29,7 @@ class VenusSystemCloud:
         
         # 组件
         self.api_server: Optional[APIServerC] = None
-        self.reasoner: Optional[Reasoner] = None
+        self.reasoner: Optional[ReasonerOnline] = None
         
         # 状态
         self.running = False
@@ -65,7 +65,7 @@ class VenusSystemCloud:
         
         # 启动 Reasoner
         self.logger.debug("初始化 Reasoner")
-        self.reasoner = Reasoner(self.config)
+        self.reasoner = ReasonerOnline(self.config)
         # 从 Reasoner 获取队列
         prompt_queue = self.reasoner.prompt_queue
         result_queue = self.reasoner.result_queue

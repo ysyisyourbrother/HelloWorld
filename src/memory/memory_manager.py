@@ -18,6 +18,7 @@ from src.config import Config
 from src.memory.frame_vectorizer import FrameVectorData, FrameVectorizer
 from src.memory.query_vectorizer import QueryData, QueryVectorizer
 from src.video_input.video_input import FrameData
+from src.video_utils.about_frame import extract_save_frame_by_index
 
 # 视频读取库
 import cv2
@@ -213,7 +214,7 @@ class ThreadSafeMap:
         """不支持按索引删除"""
         raise NotImplementedError("按视频聚合格式不支持按索引删除")
 
-class MemoryManager:
+class MemoryManagerBase:
     """记忆管理器"""
     def __init__(self, config: Config = None):
         """
@@ -242,6 +243,10 @@ class MemoryManager:
         self.databasemap_file_path = config.memory_databasemap_file_path  # databasemap文件路径
         self.databasemap = None  # 线程安全的databasemap
         self.memory_topk = config.memory_topk  # topk参数
+        self.memory_save_retrieved_frames = config.memory_save_retrieved_frames
+        self.memory_save_injected_frames = config.memory_save_injected_frames
+        self.memory_retrieve_save_dir = os.path.join("logs", "memory", "retrieve")
+        self.memory_inject_save_dir = os.path.join("logs", "memory", "inject")
         
         # 队列相关（与 VideoInput.frame_queue 对接，由编排层注入）
         self.memory_mode = config.memory_mode
@@ -293,6 +298,19 @@ class MemoryManager:
         file_handler.setLevel(logging.DEBUG)
         self.logger.addHandler(file_handler)
         self.logger.propagate = False
+
+        # 启动时清空 inject 目录旧图片；retrieve 目录仍在每次检索前清理
+        os.makedirs(self.memory_inject_save_dir, exist_ok=True)
+        for name in os.listdir(self.memory_inject_save_dir):
+            lower_name = name.lower()
+            if not lower_name.endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp")):
+                continue
+            file_path = os.path.join(self.memory_inject_save_dir, name)
+            if os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    self.logger.warning(f"删除旧注入帧失败: {file_path}, err={e}")
     
     def _initialize_database(self):
         """初始化向量数据库和databasemap"""
@@ -379,6 +397,9 @@ class MemoryManager:
         self.databasemap.append(db_record)
         
         self.vector_count += 1
+        new_vector_id = self.vector_count - 1
+        if self.memory_save_injected_frames:
+            self._save_injected_frame(vector_data, new_vector_id)
         trace_ts = dict(vector_data.trace_ts or {})
         trace_ts["memory_inject_added_at"] = time.time()
         if "frame_vectorizer_encoded_at" in trace_ts:
@@ -387,26 +408,7 @@ class MemoryManager:
                 f"{(trace_ts['memory_inject_added_at'] - trace_ts['frame_vectorizer_encoded_at']) * 1000:.2f} ms"
             )
         
-        self.logger.debug(f"向量添加成功, ID: {self.vector_count-1}, 总向量数: {self.vector_count}")
-    
-    def _thread_frame_vectors(self):
-        """处理帧向量的线程（从 frame_queue 取 FrameData，经 FrameVectorizer 编码后入库）"""
-        self.logger.info(f"帧向量处理线程启动, 线程名: {threading.current_thread().name}")
-        
-        save_interval = 30  # 默认30秒保存一次
-        
-        while self.running_event.is_set():
-            try:
-                frame_data: FrameData = self.frame_queue.get(timeout=save_interval)
-                vector_data = self._frame_encoder.encode_frame_from_stream(frame_data)
-                if vector_data is not None:
-                    self._add_vector(vector_data)
-            except queue.Empty:
-                # 队列超时，保存数据库
-                self.logger.debug("帧输入队列超时，保存数据库")
-                self._save_database()
-            except Exception as e:
-                self.logger.error(f"处理帧向量时出错: {e}")
+        self.logger.debug(f"向量添加成功, ID: {new_vector_id}, 总向量数: {self.vector_count}")
     
     def _query_faiss(self, query_vector: np.ndarray, top_k: int = 5) -> Tuple[List[int], List[float]]:
         """查询向量数据库
@@ -497,6 +499,82 @@ class MemoryManager:
 
         return result
 
+    def _save_injected_frame(self, vector_data: FrameVectorData, vector_id: int):
+        """将本次入库对应的帧保存到 logs/memory/inject。"""
+        os.makedirs(self.memory_inject_save_dir, exist_ok=True)
+        try:
+            source_path = vector_data.source_path
+            frame_id = vector_data.frame_id
+            video_fps = vector_data.video_fps or 1.0
+            video_name = os.path.splitext(os.path.basename(source_path or "unknown"))[0]
+            second = float(frame_id) / float(video_fps) if frame_id is not None else 0.0
+
+            filename = (
+                f"fid{int(frame_id)}"
+                f"_sec{second:.2f}"
+                f"_{video_name}"
+                f"_vid{vector_id:06d}.jpg"
+            )
+            save_path = os.path.join(self.memory_inject_save_dir, filename)
+            ok = extract_save_frame_by_index(
+                video_path=str(source_path),
+                output_path=save_path,
+                frame_index=int(frame_id),
+                backend="cv2",
+            )
+            if not ok:
+                self.logger.warning(
+                    f"保存注入帧失败（工具函数返回False）: {source_path}, frame_id={frame_id}"
+                )
+        except Exception as e:
+            self.logger.warning(f"保存注入帧失败，vector_id={vector_id}, err={e}")
+
+    def _save_retrieved_frames(self, vector_ids: List[int], scores: List[float]):
+        """按检索结果保存帧图片到 logs/memory 目录。"""
+        if not vector_ids:
+            return
+        os.makedirs(self.memory_retrieve_save_dir, exist_ok=True)
+        for name in os.listdir(self.memory_retrieve_save_dir):
+            lower_name = name.lower()
+            if not lower_name.endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp")):
+                continue
+            file_path = os.path.join(self.memory_retrieve_save_dir, name)
+            if os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    self.logger.warning(f"删除旧检索帧失败: {file_path}, err={e}")
+
+        for rank, (vector_id, score) in enumerate(zip(vector_ids, scores), start=1):
+            try:
+                rec = self.databasemap[vector_id]
+                source_path = rec.get("source_path")
+                frame_id = rec.get("frame_id")
+                video_fps = rec.get("video_fps") or 1.0
+                video_name = os.path.splitext(os.path.basename(source_path or "unknown"))[0]
+                second = float(frame_id) / float(video_fps) if frame_id is not None else 0.0
+
+                filename = (
+                    f"rank{rank:02d}"
+                    f"_score{float(score):.6f}"
+                    f"_sec{second:.2f}"
+                    f"_{video_name}"
+                    f"_fid{int(frame_id)}.jpg"
+                )
+                save_path = os.path.join(self.memory_retrieve_save_dir, filename)
+                ok = extract_save_frame_by_index(
+                    video_path=str(source_path),
+                    output_path=save_path,
+                    frame_index=int(frame_id),
+                    backend="cv2",
+                )
+                if not ok:
+                    self.logger.warning(
+                        f"保存检索帧失败（工具函数返回False）: {source_path}, frame_id={frame_id}"
+                    )
+            except Exception as e:
+                self.logger.warning(f"保存检索帧失败，vector_id={vector_id}, err={e}")
+
     def _retrieve(
         self, query_vector: np.ndarray, top_k: int = 5
     ) -> Tuple[List[float], List[dict]]:
@@ -516,6 +594,8 @@ class MemoryManager:
 
         vector_ids, scores = self._query_faiss(query_vector, top_k)
         self.logger.info(f"查询完成，返回 {len(vector_ids)} 个结果")
+        if self.memory_save_retrieved_frames:
+            self._save_retrieved_frames(vector_ids, scores)
 
         # 构建元数据（frame_id, video_fps）
         metadata_list = []
@@ -531,95 +611,6 @@ class MemoryManager:
         self.logger.debug(f"查询阶段返回元数据 {len(metadata_list)} 条（不含像素帧）")
         return scores, metadata_list
     
-    def _process_main(self):
-        """子进程，根据配置启动相应的线程"""
-        self._set_logger()
-        self.logger.info(f"MemoryManager启动, 进程ID: {os.getpid()}")
-        
-        # 初始化数据库
-        self._initialize_database()
-        
-        # 根据memory_mode决定启动哪些线程
-        memory_mode = self.memory_mode
-        
-        self.logger.info(f"MemoryManager模式: {memory_mode}")
-
-        if memory_mode in ("only_inject", "both"):
-            self._frame_encoder = FrameVectorizer(self._config)
-            self._frame_encoder._set_logger()
-            self._frame_encoder._initialize_vectorizer()
-            if self.frame_queue is None:
-                raise RuntimeError("inject 模式需要设置 frame_queue（通常为 VideoInput.frame_queue）")
-        if memory_mode in ("only_query", "both"):
-            self._query_encoder = QueryVectorizer(self._config)
-            self._query_encoder._set_logger()
-            self._query_encoder._initialize_vectorizer()
-
-        self._ready_event.set()
-        
-        threads = []
-        
-        # 启动帧向量处理线程（用于inject）
-        if memory_mode in ["only_inject", "both"]:
-            frame_thread = threading.Thread(target=self._thread_frame_vectors, daemon=True)
-            frame_thread.name = "FrameVectorThread"
-            threads.append(frame_thread)
-            self.logger.info("帧向量处理线程已创建")
-        
-        # 验证至少启动了一个线程
-        if len(threads) == 0 and memory_mode == "only_query":
-            self.logger.info("only_query 模式：使用同步 query_text_sync，不启动后台线程")
-        elif len(threads) == 0:
-            self.logger.error("没有启动任何线程，请检查memory_mode配置")
-            return
-        
-        # 启动所有创建的线程
-        for thread in threads:
-            thread.start()
-            self.logger.info(f"线程 {thread.name} 已启动")
-        
-        # 保持子进程运行，等待线程完成
-        while self.running_event.is_set():
-            time.sleep(1.0)
-    
-    def start(self):
-        """启动MemoryManager（同进程后台线程）"""
-        self.running_event = threading.Event()
-        self.running_event.set()
-        self._ready_event.clear()
-        self.worker_thread = threading.Thread(
-            target=self._process_main,
-            daemon=True,
-            name="MemoryManager-Main",
-        )
-        self.worker_thread.start()
-    
-    def start_single_thread(self):
-        """启动单线程运行MemoryManager"""
-        # 创建一个事件对象来控制线程运行
-        self.running_event = threading.Event()
-        self.running_event.set()
-        
-        # 直接调用_process_main，在当前线程中运行
-        self._process_main()
-    
-    def stop(self):
-        """停止MemoryManager"""
-        if hasattr(self, 'running_event'):
-            self.running_event.clear()
-        
-        # 保存数据库 - 只有在当前进程有index的情况下才保存
-        if self.index is not None:
-            self._save_database()
-        
-        if hasattr(self, "worker_thread") and self.worker_thread.is_alive():
-            self.worker_thread.join(timeout=5)
-        
-    
-    def set_frame_queue(self, frame_queue: mp.Queue):
-        """设置帧输入队列（VideoInput 产出 FrameData，原 FrameVectorizer 消费端）"""
-        self.frame_queue = frame_queue
-
     def init_sync(self):
         """同步初始化数据库（在主进程调用，供 benchmark 使用）"""
         self._set_logger()
@@ -689,3 +680,100 @@ class MemoryManager:
     def save_database_sync(self):
         """同步保存数据库"""
         self._save_database()
+
+
+class MemoryManagerOnline(MemoryManagerBase):
+    """在线记忆管理：在 Base 同步能力上扩展线程和队列流水线。"""
+
+    def _thread_frame_vectors(self):
+        """处理帧向量的线程（从 frame_queue 取 FrameData，经 FrameVectorizer 编码后入库）"""
+        self.logger.info(f"帧向量处理线程启动, 线程名: {threading.current_thread().name}")
+
+        save_interval = 30
+
+        while self.running_event.is_set():
+            try:
+                frame_data: FrameData = self.frame_queue.get(timeout=save_interval)
+                vector_data = self._frame_encoder.encode_frame_from_stream(frame_data)
+                if vector_data is not None:
+                    self._add_vector(vector_data)
+            except queue.Empty:
+                self.logger.debug("帧输入队列超时，保存数据库")
+                self._save_database()
+            except Exception as e:
+                self.logger.error(f"处理帧向量时出错: {e}")
+
+    def _process_main(self):
+        """在线主循环：按 memory_mode 启动对应线程/编码器。"""
+        self._set_logger()
+        self.logger.info(f"MemoryManager启动, 进程ID: {os.getpid()}")
+
+        self._initialize_database()
+        memory_mode = self.memory_mode
+        self.logger.info(f"MemoryManager模式: {memory_mode}")
+
+        if memory_mode in ("only_inject", "both"):
+            self._frame_encoder = FrameVectorizer(self._config)
+            self._frame_encoder._set_logger()
+            self._frame_encoder._initialize_vectorizer()
+            if self.frame_queue is None:
+                raise RuntimeError("inject 模式需要设置 frame_queue（通常为 VideoInput.frame_queue）")
+        if memory_mode in ("only_query", "both"):
+            self._query_encoder = QueryVectorizer(self._config)
+            self._query_encoder._set_logger()
+            self._query_encoder._initialize_vectorizer()
+
+        self._ready_event.set()
+        threads = []
+
+        if memory_mode in ["only_inject", "both"]:
+            frame_thread = threading.Thread(target=self._thread_frame_vectors, daemon=True)
+            frame_thread.name = "FrameVectorThread"
+            threads.append(frame_thread)
+            self.logger.info("帧向量处理线程已创建")
+
+        if len(threads) == 0 and memory_mode == "only_query":
+            self.logger.info("only_query 模式：使用同步 query_text_sync，不启动后台线程")
+        elif len(threads) == 0:
+            self.logger.error("没有启动任何线程，请检查memory_mode配置")
+            return
+
+        for thread in threads:
+            thread.start()
+            self.logger.info(f"线程 {thread.name} 已启动")
+
+        while self.running_event.is_set():
+            time.sleep(1.0)
+
+    def start(self):
+        """启动MemoryManager（同进程后台线程）"""
+        self.running_event = threading.Event()
+        self.running_event.set()
+        self._ready_event.clear()
+        self.worker_thread = threading.Thread(
+            target=self._process_main,
+            daemon=True,
+            name="MemoryManager-Main",
+        )
+        self.worker_thread.start()
+
+    def start_single_thread(self):
+        """启动单线程运行MemoryManager"""
+        self.running_event = threading.Event()
+        self.running_event.set()
+        self._process_main()
+
+    def stop(self):
+        """停止MemoryManager"""
+        if hasattr(self, "running_event"):
+            self.running_event.clear()
+
+        if self.index is not None:
+            self._save_database()
+
+        if hasattr(self, "worker_thread") and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=5)
+
+    def set_frame_queue(self, frame_queue: mp.Queue):
+        """设置帧输入队列（VideoInput 产出 FrameData，原 FrameVectorizer 消费端）"""
+        self.frame_queue = frame_queue
