@@ -1,10 +1,8 @@
 {
   "video_input": {
-    "original_fps": false,
-    "reader_backend": "auto"
+    "original_fps": false
   },
   "frame_vectorizer": {
-    "frame_interval": 10
   },
   "memory_manager": {
     "faiss_file_path": "motivation_results/memory/videomme/short/faiss/44ivpEIcBhE.faiss",

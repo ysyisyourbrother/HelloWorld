@@ -62,6 +62,8 @@ class Config:
         self.video_input_version = video_config.get("version", "V2")
         # V2 GOP 扫描子进程所用 Python（需含 gi）；未配置时用环境变量 GST_GOP_SCAN_PYTHON 或 /usr/bin/python3
         self.video_gop_scan_python = video_config.get("gop_scan_python")
+        # 多进程跨队列是否传输 RGB 整帧（True=传 ndarray；False=仅元数据，由接收端按路径+帧号再解码）
+        self.video_ipc_send_frame = video_config.get("ipc_send_frame", False)
 
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})

@@ -54,7 +54,7 @@ def main():
         captured["query_vector"] = query_vector.copy()
         captured["all_scores"] = all_scores.copy()
 
-    config = SymConfig(config_path="configs/symconfig_moti.json")
+    config = SymConfig(config_path="configs/symconfig_moti_orin.json.json")
     # config.benchmark_use_cloud = False
 
     moti = SymphonySystemMoti(config)

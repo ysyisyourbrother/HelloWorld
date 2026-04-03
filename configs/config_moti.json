@@ -1,6 +1,5 @@
 {
   "video_input": {
-    "original_fps": false
   },
   "frame_vectorizer": {
     "frame_interval": 10

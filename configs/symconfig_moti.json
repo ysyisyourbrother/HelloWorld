@@ -1,6 +1,5 @@
 {
   "video_input": {
-    "original_fps": false
   },
   "frame_vectorizer": {
     "select_strategy": "random"
