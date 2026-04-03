@@ -176,7 +176,7 @@ def get_frame_info_with_pkt_size(video_path: str) -> List[Dict[str, Any]]:
     ]
 
 
-def get_frame_info_for_stream(video_path: str) -> Tuple[List[int], List[str], List[int]]:
+def get_frame_info_for_stream_ffprobe(video_path: str) -> Tuple[List[int], List[str], List[int]]:
     """
     一次 ffprobe 调用返回 I 帧索引、帧类型、每帧 pkt_size。
     等价于 (get_i_frame_indices, get_frame_types, get_pkt_size) 的合并结果。

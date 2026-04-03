@@ -17,11 +17,11 @@ from src.memory.frame_vectorizer import SymFrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query_vectorizer import QueryVectorizer
 from src.system.venus.benchmark import VenusSystemBench
-from src.video_input.video_input import SymVideoInput
+from src.video_input.video_input import make_sym_video_input
 
 class SymphonySystemBench(VenusSystemBench):
     """
-    继承 VenusSystemBench，使用 SymVideoInput 和 SymFrameVectorizer 按 GOP 进行 inject。
+    继承 VenusSystemBench，使用 SymVideoInput / SymVideoInputV2（由 config video_input.version）和 SymFrameVectorizer 按 GOP 进行 inject。
     按 select_strategy 从每个 GOP 中选帧后编码，不依赖钩子逻辑。
     """
 
@@ -41,7 +41,7 @@ class SymphonySystemBench(VenusSystemBench):
         faiss_path: Optional[str] = None,
         map_path: Optional[str] = None,
     ):
-        """初始化各组件，使用 SymVideoInput 和 SymFrameVectorizer"""
+        """初始化各组件，使用 make_sym_video_input（V1/V2）和 SymFrameVectorizer"""
         self.config.memory_mode = "both"
         if faiss_path is not None:
             self.config.memory_faiss_file_path = faiss_path
@@ -56,7 +56,7 @@ class SymphonySystemBench(VenusSystemBench):
 
         if video_path:
             self.config.video_file_path = video_path
-            self.video_input = SymVideoInput(self.config)
+            self.video_input = make_sym_video_input(self.config)
             self.frame_vectorizer = SymFrameVectorizer(self.config)
             self.video_input.init_for_file(video_path)
             self.frame_vectorizer._initialize_vectorizer()

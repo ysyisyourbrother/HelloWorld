@@ -12,7 +12,7 @@ from typing import Optional, List, Iterator, Dict, Tuple
 # 本项目
 from src.config import Config
 from src.video_utils.file_video_reader import open_file_video_reader
-from src.video_utils.ffprobe_utils import get_frame_info_for_stream
+from src.video_utils.ffprobe_utils import get_frame_info_for_stream_ffprobe
 
 @dataclass
 class FrameData:
@@ -53,7 +53,9 @@ class VideoInputBase:
         self.video_duration = 0
         # 边端实时默认仅跨进程传引用，避免传输 ndarray 的 pickle 拷贝成本
         self.ipc_send_frame = getattr(config, "video_ipc_send_frame", False)
-        
+        # V2 GOP 子进程解释器（config video_input.gop_scan_python）；未配置时由 resolve_gop_scan_python_exe 用环境变量或默认值
+        self.video_gop_scan_python = getattr(config, "video_gop_scan_python", None)
+
     def _set_logger(self):
         """设置日志记录器"""
         log_file = self.log_file
@@ -362,7 +364,8 @@ class SymVideoInput(VideoInputBase):
         )
 
     def _extract_video_frame_at(self, frame_idx: int) -> Optional[SymFrameData]:
-        """按索引提取单帧，返回 SymFrameData（含 p_type），不修改 current_frame_idx"""
+        """按索引提取单帧，返回 SymFrameData（含 p_type），不修改 current_frame_idx。
+        多进程实时链路在 video_ipc_send_frame 为 False 且存在 running_event 时，frame 为 None（仅传引用），不解码像素。"""
         if frame_idx < 0 or frame_idx >= self.total_frames:
             return None
         if frame_idx >= len(self.frame_types):
@@ -370,8 +373,16 @@ class SymVideoInput(VideoInputBase):
         else:
             p_type_int = PICT_TYPE_TO_INT.get(self.frame_types[frame_idx], P_TYPE_I)
 
+        should_send_frame_payload = self.ipc_send_frame or (not hasattr(self, "running_event"))
+        frame = None
         if self.vr is not None:
-            frame = self.vr[frame_idx].asnumpy()
+            if should_send_frame_payload:
+                frame = self.vr[frame_idx].asnumpy()
+                self.logger.debug(
+                    f"成功提取帧 {frame_idx}, 帧形状: {frame.shape}, 帧数据类型: {frame.dtype}"
+                )
+            else:
+                self.logger.debug(f"Sym 帧 {frame_idx} 仅传引用，跳过解码 RGB")
         else:
             return None
 
@@ -394,7 +405,7 @@ class SymVideoInput(VideoInputBase):
     def init_for_file(self, video_file_path: str):
         """为 SymVideoInput 同步模式初始化视频文件源，并获取 ffprobe 的 I 帧、pict_type、pkt_size 信息"""
         super().init_for_file(video_file_path)
-        self.i_frame_indices, self.frame_types, self.pkt_sizes = get_frame_info_for_stream(video_file_path)
+        self.i_frame_indices, self.frame_types, self.pkt_sizes = get_frame_info_for_stream_ffprobe(video_file_path)
         self.logger.info(f"ffprobe: I 帧数 {len(self.i_frame_indices)}, 总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}")
 
     def iter_gop_ranges(self) -> Iterator[Tuple[int, int]]:
@@ -417,7 +428,8 @@ class SymVideoInput(VideoInputBase):
     def iter_frames_by_gop(self) -> Iterator[List[SymFrameData]]:
         """
         按 GOP（两个 I 帧之间）迭代帧，留头去尾：含起始 I 帧，不含下一 I 帧。
-        会解码该 GOP 内每一帧，仅当需要完整帧数据时使用；否则优先用 iter_gop_ranges + 按需解码。
+        默认会解码该 GOP 内每一帧；若存在 running_event 且 video_ipc_send_frame 为 False（与 VideoInputBase 一致），
+        则各帧 SymFrameData.frame 为 None、不解码，仅传引用；否则优先用 iter_gop_ranges + 按需解码。
 
         Yields:
             每个 GOP 的 SymFrameData 列表，即 [I, P, P, B, ...] 直到下一 I 之前
@@ -434,3 +446,58 @@ class SymVideoInput(VideoInputBase):
                     group.append(fd)
             if group:
                 yield group
+
+
+class SymVideoInputV2(SymVideoInput):
+    """
+    与 SymVideoInput 行为一致（按 GOP 迭代、SymFrameData 等），但用 GStreamer 扫描码流得到
+    I 帧位置与每帧压缩大小，不依赖 ffprobe/ffmpeg 可执行文件。
+
+    GOP 扫描在独立子进程中执行（tools/gop_scan_gst_child.py），主进程无需 PyGObject（gi）；
+    子进程需使用已安装 gi + GStreamer 的解释器，默认 /usr/bin/python3；video_input.gop_scan_python
+    会写入 self.video_gop_scan_python，未配置时仍可用环境变量 GST_GOP_SCAN_PYTHON。
+
+    非关键帧在 frame_types 中统一记为 P（不区分 P/B），与 ffprobe 的 pict_type 在含 B 帧的码流上可能不一致，
+    仅保证 GOP 按关键帧切分。
+    """
+
+    def init_for_file(self, video_file_path: str):
+        """初始化本地视频，并用子进程 GStreamer 扫描获取 I 帧索引、帧类型、pkt_size（与 SymVideoInput 字段兼容）。"""
+        if not hasattr(self, "logger") or self.logger is None:
+            self._set_logger()
+        self.video_file_path = video_file_path
+        self._initialize_video_source()
+        from src.video_utils.gst_frame_info import (
+            get_frame_info_for_stream_gst_subprocess,
+            resolve_gop_scan_python_exe,
+        )
+
+        _py = resolve_gop_scan_python_exe(self.video_gop_scan_python)
+        self.i_frame_indices, self.frame_types, self.pkt_sizes = get_frame_info_for_stream_gst_subprocess(
+            video_file_path,
+            python_exe=_py,
+        )
+        self.logger.info(
+            f"GStreamer (子进程 {_py}): I 帧数 {len(self.i_frame_indices)}, "
+            f"总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}"
+        )
+
+
+def make_sym_video_input(config):
+    """
+    根据 config.video_input_version 构造 SymVideoInput（V1，ffprobe）或 SymVideoInputV2（GStreamer）。
+
+    Args:
+        config: 含 video_input_version 的配置对象（见 Config）
+
+    Returns:
+        SymVideoInput 或 SymVideoInputV2 实例（均未调用 init_for_file）。
+    """
+    ver = getattr(config, "video_input_version", "V2")
+    if isinstance(ver, str):
+        ver = ver.strip().upper()
+    if ver == "V1":
+        return SymVideoInput(config)
+    if ver == "V2":
+        return SymVideoInputV2(config)
+    raise ValueError("未定义的video_input_version，当前: %r" % getattr(config, "video_input_version", None))

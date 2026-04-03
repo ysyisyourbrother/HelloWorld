@@ -1,5 +1,7 @@
 {
   "video_input": {
+    "version": "V2",
+    "gop_scan_python": "/usr/bin/python3",
     "original_fps": false
   },
   "frame_vectorizer": {

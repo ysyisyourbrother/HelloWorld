@@ -58,6 +58,10 @@ class Config:
         self.video_target_fps = video_config.get("target_fps", 8)  # 特定帧率
         # 本地 mp4 解码：auto（有 decord 用 decord，否则 cv2）| decord | cv2；可被环境变量 VIDEO_READER_BACKEND 覆盖（auto 时）
         self.video_reader_backend = video_config.get("reader_backend", "auto")
+        # SymVideoInput 实现：V1=ffprobe 扫 GOP；V2=GStreamer（Jetson 等无 ffprobe 时用）
+        self.video_input_version = video_config.get("version", "V2")
+        # V2 GOP 扫描子进程所用 Python（需含 gi）；未配置时用环境变量 GST_GOP_SCAN_PYTHON 或 /usr/bin/python3
+        self.video_gop_scan_python = video_config.get("gop_scan_python")
 
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})
