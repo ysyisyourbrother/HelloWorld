@@ -1,0 +1,166 @@
+%=============================================================================
+% 对应工程入口：launch_symphony_edge.py → SymphonySystemEdge.start()
+% 典型配置：StreamVideoInput + MemoryManagerOnlineV3，可选 APIServerE（gRPC）
+%=============================================================================
+
+\section{Edge Symphony: Streaming Memory Injection and Retrieval}
+\label{sec:edge-symphony}
+
+This section describes the \emph{algorithmic} behavior of the edge launcher:
+incremental construction of a visual memory from a live or file-based stream,
+optional concurrent text queries, and resolution of retrieved items to pixel
+frames for downstream use (e.g., cloud-side reasoning).
+
+\subsection{Operating modes}
+\label{sec:edge-modes}
+
+The system runs in one of several modes that differ only in which subprocesses
+are started and whether queries go through a network API:
+
+\begin{itemize}
+  \item \textbf{Inject + query (cloud):} a stream producer, an online memory
+        builder, and a local API that performs retrieval then forwards packed
+        frame data to a remote service.
+  \item \textbf{Inject + retrieve (local):} same stream and memory builder, but
+        queries execute retrieval only (no remote reasoning channel).
+  \item \textbf{Query on frozen memory:} load an existing vector index and map;
+        no new frames are ingested.
+  \item \textbf{Inject only:} build the index until the stream ends or a
+        session timer fires; no interactive query loop.
+\end{itemize}
+
+The memory algorithms (sampling, embedding, indexing, Top-$K$ retrieval) are
+identical across modes; only orchestration and I/O differ.
+
+\subsection{Stream-side frame selection (content-aware windows)}
+\label{sec:stream-select}
+
+The edge pipeline does \emph{not} use GOP-based offline selection. Instead, the
+decoder consumes a compressed stream and groups consecutive frames into time
+windows of fixed duration $W$ (seconds).
+
+\paragraph{Per-window statistics.}
+For each window, let $\{p_j\}$ be packet sizes and $\{k_j\}$ keyframe flags.
+Let $\mathcal{N} = \{ j : k_j = \text{false} \}$ be non-reference (non-I)
+frames. Define the window statistic
+\[
+  \mu = \frac{1}{|\mathcal{N}|}\sum_{j\in\mathcal{N}} p_j
+  \quad\text{(if $\mathcal{N}\neq\emptyset$; otherwise degenerate).}
+\]
+
+\paragraph{Baseline tracking (EWMA).}
+After each window (including warm-up) for which $\mu$ is well-defined
+($\mathcal{N}\neq\emptyset$ and $\mu>0$), the baseline is updated by an
+\emph{exponential moving average} (EMA) with smoothing factor
+$\alpha\in(0,1]$:
+\[
+  b \;\leftarrow\; \alpha\,\mu + (1-\alpha)\,b,
+\]
+with the convention that if $b$ was unset, it is initialized to $\mu$.
+This update is applied on warm-up windows and on post-warm-up windows that
+\emph{fail} the trigger test below; in the reference implementation, a window
+that fires the trigger decodes frames but does not refresh $b$.
+During warm-up, the system updates $b$ but never triggers selection (no frames
+are enqueued based on the trigger).
+
+\paragraph{Trigger condition.}
+After warm-up, a window is \emph{triggered} if $\mu > \rho\, b$ for a fixed
+ratio $\rho > 1$. Intuitively, a burst of larger non-I packets suggests richer
+motion or scene change in that interval.
+
+\paragraph{Which frames to decode within a triggered window.}
+Let $k = \lceil f_{\mathrm{dec}} \cdot W \rceil$ be a target count, where
+$f_{\mathrm{dec}}$ is a configured ``decode budget'' in frames per second.
+Among all frames in the window, choose $k$ indices by partitioning the total
+packet mass $\sum_j p_j$ into $k{+}1$ equal strata and taking the first crossing
+of each cumulative threshold (prefix-sum stratification on $\{p_j\}$).
+Additionally, \emph{all} keyframes in the window are always selected. The union
+is sorted and decoded; each decoded RGB frame is wrapped with metadata (index,
+timestamp, source id) and enqueued for the memory stage.
+
+Non-triggered windows contribute no frames to the queue (aside from any
+implementation-specific bookkeeping).
+
+\subsection{Online memory injection}
+\label{sec:edge-inject}
+
+A consumer thread dequeues frame records. An optional secondary temporal filter
+may subsample by a fixed stride in arrival order (configurable; often disabled
+when the stream stage already selects sparsely).
+
+Each surviving frame $x$ is mapped to an embedding
+$e = f_{\mathrm{img}}(x)\in\mathbb{R}^d$ with a vision encoder. The pair
+$(e, m)$ is appended to a flat nearest-neighbor index, where metadata $m$
+includes at least frame index, nominal FPS, source handle, and a wall-clock or
+timeline timestamp for stream alignment.
+
+\paragraph{Short-term pixel cache (edge V3).}
+Concurrently, a bounded \emph{short memory} stores the BGR raster for recent
+vector ids with a TTL slightly larger than the disk segment length used for
+optional recording. This allows later retrieval to avoid re-decoding when the
+hit is still ``fresh.''
+
+\paragraph{Persistence.}
+The index and map are periodically flushed to disk; session limits (maximum
+stream seconds) may stop ingestion and force a final save.
+
+\subsection{Text-to-frame retrieval}
+\label{sec:edge-retrieve}
+
+Given query text $q$, compute $u = f_{\mathrm{txt}}(q)$ in the same multimodal
+space as $f_{\mathrm{img}}$. Retrieve Top-$K$ neighbors by the configured
+similarity (e.g., $L_2$ or inner product on normalized vectors) over all
+vectors currently in the index.
+
+For each retrieved id, metadata $m$ is returned. Optionally, a parallel list of
+BGR frames is assembled:
+
+\begin{enumerate}
+  \item If the id is still in short-term memory, return the cached raster.
+  \item Else if $m$ points to a seekable local file, decode by stored frame
+        index.
+  \item Else, if the source is a non-file stream identifier and segmented
+        recordings exist, map the stored wall-clock timestamp (relative to session
+        start) to a segment file and a local frame index using the configured
+        segment duration and nominal recording frame rate, then decode from that
+        segment (heuristic alignment).
+\end{enumerate}
+
+If no pixel data can be resolved, the slot remains empty while metadata and
+scores are still valid.
+
+\begin{algorithm}[t]
+\caption{Edge query with optional pixel materialization (V3)}
+\label{alg:edge-query-v3}
+\begin{algorithmic}[1]
+\Require Live or loaded memory $\mathcal{M}$, query $q$, encoders
+         $(f_{\mathrm{txt}}, f_{\mathrm{img}})$, $K$, short-memory cache
+         $\mathcal{C}$ with TTL
+\Ensure Scores, metadata list, optional BGR list aligned with Top-$K$ ids
+\State $u \gets f_{\mathrm{txt}}(q)$
+\State $(\mathrm{id}_1,\ldots,\mathrm{id}_K), (s_1,\ldots,s_K) \gets \mathrm{TopK}(\mathcal{M}, u, K)$
+\For{$r = 1$ to $K$}
+    \If{$\mathcal{C}$ contains $\mathrm{id}_r$}
+        \State $I_r \gets \mathcal{C}[\mathrm{id}_r]$
+    \ElsIf{metadata allows direct file decode}
+        \State $I_r \gets \mathrm{DecodeFile}(\mathrm{id}_r)$
+    \ElsIf{stream recording heuristic applicable}
+        \State $I_r \gets \mathrm{DecodeSegmentHeuristic}(\mathrm{id}_r)$
+    \Else
+        \State $I_r \gets \bot$
+    \EndIf
+\EndFor
+\State \Return $(s_r), (\mathrm{meta}_r), (I_r)$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Coupling with remote reasoning (optional)}
+\label{sec:edge-cloud}
+
+When the cloud path is enabled, the local API serializes the list of BGR frames
+corresponding to Top-$K$ hits (when available) and sends them with the query
+context to a remote service; the edge algorithm ends at the retrieval and
+packaging step. When disabled, the same retrieval output is presented locally
+(e.g., scores and metadata only, or frames for inspection).
+
+% 需要：\usepackage{amsmath,amssymb} \usepackage{algorithm} \usepackage{algpseudocode}

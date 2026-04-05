@@ -17,6 +17,11 @@
 #   ORIN_SRC    远端基础目录（可被 --src 覆盖）
 #   LOCAL_DEST  本地基础目录（可被 --local 覆盖）
 #   ORIN_RESULT_DIRS 结果目录列表（空格分隔；默认: benchmark_results motivation_results motivation_results_symphony）
+#   ORIN_LOGS_REL  远端日志目录相对 ORIN_SRC 的路径（默认: logs）
+#
+# 同步内容:
+#   - 结果目录 -> LOCAL_DEST 下同名目录（rsync --delete）
+#   - 远端日志目录 -> LOCAL_DEST/logs/logs_orin_年月日时分秒/（每次新子目录，无 --delete）
 #
 # 若存在 ./rsync_from_orin_exclude.txt，会自动作为 --exclude-from 追加（可在该文件中维护常用排除项）
 
@@ -28,13 +33,14 @@ PROJECT_ROOT="$SCRIPT_DIR"
 ORIN_HOST="${ORIN_HOST:-orin}"
 ORIN_SRC="${ORIN_SRC:-~/CodeSpace/Symphony}"
 LOCAL_DEST="${LOCAL_DEST:-$PROJECT_ROOT}"
+ORIN_LOGS_REL="${ORIN_LOGS_REL:-logs}"
 
 DRY_RUN=()
 EXCLUDES=()
 EXCLUDE_FILES=()
 
 usage() {
-  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -113,6 +119,27 @@ for d in "${RESULT_DIRS[@]}"; do
     "${ORIN_HOST}:${ORIN_SRC}/${d}/" \
     "${LOCAL_DEST}/${d}/"
 done
+
+# 远端 logs -> 本地 logs/logs_orin_YYYYMMDDHHMMSS（与结果目录策略不同：不 --delete，避免覆盖历史快照）
+LOG_TS="$(date +%Y%m%d%H%M%S)"
+LOCAL_LOGS_SNAPSHOT="${LOCAL_DEST}/logs/logs_orin_${LOG_TS}"
+REMOTE_LOGS="${ORIN_SRC}/${ORIN_LOGS_REL}"
+
+if ! ssh -o BatchMode=yes "${ORIN_HOST}" "test -d ${REMOTE_LOGS}" >/dev/null 2>&1; then
+  echo "跳过缺失日志目录: ${ORIN_HOST}:${REMOTE_LOGS}"
+else
+  echo "同步日志目录 -> ${LOCAL_LOGS_SNAPSHOT}"
+  mkdir -p "${LOCAL_LOGS_SNAPSHOT}"
+  rsync -avz \
+    "${DRY_RUN[@]}" \
+    "${BUILTIN_EXCLUDES[@]}" \
+    "${EXCLUDES[@]}" \
+    "${EXCLUDE_FILES[@]}" \
+    --ignore-missing-args \
+    -e ssh \
+    "${ORIN_HOST}:${REMOTE_LOGS}/" \
+    "${LOCAL_LOGS_SNAPSHOT}/"
+fi
 
 echo "完成: ${ORIN_HOST}:${ORIN_SRC} -> ${LOCAL_DEST}"
 

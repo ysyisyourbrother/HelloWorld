@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from src.config import SymConfig
-from src.system.symphony.motivation import SymphonySystemMoti
+from src.system.symphony.v1.motivation import SymphonySystemMoti
 
 
 def parse_args():

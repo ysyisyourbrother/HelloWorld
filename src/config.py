@@ -50,8 +50,16 @@ class Config:
     
     def _set_attributes(self):
         """将配置设置为类属性"""
-        # Video Input 配置（video_input 段；兼容旧键名 stream_input）
-        video_config = self._config.get("video_input") or self._config.get("stream_input", {})
+        video_config = self._config.get("video_input") or {}
+        stream_config = self._config.get("stream_input") or {}
+
+        def _vs(key, default=None):
+            """stream_input 优先，其次 video_input 内同名键（兼容旧版全写在 video_input 下）。"""
+            if key in stream_config:
+                return stream_config[key]
+            return video_config.get(key, default)
+
+        # Video Input：仅 video_input 段（本地文件 / 离线解码等）
         self.video_log_file = video_config.get("log_file", "logs/video_input.log")
         self.video_file_path = video_config.get("video_file_path", "demo/assets/cooking.mp4")
         self.video_original_fps = video_config.get("original_fps", True)  # 是否按原帧率入队
@@ -63,7 +71,36 @@ class Config:
         # V2 GOP 扫描子进程所用 Python（需含 gi）；未配置时用环境变量 GST_GOP_SCAN_PYTHON 或 /usr/bin/python3
         self.video_gop_scan_python = video_config.get("gop_scan_python")
         # 多进程跨队列是否传输 RGB 整帧（True=传 ndarray；False=仅元数据，由接收端按路径+帧号再解码）
-        self.video_ipc_send_frame = video_config.get("ipc_send_frame", False)
+        self.video_ipc_send_frame = bool(_vs("ipc_send_frame", False))
+
+        # Stream Input：独立 stream_input 段，缺省时回退到 video_input 旧键（_vs）
+        # stream 专用日志：有 stream_input.log_file 用它；否则若仅有旧版 video_input.log_file 则共用；否则默认 logs/stream_input.log
+        self.stream_log_file = stream_config.get("log_file") or video_config.get(
+            "log_file", "logs/stream_input.log"
+        )
+        self.stream_uri = _vs("stream_uri", "") or ""
+        self.stream_window_duration_sec = float(_vs("stream_window_duration_sec", 1.0))
+        self.stream_target_decode_fps = float(_vs("stream_target_decode_fps", 2.0))
+        self.stream_trigger_ratio = float(_vs("stream_trigger_ratio", 1.35))
+        self.stream_baseline_ewma_alpha = float(_vs("stream_baseline_ewma_alpha", 0.08))
+        self.stream_warmup_windows = int(_vs("stream_warmup_windows", 3))
+        self.stream_queue_maxsize = int(_vs("stream_queue_maxsize", 100))
+        self.stream_rtsp_depay = _vs("stream_rtsp_depay", "h264")  # auto | h264 | h265
+
+        # 流录制：RTSP 下用 GStreamer splitmuxsink 分段写 MP4（见 stream_input）
+        self.stream_record_enable = bool(_vs("stream_record_enable", False))
+        self.stream_record_segment_minutes = float(_vs("stream_record_segment_minutes", 1.0))
+        self.stream_record_dir = _vs("stream_record_dir", "logs/stream_recordings")
+        self.stream_record_max_seconds = float(_vs("stream_record_max_seconds", 0.0))
+        self.stream_record_latency_ms = int(_vs("stream_record_latency_ms", 200))
+        self.stream_record_rtsp_tcp = bool(_vs("stream_record_rtsp_tcp", False))
+        # 兼容旧配置，当前实现已忽略
+        self.stream_record_merge_on_exit = bool(_vs("stream_record_merge_on_exit", True))
+        self.stream_record_fps = float(_vs("stream_record_fps", 25.0))
+        self.stream_record_keep_segments = bool(_vs("stream_record_keep_segments", True))
+        self.stream_record_final_basename = _vs("stream_record_final_basename", "") or ""
+
+        self.edge_use_stream_input = bool(_vs("edge_use_stream_input", False))
 
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})
@@ -99,6 +136,20 @@ class Config:
         self.memory_mode = memory_config.get("mode", "both")  # ["only_query", "only_inject", "both"]
         self.memory_save_retrieved_frames = memory_config.get("save_retrieved_frames", True)
         self.memory_save_injected_frames = memory_config.get("save_injected_frames", False)
+        # MemoryManagerOnlineV2：流式会话最大时长（秒），>0 到时停止流并保存 faiss/json；0 不自动结束
+        self.memory_stream_max_seconds = float(
+            memory_config.get("memory_stream_max_seconds", 0.0)
+        )
+        # MemoryManagerOnlineV3：短期记忆 TTL = 分段时长(秒) × 该系数（略大于 1）
+        self.memory_short_memory_ttl_ratio = float(
+            memory_config.get("short_memory_ttl_ratio", 1.1)
+        )
+        # V3：RTSP 源时是否按录制目录 segment_*.mp4 + 墙钟启发式取长期像素
+        self.memory_segment_pixel_heuristic = bool(
+            memory_config.get("segment_pixel_heuristic", True)
+        )
+        # 流式边端是否使用 OnlineV3（短记忆 + 分段取帧）；False 则仍为 OnlineV2
+        self.memory_online_v3 = bool(memory_config.get("online_v3", True))
         
         # Reasoner配置
         reasoner_config = self._config.get("reasoner", {})
@@ -140,7 +191,8 @@ class Config:
 
         # Edge 配置
         edge_config = self._config.get("edge", {})
-        self.edge_mode = edge_config.get("mode", "query_while_inject") # "query_while_inject", "query_with_memory", "only_inject", "benchmark"
+        # query_* 经 APIServerE+gRPC；retrieve_* 仅本地 query_text_sync，无云端
+        self.edge_mode = edge_config.get("mode", "query_while_inject")
 
         # Benchmark 配置
         bench_config = self._config.get("benchmark", {})
@@ -167,8 +219,12 @@ class Config:
         return self._config
     
     def get_video_config(self):
-        """获取 video_input 配置"""
-        return self._config.get("video_input") or self._config.get("stream_input", {})
+        """获取 video_input 配置字典（不含 stream_input）。"""
+        return dict(self._config.get("video_input") or {})
+
+    def get_stream_config(self):
+        """获取 stream_input 配置字典。"""
+        return dict(self._config.get("stream_input") or {})
     
     def get_frame_config(self):
         """获取frame_vectorizer配置"""

@@ -2,26 +2,32 @@ import signal
 import sys
 import os
 import logging
+import time
 from typing import Optional
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from src.config import Config
-from src.api.api_server_e import APIServerE
 from src.video_input.video_input import VideoInputOnline
-from src.memory.memory_manager import MemoryManagerOnline
-
+from src.video_input.stream_input import StreamVideoInput
+from src.memory.memory_manager import (
+    MemoryManagerOnline,
+    MemoryManagerOnlineV2,
+    MemoryManagerOnlineV3,
+)
 
 # 支持的边端模式
 EDGE_MODE_QUERY_WHILE_INJECT = "query_while_inject"
 EDGE_MODE_QUERY_WITH_MEMORY = "query_with_memory"
+EDGE_MODE_RETRIEVE_WHILE_INJECT = "retrieve_while_inject"
+EDGE_MODE_RETRIEVE_WITH_MEMORY = "retrieve_with_memory"
 EDGE_MODE_ONLY_INJECT = "only_inject"
 EDGE_MODE_BENCHMARK = "benchmark"
 
 
 class VenusSystemEdge:
-    """边端系统 - 根据 edge_mode 整合视频编码、检索与 gRPC 客户端"""
+    """边端系统 - 根据 edge_mode 整合视频编码、检索；query_* 经 APIServerE 与云端 gRPC，retrieve_* 仅本地检索"""
     
     def __init__(self, config: Config = None):
         """
@@ -35,8 +41,8 @@ class VenusSystemEdge:
         self.config = config
         self.edge_mode = getattr(config, "edge_mode", EDGE_MODE_QUERY_WHILE_INJECT)
         
-        # 组件
-        self.api_server: Optional[APIServerE] = None
+        # 组件（query_* 模式才实例化 APIServerE；retrieve_* 保持 None）
+        self.api_server = None
         self.video_input: Optional[VideoInputOnline] = None
         self.memory_manager: Optional[MemoryManagerOnline] = None
         
@@ -73,10 +79,14 @@ class VenusSystemEdge:
         faiss_path = self.config.memory_faiss_file_path
         map_path = self.config.memory_databasemap_file_path
         if not os.path.isfile(faiss_path):
-            self.logger.error(f"向量文件不存在: {faiss_path}，query_with_memory 模式需要已有向量库")
+            self.logger.error(
+                f"向量文件不存在: {faiss_path}，query_with_memory / retrieve_with_memory 需要已有向量库"
+            )
             return False
         if not os.path.isfile(map_path):
-            self.logger.error(f"databasemap 文件不存在: {map_path}，query_with_memory 模式需要已有 map 文件")
+            self.logger.error(
+                f"databasemap 文件不存在: {map_path}，query_with_memory / retrieve_with_memory 需要已有 map 文件"
+            )
             return False
         return True
     
@@ -89,6 +99,10 @@ class VenusSystemEdge:
             self._initialize_query_while_inject()
         elif self.edge_mode == EDGE_MODE_QUERY_WITH_MEMORY:
             self._initialize_query_with_memory()
+        elif self.edge_mode == EDGE_MODE_RETRIEVE_WHILE_INJECT:
+            self._initialize_retrieve_while_inject()
+        elif self.edge_mode == EDGE_MODE_RETRIEVE_WITH_MEMORY:
+            self._initialize_retrieve_with_memory()
         elif self.edge_mode == EDGE_MODE_ONLY_INJECT:
             self._initialize_only_inject()
         elif self.edge_mode == EDGE_MODE_BENCHMARK:
@@ -96,14 +110,27 @@ class VenusSystemEdge:
         else:
             raise ValueError(f"不支持的 edge_mode: {self.edge_mode}")
     
+    def _use_stream_input(self):
+        return getattr(self.config, "edge_use_stream_input", False)
+
     def _initialize_query_while_inject(self):
         """query_while_inject：VideoInput, MemoryManager（内含帧/查询编码）, APIServerE"""
-        self.video_input = VideoInputOnline(self.config)
-        self.memory_manager = MemoryManagerOnline(self.config)
+        if self._use_stream_input():
+            self.video_input = StreamVideoInput(self.config)
+            if getattr(self.config, "memory_online_v3", True):
+                self.memory_manager = MemoryManagerOnlineV3(self.config)
+            else:
+                self.memory_manager = MemoryManagerOnlineV2(self.config)
+            self.memory_manager.set_frame_queue(self.video_input.frame_queue)
+            self.memory_manager.set_stream_input(self.video_input)
+        else:
+            self.video_input = VideoInputOnline(self.config)
+            self.memory_manager = MemoryManagerOnline(self.config)
+            self.memory_manager.set_frame_queue(self.video_input.frame_queue)
+        from src.api.api_server_e import APIServerE
+
         self.api_server = APIServerE(self.config)
-        
         # VideoInput -> MemoryManager 注入线程；APIServerE 同步调用 MemoryManager 查询
-        self.memory_manager.set_frame_queue(self.video_input.frame_queue)
         self.api_server.set_memory_manager(self.memory_manager)
         
         self.logger.info("query_while_inject 组件初始化完成")
@@ -114,20 +141,58 @@ class VenusSystemEdge:
             raise FileNotFoundError("query_with_memory 模式需要已存在的向量文件和 databasemap 文件")
 
         self.memory_manager = MemoryManagerOnline(self.config)
+        from src.api.api_server_e import APIServerE
+
         self.api_server = APIServerE(self.config)
         # 查询模式无需启动 MemoryManager 子线程，按需在 APIServerE 查询时同步检索
         self.memory_manager.init_sync()
         self.api_server.set_memory_manager(self.memory_manager)
         
         self.logger.info("query_with_memory 组件初始化完成")
-    
+
+    def _initialize_retrieve_while_inject(self):
+        """retrieve_while_inject：与 query_while_inject 相同流水线，但不创建 APIServerE（无云端）。"""
+        if self._use_stream_input():
+            self.video_input = StreamVideoInput(self.config)
+            if getattr(self.config, "memory_online_v3", True):
+                self.memory_manager = MemoryManagerOnlineV3(self.config)
+            else:
+                self.memory_manager = MemoryManagerOnlineV2(self.config)
+            self.memory_manager.set_frame_queue(self.video_input.frame_queue)
+            self.memory_manager.set_stream_input(self.video_input)
+        else:
+            self.video_input = VideoInputOnline(self.config)
+            self.memory_manager = MemoryManagerOnline(self.config)
+            self.memory_manager.set_frame_queue(self.video_input.frame_queue)
+        self.api_server = None
+        self.logger.info("retrieve_while_inject 组件初始化完成（仅本地检索）")
+
+    def _initialize_retrieve_with_memory(self):
+        """retrieve_with_memory：与 query_with_memory 相同向量库，但不创建 APIServerE。"""
+        if not self._check_vector_and_map_files():
+            raise FileNotFoundError(
+                "retrieve_with_memory 模式需要已存在的向量文件和 databasemap 文件"
+            )
+        self.memory_manager = MemoryManagerOnline(self.config)
+        self.memory_manager.init_sync()
+        self.api_server = None
+        self.logger.info("retrieve_with_memory 组件初始化完成（仅本地检索）")
+
     def _initialize_only_inject(self):
         """only_inject：VideoInput, MemoryManager；仅编码与建索引"""
-        self.video_input = VideoInputOnline(self.config)
-        self.memory_manager = MemoryManagerOnline(self.config)
-        
-        self.memory_manager.set_frame_queue(self.video_input.frame_queue)
-        
+        if self._use_stream_input():
+            self.video_input = StreamVideoInput(self.config)
+            if getattr(self.config, "memory_online_v3", True):
+                self.memory_manager = MemoryManagerOnlineV3(self.config)
+            else:
+                self.memory_manager = MemoryManagerOnlineV2(self.config)
+            self.memory_manager.set_frame_queue(self.video_input.frame_queue)
+            self.memory_manager.set_stream_input(self.video_input)
+        else:
+            self.video_input = VideoInputOnline(self.config)
+            self.memory_manager = MemoryManagerOnline(self.config)
+            self.memory_manager.set_frame_queue(self.video_input.frame_queue)
+
         self.logger.info("only_inject 组件初始化完成")
     
     def _initialize_benchmark(self):
@@ -147,7 +212,52 @@ class VenusSystemEdge:
                 break
             result = self.api_server.query(query_text=query_text, dialog_id=dialog_id)
             print(f"答: {result.get('result', '')}\n")
-    
+
+    def _run_retrieve_loop(self, dialog_id: int = 1):
+        """控制台循环：仅调用 MemoryManager.query_text_sync，不经过 APIServerE / gRPC。"""
+        self.logger.info(
+            "本地检索模式（无云端 gRPC）；输入查询文本后回车，空行或 quit 退出"
+        )
+        if self.memory_manager is None:
+            self.logger.error("memory_manager 未设置，无法检索")
+            return
+        query_id = 0
+        while True:
+            try:
+                query_text = input("检索: ").strip()
+            except EOFError:
+                break
+            if not query_text or query_text.lower() == "quit":
+                break
+            query_id += 1
+            ts = time.time()
+            qres = self.memory_manager.query_text_sync(
+                query_text=query_text,
+                query_id=query_id,
+                dialog_id=dialog_id,
+                timestamp=ts,
+                trace_ts={"retrieve_enqueued_at": ts},
+            )
+            scores = qres.scores or []
+            meta = qres.metadata_list or []
+            rframes = getattr(qres, "retrieval_frames", None)
+            print("检索命中 %d 条:" % len(meta))
+            for rank, (s, m) in enumerate(zip(scores, meta), start=1):
+                print(
+                    "  #%d score=%.6f frame_id=%s fps=%s path=%s"
+                    % (
+                        rank,
+                        float(s),
+                        m.get("frame_id"),
+                        m.get("video_fps"),
+                        m.get("source_path"),
+                    )
+                )
+            if rframes is not None:
+                npx = sum(1 for f in rframes if f is not None)
+                print("  像素帧（BGR）: %d / %d" % (npx, len(rframes)))
+            print("")
+
     def start(self):
         """根据 edge_mode 启动对应组件与流程"""
         if self.running:
@@ -169,6 +279,10 @@ class VenusSystemEdge:
                 self._start_query_while_inject()
             elif self.edge_mode == EDGE_MODE_QUERY_WITH_MEMORY:
                 self._start_query_with_memory()
+            elif self.edge_mode == EDGE_MODE_RETRIEVE_WHILE_INJECT:
+                self._start_retrieve_while_inject()
+            elif self.edge_mode == EDGE_MODE_RETRIEVE_WITH_MEMORY:
+                self._start_retrieve_with_memory()
             elif self.edge_mode == EDGE_MODE_ONLY_INJECT:
                 self._start_only_inject()
         except KeyboardInterrupt:
@@ -202,7 +316,25 @@ class VenusSystemEdge:
             self.api_server.start()
             self.logger.info("边端已就绪，可对已有向量库进行提问")
             self._run_query_loop(dialog_id=1)
-    
+
+    def _start_retrieve_while_inject(self):
+        """一边注入一边本地检索（无 APIServerE）。"""
+        self.running = True
+        if self.memory_manager is not None:
+            self.logger.debug("启动 MemoryManager...")
+            self.memory_manager.start()
+        if self.video_input is not None:
+            self.logger.debug("启动 VideoInput...")
+            self.video_input.start()
+        self.logger.info("边端已就绪（仅本地检索），可一边编码一边输入检索文本")
+        self._run_retrieve_loop(dialog_id=1)
+
+    def _start_retrieve_with_memory(self):
+        """基于已有向量库仅本地检索。"""
+        self.running = True
+        self.logger.info("边端已就绪（仅本地检索），可对已有向量库输入检索文本")
+        self._run_retrieve_loop(dialog_id=1)
+
     def _start_only_inject(self):
         """仅对一个视频进行编码与索引构建，等待完成后退出"""
         self.running = True

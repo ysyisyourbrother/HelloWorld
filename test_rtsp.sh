@@ -24,12 +24,12 @@ RTSP_URL="rtsp://admin:smc123456@192.168.123.98:554/stream1"
 # "$PY_SYS" test_rtsp/rtsp_segment_record.py -u "$RTSP_URL" -o ./test_rtsp/recordings --tcp
 
 # 3) 按 IPB 类型统计（Ctrl+C 退出）
-/usr/bin/python3 test_rtsp/rtsp_record_IPB_info_simple.py \
-  -u "$RTSP_URL" \
-  --tcp \
-  --latency 200 \
-  --relaxed-caps \
-  --xvfb
+# /usr/bin/python3 test_rtsp/rtsp_record_IPB_info_simple.py \
+#   -u "$RTSP_URL" \
+#   --tcp \
+#   --latency 200 \
+#   --relaxed-caps \
+#   --xvfb
 
 # 4) 打印码率
-# /usr/bin/python3 test_rtsp/rtsp_print_bitrate.py -u "$RTSP_URL" --tcp
+/usr/bin/python3 test_rtsp/rtsp_print_bitrate.py -u "$RTSP_URL" --tcp

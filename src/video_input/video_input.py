@@ -447,7 +447,6 @@ class SymVideoInput(VideoInputBase):
             if group:
                 yield group
 
-
 class SymVideoInputV2(SymVideoInput):
     """
     与 SymVideoInput 行为一致（按 GOP 迭代、SymFrameData 等），但用 GStreamer 扫描码流得到
@@ -482,6 +481,7 @@ class SymVideoInputV2(SymVideoInput):
             f"总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}"
         )
 
+# class SymVideoInputV3
 
 def make_sym_video_input(config):
     """

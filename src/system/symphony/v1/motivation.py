@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Symphony motivation system."""
+"""Symphony motivation system (v1)."""
 
 import logging
 import os
@@ -11,8 +11,10 @@ from typing import Dict, Any, Optional
 import faiss
 from tqdm import tqdm
 
-# 添加项目根目录到路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+_project_root = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+)
+sys.path.insert(0, _project_root)
 
 from src.config import SymConfig
 from src.memory.frame_vectorizer import SymFrameVectorizer

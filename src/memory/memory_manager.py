@@ -9,7 +9,7 @@ import glob
 import os
 import faiss
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Sequence, Callable, Dict
+from typing import List, Optional, Tuple, Sequence, Callable, Dict, Any
 from contextlib import contextmanager
 import multiprocessing as mp
 
@@ -18,7 +18,7 @@ from src.config import Config
 from src.memory.frame_vectorizer import FrameVectorData, FrameVectorizer
 from src.memory.query_vectorizer import QueryData, QueryVectorizer
 from src.video_input.video_input import FrameData
-from src.video_utils.about_frame import extract_save_frame_by_index
+from src.video_utils.about_frame import extract_save_frame_by_index, extract_frame_by_index
 
 # 视频读取库
 import cv2
@@ -32,6 +32,8 @@ class MemoryResult:
     dialog_id: int            # 对话ID
     scores: List[float]       # 匹配分数列表
     trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
+    # 与 metadata_list 等长；BGR uint8 ndarray，供边端跳过按路径再解码（MemoryManagerOnlineV3）
+    retrieval_frames: Optional[List[Any]] = None
 
 class ThreadSafeFaiss:
     """线程安全的Faiss索引类"""
@@ -358,6 +360,13 @@ class MemoryManagerBase:
             else:
                 save_faiss_path = self.faiss_file_path
                 save_map_path = self.databasemap_file_path
+
+            out_dir = os.path.dirname(os.path.abspath(save_faiss_path))
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            map_dir = os.path.dirname(os.path.abspath(save_map_path))
+            if map_dir and map_dir != out_dir:
+                os.makedirs(map_dir, exist_ok=True)
 
             # 保存faiss索引
             self.index.save_local(save_faiss_path)
@@ -702,7 +711,10 @@ class MemoryManagerOnline(MemoryManagerBase):
                     self._add_vector(vector_data)
             except queue.Empty:
                 self.logger.debug("帧输入队列超时，保存数据库")
-                self._save_database()
+                try:
+                    self._save_database()
+                except Exception:
+                    self.logger.exception("定时保存向量库失败")
             except Exception as e:
                 self.logger.error(f"处理帧向量时出错: {e}")
 
@@ -772,7 +784,10 @@ class MemoryManagerOnline(MemoryManagerBase):
             self.running_event.clear()
 
         if self.index is not None:
-            self._save_database()
+            try:
+                self._save_database()
+            except Exception:
+                self.logger.exception("停止时保存向量库失败")
 
         if hasattr(self, "worker_thread") and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=5)
@@ -780,3 +795,468 @@ class MemoryManagerOnline(MemoryManagerBase):
     def set_frame_queue(self, frame_queue: mp.Queue):
         """设置帧输入队列（VideoInput 产出 FrameData，原 FrameVectorizer 消费端）"""
         self.frame_queue = frame_queue
+
+
+class MemoryManagerOnlineV2(MemoryManagerOnline):
+    """
+    网络流 / StreamVideoInput 专用在线记忆：
+    - stop() 时先停止 StreamVideoInput（若已绑定），再保存 faiss 与 databasemap；
+    - 可选 memory_stream_max_seconds：后台计时，到点自动 stop()（保存向量库并结束会话）；
+    - 可与 StreamVideoInput.set_on_session_end 配合（流因 max 时长结束时由回调触发 stop）。
+    """
+
+    def __init__(self, config=None):
+        super().__init__(config)
+        self._stream_input = None
+        self._session_timer_thread = None
+
+    def set_stream_input(self, stream_input):
+        """绑定 StreamVideoInput，便于 stop 顺序与计时。"""
+        self._stream_input = stream_input
+
+    def start(self):
+        if self._stream_input is not None and hasattr(
+            self._stream_input, "set_on_session_end"
+        ):
+            self._stream_input.set_on_session_end(self._on_stream_session_end)
+        super().start()
+        max_sec = float(getattr(self._config, "memory_stream_max_seconds", 0.0) or 0.0)
+        if max_sec > 0:
+            self._session_timer_thread = threading.Thread(
+                target=self._run_memory_session_timer,
+                name="MemoryStreamMaxSeconds",
+                daemon=True,
+            )
+            self._session_timer_thread.start()
+
+    def _on_stream_session_end(self):
+        """由 Gst 线程在达到 stream_record_max_seconds 时触发，勿阻塞。"""
+
+        def _run():
+            self.logger.info("流输入会话结束，保存向量库并停止 MemoryManagerOnlineV2")
+            try:
+                self.stop()
+            except Exception:
+                self.logger.exception("MemoryManagerOnlineV2.stop 异常")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _run_memory_session_timer(self):
+        max_sec = float(getattr(self._config, "memory_stream_max_seconds", 0.0) or 0.0)
+        if max_sec <= 0:
+            return
+        t0 = time.time()
+        while time.time() - t0 < max_sec:
+            if not self.running_event.is_set():
+                return
+            time.sleep(0.25)
+        self.logger.info(
+            "memory_stream_max_seconds=%.0f 已到，停止流并保存向量库", max_sec
+        )
+        try:
+            self.stop()
+        except Exception:
+            self.logger.exception("MemoryManagerOnlineV2 计时停止异常")
+
+    def stop(self):
+        if self._stream_input is not None:
+            try:
+                self._stream_input.stop()
+            except Exception as e:
+                self.logger.warning("停止 StreamVideoInput 时: %s", e)
+            self._stream_input = None
+        super().stop()
+
+
+class ShortMemoryStore(object):
+    """
+    按向量 id 缓存最近注入帧的 BGR 像素；TTL 略大于分段时长，供检索短路。
+    """
+
+    def __init__(self, ttl_sec, logger):
+        self.ttl_sec = max(1.0, float(ttl_sec))
+        self.logger = logger
+        self._lock = threading.RLock()
+        self._by_id = {}  # type: Dict[int, Tuple[float, Any]]
+
+    def put(self, vector_id, bgr, mono_ts):
+        if bgr is None:
+            return
+        try:
+            payload = np.ascontiguousarray(bgr)
+        except Exception:
+            return
+        with self._lock:
+            self._purge_locked(mono_ts)
+            self._by_id[int(vector_id)] = (float(mono_ts), payload)
+
+    def get(self, vector_id, mono_ts):
+        with self._lock:
+            self._purge_locked(mono_ts)
+            ent = self._by_id.get(int(vector_id))
+            if ent is None:
+                return None
+            return ent[1]
+
+    def clear(self):
+        with self._lock:
+            self._by_id.clear()
+
+    def _purge_locked(self, mono_ts):
+        cutoff = float(mono_ts) - self.ttl_sec
+        dead = [vid for vid, (t0, _) in self._by_id.items() if t0 < cutoff]
+        for vid in dead:
+            del self._by_id[vid]
+
+
+class StreamSegmentFileMap(object):
+    """
+    线程安全：已知 segment MP4 路径 -> {fps, frame_count}，按路径分组取帧，支持跨文件。
+    """
+
+    def __init__(self, logger):
+        self.logger = logger
+        self._lock = threading.RLock()
+        self._meta = {}  # type: Dict[str, Dict[str, Any]]
+
+    def clear(self):
+        with self._lock:
+            self._meta.clear()
+
+    def refresh_session_dir(self, session_dir):
+        # type: (Optional[str]) -> List[str]
+        if not session_dir or not os.path.isdir(session_dir):
+            return []
+        pattern = os.path.join(os.path.abspath(session_dir), "segment_*.mp4")
+        paths = sorted(glob.glob(pattern))
+        with self._lock:
+            for p in paths:
+                if p not in self._meta:
+                    self._meta[p] = self._probe(p)
+        return paths
+
+    def _probe(self, path):
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            return {"fps": 25.0, "frame_count": 0}
+        try:
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) or 25.0
+            n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            return {"fps": fps, "frame_count": max(0, n)}
+        finally:
+            cap.release()
+
+    def get_meta(self, path):
+        # type: (str) -> Dict[str, Any]
+        with self._lock:
+            return dict(self._meta.get(path, {"fps": 25.0, "frame_count": 0}))
+
+    def read_frame_bgr(self, path, frame_index):
+        # type: (str, int) -> Optional[np.ndarray]
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            return extract_frame_by_index(
+                path, int(frame_index), backend="cv2"
+            )
+        except Exception as e:
+            self.logger.debug("segment 取帧失败 path=%s idx=%s err=%s", path, frame_index, e)
+            return None
+
+
+class MemoryManagerOnlineV3(MemoryManagerOnlineV2):
+    """
+    在 V2 基础上：
+    - 短期记忆：按 stream 分段时长 × 系数保留最近向量的 BGR 帧，检索时优先命中；
+    - 长期：本地文件路径仍按 frame_id 解码；RTSP 等非常规文件路径时，可选按录制目录
+      segment_*.mp4 + 墙钟时间启发式取帧（依赖 stream_record_fps / 分段配置）。
+    - query_text_sync 填充 MemoryResult.retrieval_frames，与 metadata_list 等长（BGR）。
+    """
+
+    def __init__(self, config=None):
+        super().__init__(config)
+        seg_min = float(getattr(self._config, "stream_record_segment_minutes", 1.0) or 1.0)
+        ratio = float(getattr(self._config, "memory_short_memory_ttl_ratio", 1.1) or 1.1)
+        ttl = max(60.0, seg_min * 60.0 * ratio)
+        self._short_memory = ShortMemoryStore(ttl, logging.getLogger("ShortMemoryStore"))
+        self._segment_map = StreamSegmentFileMap(
+            logging.getLogger("StreamSegmentFileMap")
+        )
+        self._v3_extra_lock = threading.RLock()
+        self._vector_wall_ts = {}  # type: Dict[int, float]
+        self._session_first_wall_ts = None  # type: Optional[float]
+        self._segment_pixel_heuristic = bool(
+            getattr(self._config, "memory_segment_pixel_heuristic", True)
+        )
+
+    def _set_logger(self):
+        super()._set_logger()
+        self._short_memory.logger = self.logger
+        self._segment_map.logger = self.logger
+
+    def _add_vector(self, vector_data, pixel_bgr=None):
+        super()._add_vector(vector_data)
+        vid = self.vector_count - 1
+        wall = float(vector_data.timestamp)
+        mono = time.time()
+        with self._v3_extra_lock:
+            self._vector_wall_ts[vid] = wall
+            if self._session_first_wall_ts is None:
+                self._session_first_wall_ts = wall
+        self._short_memory.put(vid, pixel_bgr, mono)
+
+    def _thread_frame_vectors(self):
+        self.logger.info(
+            "帧向量处理线程启动(V3), 线程名: %s", threading.current_thread().name
+        )
+        save_interval = 30
+        while self.running_event.is_set():
+            try:
+                frame_data = self.frame_queue.get(timeout=save_interval)
+                vector_data = self._frame_encoder.encode_frame_from_stream(frame_data)
+                if vector_data is not None:
+                    bgr = None
+                    fd = getattr(frame_data, "frame", None)
+                    if fd is not None:
+                        try:
+                            bgr = cv2.cvtColor(fd, cv2.COLOR_RGB2BGR)
+                        except Exception as e:
+                            self.logger.warning("RGB->BGR 失败 frame_id=%s: %s", frame_data.frame_id, e)
+                    self._add_vector(vector_data, pixel_bgr=bgr)
+            except queue.Empty:
+                self.logger.debug("帧输入队列超时，保存数据库")
+                try:
+                    self._save_database()
+                except Exception:
+                    self.logger.exception("定时保存向量库失败")
+            except Exception as e:
+                self.logger.error("处理帧向量时出错: %s", e)
+
+    def _long_term_frame_bgr(self, vector_id, rec):
+        # type: (int, dict) -> Optional[np.ndarray]
+        sp = rec.get("source_path") or ""
+        fid = rec.get("frame_id")
+        if sp and os.path.isfile(sp):
+            try:
+                return extract_frame_by_index(sp, int(fid), backend="cv2")
+            except Exception as e:
+                self.logger.debug("按 source_path 取帧失败: %s", e)
+
+        if not self._segment_pixel_heuristic:
+            return None
+        if not sp.startswith("rtsp://"):
+            return None
+
+        session_dir = None
+        if self._stream_input is not None and hasattr(
+            self._stream_input, "get_recording_dir"
+        ):
+            session_dir = self._stream_input.get_recording_dir()
+        if not session_dir:
+            return None
+
+        with self._v3_extra_lock:
+            wall_ts = self._vector_wall_ts.get(vector_id)
+            anchor = self._session_first_wall_ts
+        if wall_ts is None:
+            return None
+        if anchor is None:
+            anchor = wall_ts
+
+        paths = self._segment_map.refresh_session_dir(session_dir)
+        if not paths:
+            return None
+
+        segment_sec = max(
+            1.0, float(getattr(self._config, "stream_record_segment_minutes", 1.0) or 1.0) * 60.0
+        )
+        fps = float(getattr(self._config, "stream_record_fps", 25.0) or 25.0) or 25.0
+
+        dt = max(0.0, float(wall_ts) - float(anchor))
+        seg_i = int(dt // segment_sec)
+        if seg_i < 0:
+            seg_i = 0
+        if seg_i >= len(paths):
+            seg_i = len(paths) - 1
+        offset = dt - float(seg_i) * segment_sec
+        local_fid = int(offset * fps)
+        path = paths[seg_i]
+        meta = self._segment_map.get_meta(path)
+        nfm = int(meta.get("frame_count") or 0)
+        if nfm > 0 and local_fid >= nfm:
+            local_fid = max(0, nfm - 1)
+        return self._segment_map.read_frame_bgr(path, local_fid)
+
+    def _build_retrieval_frames(self, vector_ids, mono_now):
+        # type: (List[int], float) -> List[Any]
+        out = []
+        for vid in vector_ids:
+            if vid < 0 or vid >= self.vector_count:
+                out.append(None)
+                continue
+            bgr = self._short_memory.get(vid, mono_now)
+            if bgr is not None:
+                out.append(bgr)
+                continue
+            rec = self.databasemap[vid]
+            out.append(self._long_term_frame_bgr(vid, rec))
+        return out
+
+    def _save_retrieved_frames(self, vector_ids, scores):
+        """
+        与 _build_retrieval_frames 一致：短期记忆中有 BGR 则直接 imwrite；
+        否则长期路径（本地视频按 frame_id，RTSP 则分段 MP4 启发式）取帧后再存。
+        不再对 source_path 调用 extract_save_frame_by_index（避免 pathlib 破坏 rtsp://）。
+        """
+        if not vector_ids:
+            return
+        os.makedirs(self.memory_retrieve_save_dir, exist_ok=True)
+        for name in os.listdir(self.memory_retrieve_save_dir):
+            lower_name = name.lower()
+            if not lower_name.endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp")):
+                continue
+            file_path = os.path.join(self.memory_retrieve_save_dir, name)
+            if os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    self.logger.warning(f"删除旧检索帧失败: {file_path}, err={e}")
+
+        mono = time.time()
+        bgr_list = self._build_retrieval_frames(vector_ids, mono)
+        for rank, (vector_id, score, bgr) in enumerate(
+            zip(vector_ids, scores, bgr_list), start=1
+        ):
+            try:
+                if vector_id < 0 or vector_id >= self.vector_count:
+                    self.logger.warning(
+                        "保存检索帧跳过: 无效 vector_id=%s", vector_id
+                    )
+                    continue
+                rec = self.databasemap[vector_id]
+                source_path = rec.get("source_path")
+                frame_id = rec.get("frame_id")
+                video_fps = rec.get("video_fps") or 1.0
+                video_name = os.path.splitext(
+                    os.path.basename(source_path or "unknown")
+                )[0]
+                second = (
+                    float(frame_id) / float(video_fps)
+                    if frame_id is not None
+                    else 0.0
+                )
+                filename = (
+                    f"rank{rank:02d}"
+                    f"_score{float(score):.6f}"
+                    f"_sec{second:.2f}"
+                    f"_{video_name}"
+                    f"_fid{int(frame_id)}.jpg"
+                )
+                save_path = os.path.join(self.memory_retrieve_save_dir, filename)
+                if bgr is None:
+                    self.logger.warning(
+                        "保存检索帧跳过: 无像素（短期已过期且长期取帧失败）"
+                        " vector_id=%s path=%s frame_id=%s",
+                        vector_id,
+                        source_path,
+                        frame_id,
+                    )
+                    continue
+                if not cv2.imwrite(save_path, bgr):
+                    self.logger.warning("cv2.imwrite 失败: %s", save_path)
+            except Exception as e:
+                self.logger.warning(
+                    "保存检索帧失败，vector_id=%s, err=%s", vector_id, e
+                )
+
+    def query_text_sync(
+        self,
+        query_text,
+        query_id,
+        dialog_id,
+        timestamp,
+        trace_ts=None,
+    ):
+        if not self._ready_event.is_set():
+            if self.index is None or self.databasemap is None:
+                self.init_sync()
+            self._ready_event.set()
+
+        if self._query_encoder is None:
+            self._query_encoder = QueryVectorizer(self._config)
+            self._query_encoder._set_logger()
+            self._query_encoder._initialize_vectorizer()
+
+        qd = QueryData(
+            query=query_text,
+            query_id=query_id,
+            dialog_id=dialog_id,
+            timestamp=timestamp,
+            trace_ts=dict(trace_ts or {}),
+        )
+        qvd = self._query_encoder.encode_query_data(qd)
+        merged_trace = dict(qd.trace_ts or {})
+        merged_trace.update(qvd.trace_ts or {})
+        merged_trace["memory_query_dequeue_at"] = time.time()
+        retrieve_start = time.time()
+
+        qv = qvd.vector
+        top_k = self.memory_topk
+        if self._retrieve_hooks:
+            all_scores = self._query_faiss_all_scores(qv)
+            for fn in self._retrieve_hooks:
+                try:
+                    fn(qv.copy(), all_scores)
+                except Exception as e:
+                    self.logger.warning("检索钩子执行异常: %s", e)
+
+        vector_ids, scores = self._query_faiss(qv, top_k)
+        self.logger.info("查询完成，返回 %d 个结果", len(vector_ids))
+        if self.memory_save_retrieved_frames:
+            self._save_retrieved_frames(vector_ids, scores)
+
+        metadata_list = []
+        for vid in vector_ids:
+            if vid < 0 or vid >= self.vector_count:
+                metadata_list.append(
+                    {
+                        "frame_id": -1,
+                        "video_fps": 1.0,
+                        "source_path": None,
+                    }
+                )
+                continue
+            rec = self.databasemap[vid]
+            metadata_list.append(
+                {
+                    "frame_id": rec["frame_id"],
+                    "video_fps": rec.get("video_fps") or 1.0,
+                    "source_path": rec.get("source_path"),
+                }
+            )
+
+        mono = time.time()
+        retrieval_frames = self._build_retrieval_frames(vector_ids, mono)
+        merged_trace["memory_query_retrieved_at"] = time.time()
+        self.logger.info(
+            "[Latency][Query] memory_retrieve query_id=%s %.2f ms",
+            qvd.query_id,
+            (merged_trace["memory_query_retrieved_at"] - retrieve_start) * 1000.0,
+        )
+        return MemoryResult(
+            metadata_list=metadata_list,
+            timestamp=qvd.timestamp,
+            query_id=qvd.query_id,
+            dialog_id=qvd.dialog_id,
+            scores=scores,
+            trace_ts=merged_trace,
+            retrieval_frames=retrieval_frames,
+        )
+
+    def stop(self):
+        self._short_memory.clear()
+        self._segment_map.clear()
+        with self._v3_extra_lock:
+            self._vector_wall_ts.clear()
+            self._session_first_wall_ts = None
+        super().stop()

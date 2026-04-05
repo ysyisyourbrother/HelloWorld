@@ -156,22 +156,28 @@ class APIServerE:
         )
 
         metadata_list = query_result.metadata_list or []
-        # 按检索元数据逐条读取帧（BGR），并按历史行为序列化上传云端
+        retrieval_frames = getattr(query_result, "retrieval_frames", None)
+        # 按检索元数据逐条读取帧（BGR）；若 MemoryManager 已给出 retrieval_frames 则优先使用
         frame_data_list = []
-        for m in metadata_list:
-            source_path = m.get("source_path")
-            frame_id = m.get("frame_id")
-            if not source_path or frame_id is None:
-                continue
-            try:
-                frame = extract_frame_by_index(
-                    video_path=source_path,
-                    frame_index=int(frame_id),
-                    backend=self.frame_decode_backend,
-                )
+        for i, m in enumerate(metadata_list):
+            frame = None
+            if retrieval_frames is not None and i < len(retrieval_frames):
+                frame = retrieval_frames[i]
+            if frame is None:
+                source_path = m.get("source_path")
+                frame_id = m.get("frame_id")
+                if not source_path or frame_id is None:
+                    continue
+                try:
+                    frame = extract_frame_by_index(
+                        video_path=source_path,
+                        frame_index=int(frame_id),
+                        backend=self.frame_decode_backend,
+                    )
+                except Exception:
+                    continue
+            if frame is not None:
                 frame_data_list.append(frame)
-            except Exception:
-                continue
         memory_results_bytes = pickle.dumps(frame_data_list) if frame_data_list else b""
         self.logger.debug(f"序列化了 {len(frame_data_list) if frame_data_list else 0} 帧数据")
         trace_ts = dict(query_result.trace_ts or {})

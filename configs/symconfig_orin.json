@@ -1,0 +1,74 @@
+{
+  "video_input": {
+    "log_file": "logs/symphony_edge_orin_video.log",
+    "version": "V2",
+    "gop_scan_python": "/usr/bin/python3",
+    "ipc_send_frame": true,
+    "video_file_path": "demo/assets/cooking.mp4"
+  },
+  "stream_input": {
+    "log_file": "logs/symphony_edge_orin_stream.log",
+    "edge_use_stream_input": true,
+    "stream_uri": "rtsp://admin:smc123456@192.168.123.98:554/stream1",
+    "stream_rtsp_depay": "h264",
+    "stream_window_duration_sec": 1.0,
+    "stream_target_decode_fps": 2.0,
+    "stream_trigger_ratio": 1.35,
+    "stream_warmup_windows": 3,
+    "stream_record_enable": false,
+    "stream_record_segment_minutes": 1.0,
+    "stream_record_dir": "logs/stream_recordings_symphony_orin",
+    "stream_record_max_seconds": 0,
+    "stream_record_latency_ms": 200,
+    "stream_record_rtsp_tcp": false
+  },
+  "frame_vectorizer": {
+    "log_file": "logs/symphony_edge_orin_frame.log",
+    "select_strategy": "first",
+    "frame_interval": 1,
+    "model_type": "BGE",
+    "model_path": "/mnt/ssd/huggingface/model/BGE-VL-base",
+    "device": "cuda",
+    "attn_implementation": "eager"
+  },
+  "query_vectorizer": {
+    "log_file": "logs/symphony_edge_orin_query.log",
+    "model_type": "BGE",
+    "model_path": "/mnt/ssd/huggingface/model/BGE-VL-base",
+    "device": "cuda"
+  },
+  "memory_manager": {
+    "log_file": "logs/symphony_edge_orin_memory.log",
+    "database_type": "vector",
+    "faiss_index_type": "FlatIP",
+    "faiss_file_path": "motivation_results_symphony/edge_orin/faiss/session.faiss",
+    "databasemap_file_path": "motivation_results_symphony/edge_orin/json/session.json",
+    "dimension": 512,
+    "topk": 5,
+    "mode": "both",
+    "save_retrieved_frames": true,
+    "save_injected_frames": false,
+    "memory_stream_max_seconds": 0
+  },
+  "reasoner": {
+    "log_file": "logs/symphony_edge_orin_reasoner.log",
+    "max_history_turns": 10,
+    "test_mode": false,
+    "model_path": "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2",
+    "device": "cuda"
+  },
+  "api_server_e": {
+    "log_file": "logs/symphony_edge_orin_api_e.log",
+    "cloud_server_url": "127.0.0.1:9000",
+    "test_mode": false
+  },
+  "edge": {
+    "mode": "only_inject"
+  },
+  "benchmark": {
+    "db_dir_egoschema": "motivation_results_symphony/memory/egoschema",
+    "db_dir_videomme": "motivation_results_symphony/memory/videomme",
+    "result_dir": "motivation_results_symphony",
+    "use_cloud": false
+  }
+}

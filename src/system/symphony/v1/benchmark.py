@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Symphony benchmark system."""
+"""Symphony benchmark system (v1)."""
 
 import logging
 import os
@@ -10,8 +10,11 @@ from typing import Dict, Any, Optional
 
 import faiss
 
-# 添加项目根目录到路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+# 添加项目根目录到路径（v1 相对 symphony 多一层）
+_project_root = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+)
+sys.path.insert(0, _project_root)
 
 from src.memory.frame_vectorizer import SymFrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
