@@ -11,7 +11,7 @@ import os
 # 本项目
 from src.config import Config
 from src.memory.image_bge_vectorizer import ImageBGEVectorizer
-from src.video_input.video_input import FrameData, SymFrameData, SymVideoInput
+from src.video_input.video_input import FrameData, SymFrameData, SymVideoInputByGOP
 from src.video_utils.file_video_reader import open_file_video_reader
 
 @dataclass
@@ -370,7 +370,7 @@ class SymFrameVectorizer(FrameVectorizer):
             return [gop_frames[0]]
 
     def encode_frames_by_gop_from_video_input(
-        self, video_input: SymVideoInput, gop_start: int, gop_end: int
+        self, video_input: SymVideoInputByGOP, gop_start: int, gop_end: int
     ) -> List[FrameVectorData]:
         """
         对单个 GOP 先按 select_strategy 选索引，仅解码选中帧，再编码。

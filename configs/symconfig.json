@@ -13,8 +13,8 @@
     "max_history_turns": 10
   },
   "benchmark": {
-    "db_dir_egoschema": "database/egoschema/symphony",
-    "db_dir_videomme": "database/videomme/symphony",
+    "db_dir_egoschema": "database/egoschema/symphony_v1",
+    "db_dir_videomme": "database/videomme/symphony_v1",
     "result_dir": "benchmark_results/symphony"
   }
 }

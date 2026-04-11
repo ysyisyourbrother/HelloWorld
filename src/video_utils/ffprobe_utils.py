@@ -3,7 +3,24 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+
+def _parse_ffprobe_time_seconds(raw: Any) -> Optional[float]:
+    if raw is None or raw == "N/A" or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _frame_media_time_seconds(f: Dict[str, Any]) -> Optional[float]:
+    for key in ("pkt_pts_time", "best_effort_timestamp_time", "pts_time"):
+        t = _parse_ffprobe_time_seconds(f.get(key))
+        if t is not None:
+            return t
+    return None
 
 
 def get_i_frame_indices(video_path: str) -> List[int]:
@@ -136,7 +153,8 @@ def get_frame_info_with_pkt_size(video_path: str) -> List[Dict[str, Any]]:
         video_path: 视频文件路径
 
     Returns:
-        每帧信息列表，每项为 {"pict_type": str, "pkt_pts_time": float, "pkt_size": int}
+        每帧信息列表，每项含 pict_type、pkt_pts_time、pkt_size，以及可选的 media_time（秒，来自
+        pkt_pts_time / best_effort_timestamp_time / pts_time 中首个有效字段；无则为 None）。
 
     Raises:
         FileNotFoundError: 视频文件不存在
@@ -166,14 +184,23 @@ def get_frame_info_with_pkt_size(video_path: str) -> List[Dict[str, Any]]:
     data = json.loads(result.stdout)
     frames = data.get("frames", [])
 
-    return [
-        {
-            "pict_type": f.get("pict_type", "?"),
-            "pkt_pts_time": float(f.get("pkt_pts_time", 0)),
-            "pkt_size": int(f.get("pkt_size", 0)),
-        }
-        for f in frames
-    ]
+    rows = []
+    for f in frames:
+        mt = _frame_media_time_seconds(f)
+        pkt_pts = f.get("pkt_pts_time")
+        try:
+            pkt_pts_f = float(pkt_pts) if pkt_pts not in (None, "N/A", "") else 0.0
+        except (TypeError, ValueError):
+            pkt_pts_f = 0.0
+        rows.append(
+            {
+                "pict_type": f.get("pict_type", "?"),
+                "pkt_pts_time": pkt_pts_f,
+                "pkt_size": int(f.get("pkt_size", 0)),
+                "media_time": mt,
+            }
+        )
+    return rows
 
 
 def get_frame_info_for_stream_ffprobe(video_path: str) -> Tuple[List[int], List[str], List[int]]:
@@ -192,3 +219,32 @@ def get_frame_info_for_stream_ffprobe(video_path: str) -> Tuple[List[int], List[
     frame_types = [f.get("pict_type", "?") for f in frames_info]
     pkt_sizes = [f.get("pkt_size", 0) for f in frames_info]
     return i_frame_indices, frame_types, pkt_sizes
+
+
+def get_frame_info_for_stream_ffprobe_with_media_time(
+    video_path: str,
+) -> Tuple[List[int], List[str], List[int], List[float]]:
+    """
+    一次 ffprobe 调用返回 I 帧索引、帧类型、每帧 pkt_size、每帧媒体时间（秒）。
+
+    media_time 优先 pkt_pts_time，其次 best_effort_timestamp_time、pts_time；若某帧仍无有效时间，
+    则填 0.0，由调用方在已知 fps 时用索引/fps 回填（见 SymVideoInputByStreamWindow）。
+
+    Args:
+        video_path: 视频文件路径
+
+    Returns:
+        (i_frame_indices, frame_types, pkt_sizes, media_times)
+    """
+    frames_info = get_frame_info_with_pkt_size(video_path)
+    i_frame_indices = [i for i, f in enumerate(frames_info) if f.get("pict_type") == "I"]
+    frame_types = [f.get("pict_type", "?") for f in frames_info]
+    pkt_sizes = [int(f.get("pkt_size", 0)) for f in frames_info]
+    media_times = []
+    for f in frames_info:
+        mt = f.get("media_time")
+        if mt is None:
+            media_times.append(0.0)
+        else:
+            media_times.append(float(mt))
+    return i_frame_indices, frame_types, pkt_sizes, media_times

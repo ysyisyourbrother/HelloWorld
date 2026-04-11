@@ -150,6 +150,9 @@ class Config:
         )
         # 流式边端是否使用 OnlineV3（短记忆 + 分段取帧）；False 则仍为 OnlineV2
         self.memory_online_v3 = bool(memory_config.get("online_v3", True))
+        # 检索产出类型：frame=仅帧元数据（默认）；clip=按 topk 命中 GOP 导出临时 mp4（需 i_frames 与 ffmpeg）
+        _rit = str(memory_config.get("retrieve_item_type", "frame") or "frame").strip().lower()
+        self.memory_retrieve_item_type = _rit if _rit in ("frame", "clip") else "frame"
         
         # Reasoner配置
         reasoner_config = self._config.get("reasoner", {})

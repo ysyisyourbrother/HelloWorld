@@ -74,6 +74,9 @@ class SymphonySystemMoti(VenusSystemMoti):
                     fn, need_hidden_states=need_hs, need_attentions=need_attn
                 )
             self.video_input.init_for_file(video_path)
+            ixs = getattr(self.video_input, "i_frame_indices", None)
+            if ixs:
+                self.memory_manager.register_i_frames(video_path, list(ixs))
             self.frame_vectorizer._initialize_vectorizer()
         else:
             self.video_input = None

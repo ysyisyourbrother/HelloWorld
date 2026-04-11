@@ -44,102 +44,16 @@ from src.video_utils.gst_frame_info import (
     _project_root,
     resolve_gop_scan_python_exe,
 )
+from src.video_utils.stream_window_policy import select_frames_for_window
 
 
 def _can_import_gi():
     try:
         import gi
-
         gi.require_version("Gst", "1.0")
         return True
     except Exception:
         return False
-
-
-def cumulative_sample_indices_by_pkt_sizes(pkt_sizes, k):
-    # type: (List[int], int) -> List[int]
-    """
-    在窗口内按包大小前缀和，在总大小的 (k+1) 等分点处各取一帧（与累积到 S*i/(k+1) 对齐）。
-    """
-    if k <= 0 or not pkt_sizes:
-        return []
-    total = float(sum(pkt_sizes))
-    if total <= 0:
-        return []
-    thresholds = [total * float(i) / float(k + 1) for i in range(1, k + 1)]
-    cum = 0.0
-    out = []
-    ti = 0
-    for j, p in enumerate(pkt_sizes):
-        cum += float(p)
-        while ti < len(thresholds) and cum >= thresholds[ti]:
-            out.append(j)
-            ti += 1
-        if ti >= len(thresholds):
-            break
-    return out
-
-
-def select_frames_for_window(
-    window_rows,
-    target_decode_fps,
-    window_duration_sec,
-    baseline_non_i,
-    trigger_ratio,
-    warmup_windows,
-    windows_seen,
-    alpha_baseline,
-):
-    # type: (List[Dict[str, Any]], float, float, Optional[float], float, int, int, float) -> Tuple[List[int], Optional[float], bool]
-    """
-    根据窗口内帧元数据决定是否触发，并返回应编码的帧在 window_rows 中的下标列表。
-
-    Returns:
-        (selected_indices_in_window, new_baseline_non_i, triggered)
-    """
-    if not window_rows:
-        return [], baseline_non_i, False
-
-    pkt_sizes = [int(r["pkt_size"]) for r in window_rows]
-    is_key = [bool(r["is_keyframe"]) for r in window_rows]
-
-    non_i_pkts = [pkt_sizes[i] for i in range(len(pkt_sizes)) if not is_key[i]]
-    if not non_i_pkts:
-        non_i_mean = 0.0
-    else:
-        non_i_mean = float(sum(non_i_pkts)) / float(len(non_i_pkts))
-
-    triggered = False
-    new_baseline = baseline_non_i
-
-    # windows_seen 为已结束的窗口数（从 1 起）；前 warmup_windows 个窗口仅更新基线、不触发
-    if windows_seen <= warmup_windows:
-        if non_i_mean > 0:
-            if new_baseline is None:
-                new_baseline = non_i_mean
-            else:
-                new_baseline = alpha_baseline * non_i_mean + (1.0 - alpha_baseline) * new_baseline
-        return [], new_baseline, False
-
-    if new_baseline is not None and new_baseline > 0 and non_i_mean > new_baseline * trigger_ratio:
-        triggered = True
-
-    if not triggered:
-        if non_i_mean > 0:
-            if new_baseline is None:
-                new_baseline = non_i_mean
-            else:
-                new_baseline = alpha_baseline * non_i_mean + (1.0 - alpha_baseline) * new_baseline
-        return [], new_baseline, False
-
-    k = int(target_decode_fps * window_duration_sec)
-    if k < 1:
-        k = 1
-
-    cum_idx = cumulative_sample_indices_by_pkt_sizes(pkt_sizes, k)
-    key_idx = [i for i in range(len(window_rows)) if is_key[i]]
-    merged = sorted(set(cum_idx) | set(key_idx))
-    return merged, new_baseline, True
 
 
 class StreamVideoInput(object):

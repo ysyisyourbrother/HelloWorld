@@ -12,7 +12,14 @@ from typing import Optional, List, Iterator, Dict, Tuple
 # 本项目
 from src.config import Config
 from src.video_utils.file_video_reader import open_file_video_reader
-from src.video_utils.ffprobe_utils import get_frame_info_for_stream_ffprobe
+from src.video_utils.ffprobe_utils import (
+    get_frame_info_for_stream_ffprobe,
+    get_frame_info_for_stream_ffprobe_with_media_time,
+)
+from src.video_utils.stream_window_policy import (
+    iter_window_index_groups_by_media_time,
+    select_frames_for_window,
+)
 
 @dataclass
 class FrameData:
@@ -327,7 +334,7 @@ class SymFrameData:
     duration: Optional[float] = None    # 视频总时长(秒)，由 decord/cv2 读取得到，仅视频文件模式有值
     trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
-class SymVideoInput(VideoInputBase):
+class SymVideoInputByGOP(VideoInputBase):
     """
     继承 VideoInputBase，按 p_type 分组返回帧：每次迭代返回两个 I 帧之间的帧（留头去尾）。
     """
@@ -447,7 +454,7 @@ class SymVideoInput(VideoInputBase):
             if group:
                 yield group
 
-class SymVideoInputV2(SymVideoInput):
+class SymVideoInputByGOPGSt(SymVideoInputByGOP):
     """
     与 SymVideoInput 行为一致（按 GOP 迭代、SymFrameData 等），但用 GStreamer 扫描码流得到
     I 帧位置与每帧压缩大小，不依赖 ffprobe/ffmpeg 可执行文件。
@@ -481,7 +488,129 @@ class SymVideoInputV2(SymVideoInput):
             f"总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}"
         )
 
-# class SymVideoInputV3
+
+class SymVideoInputByStreamWindow(SymVideoInputByGOP):
+    """
+    离线 benchmark 用：ffprobe 提供每帧媒体时间与压缩信息，按媒体时间轴分窗，
+    复刻 ``StreamVideoInput`` 的非 I 均包触发 + 累积包长抽样 + 全关键帧并入队策略；
+    仅对选中索引解码像素。需本机 ffprobe；与 benchmark 主流程的串联由调用方后续接入。
+    """
+
+    def __init__(self, config=None):
+        super().__init__(config)
+        self.media_times: List[float] = []
+        self.window_duration_sec = float(
+            getattr(config, "stream_window_duration_sec", 1.0)
+        )
+        self.target_decode_fps = float(
+            getattr(config, "stream_target_decode_fps", 2.0)
+        )
+        self.trigger_ratio = float(getattr(config, "stream_trigger_ratio", 1.35))
+        self.baseline_ewma_alpha = float(
+            getattr(config, "stream_baseline_ewma_alpha", 0.08)
+        )
+        self.warmup_windows = int(getattr(config, "stream_warmup_windows", 3))
+
+    def init_for_file(self, video_file_path: str):
+        """加载像素源并 ffprobe（含每帧媒体时间），长度与解码器对齐截断。"""
+        super(SymVideoInputByGOP, self).init_for_file(video_file_path)
+        (
+            self.i_frame_indices,
+            self.frame_types,
+            self.pkt_sizes,
+            self.media_times,
+        ) = get_frame_info_for_stream_ffprobe_with_media_time(video_file_path)
+        self._normalize_stream_window_metadata()
+        self.logger.info(
+            "ffprobe(流式窗): I=%d, 元数据帧=%d",
+            len(self.i_frame_indices),
+            len(self.media_times),
+        )
+
+    def _normalize_stream_window_metadata(self):
+        n_vid = int(self.total_frames or 0)
+        n_t = len(self.media_times)
+        n_types = len(self.frame_types)
+        n_pkt = len(self.pkt_sizes)
+        n = min(n_vid, n_t, n_types, n_pkt)
+        if n <= 0:
+            self.media_times = []
+            self.logger.warning("流式窗：解码器与 ffprobe 无重叠帧，无法分窗")
+            return
+        if n < max(n_t, n_types, n_pkt):
+            self.logger.warning(
+                "流式窗：解码总帧=%d 与 ffprobe 行数不一致，截断至 n=%d",
+                n_vid,
+                n,
+            )
+        self.media_times = self.media_times[:n]
+        self.frame_types = self.frame_types[:n]
+        self.pkt_sizes = self.pkt_sizes[:n]
+        self.i_frame_indices = [i for i in range(n) if self.frame_types[i] == "I"]
+        fps = float(self.video_fps or 0.0) or 25.0
+        if all(abs(self.media_times[i]) < 1e-12 for i in range(n)):
+            self.media_times = [float(i) / fps for i in range(n)]
+            self.logger.info(
+                "流式窗：无有效媒体时间戳，按 fps=%.3f 以 帧索引/fps 合成时间轴", fps
+            )
+
+    def iter_frames_by_stream_window(self) -> Iterator[List[SymFrameData]]:
+        """
+        按媒体时间窗迭代；每个 yielded 批次为本窗内策略选中的帧（已解码），顺序与选中索引一致。
+        需先 init_for_file；配置项与 ``StreamVideoInput`` 的 stream_* 一致。
+        """
+        if not self.media_times:
+            self.logger.warning("无媒体时间元数据，跳过流式窗迭代")
+            return
+
+        fps = float(self.video_fps or 0.0) or 25.0
+        fallback = max(1, int(round(fps * self.window_duration_sec)))
+        baseline: Optional[float] = None
+        windows_seen = 0
+
+        for window_indices in iter_window_index_groups_by_media_time(
+            self.media_times,
+            self.window_duration_sec,
+            frames_per_window_fallback=fallback,
+        ):
+            windows_seen += 1
+            window_rows = []
+            for gidx in window_indices:
+                window_rows.append(
+                    {
+                        "pkt_size": int(self.pkt_sizes[gidx]),
+                        "is_keyframe": self.frame_types[gidx] == "I",
+                        "frame_idx": gidx,
+                    }
+                )
+            selected_local, baseline, triggered = select_frames_for_window(
+                window_rows,
+                self.target_decode_fps,
+                self.window_duration_sec,
+                baseline,
+                self.trigger_ratio,
+                self.warmup_windows,
+                windows_seen,
+                self.baseline_ewma_alpha,
+            )
+            if not selected_local:
+                continue
+            group: List[SymFrameData] = []
+            for li in selected_local:
+                if li < 0 or li >= len(window_indices):
+                    continue
+                gidx = window_indices[li]
+                fd = self._extract_video_frame_at(gidx)
+                if fd is None:
+                    continue
+                trace = dict(fd.trace_ts or {})
+                trace["stream_window_triggered"] = 1.0 if triggered else 0.0
+                trace["stream_window_index"] = float(windows_seen)
+                fd.trace_ts = trace
+                group.append(fd)
+            if group:
+                yield group
+
 
 def make_sym_video_input(config):
     """
@@ -497,7 +626,7 @@ def make_sym_video_input(config):
     if isinstance(ver, str):
         ver = ver.strip().upper()
     if ver == "V1":
-        return SymVideoInput(config)
+        return SymVideoInputByGOP(config)
     if ver == "V2":
-        return SymVideoInputV2(config)
+        return SymVideoInputByGOPGSt(config)
     raise ValueError("未定义的video_input_version，当前: %r" % getattr(config, "video_input_version", None))

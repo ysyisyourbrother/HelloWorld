@@ -68,12 +68,15 @@ class ThreadSafeFaiss:
 
 class ThreadSafeMap:
     """线程安全的 id-frame 映射类，按视频聚合存储，减少冗余。
-    内部结构: [_videos] 每项为 {"source_path", "total_frames", "video_fps", "duration", "frames": [frame_id, ...]}
+    内部结构: [_videos] 每项为 {"source_path", "total_frames", "video_fps", "duration",
+    "frames": [frame_id, ...], "i_frames": [I 帧索引, ...]}（i_frames 可选，由编排层 register_i_frames 写入）
     FAISS 索引 i 对应: 按顺序遍历 _videos，累加 frames 长度，定位到对应视频和 frame_id。
     """
     def __init__(self, videos: list = None):
         self._videos = videos if videos is not None else []
         self._lock = threading.RLock()
+        # source_path -> I 帧索引列表；在首条向量 append 前由 register_i_frames 暂存
+        self._pending_i_frames = {}
 
     @contextmanager
     def acquire(self):
@@ -89,18 +92,24 @@ class ThreadSafeMap:
         return sum(len(v["frames"]) for v in self._videos)
 
     def _index_to_record(self, index: int) -> dict:
-        """将 FAISS 索引转换为 {source_path, frame_id, total_frames, video_fps, duration}"""
+        """将 FAISS 索引转换为 {source_path, frame_id, total_frames, video_fps, duration, i_frames?}"""
         offset = 0
         for v in self._videos:
             n = len(v["frames"])
             if index < offset + n:
-                return {
+                rec = {
                     "source_path": v["source_path"],
                     "frame_id": v["frames"][index - offset],
                     "total_frames": v["total_frames"],
                     "video_fps": v["video_fps"],
                     "duration": v.get("duration"),
                 }
+                ixs = v.get("i_frames")
+                if ixs:
+                    rec["i_frames"] = ixs
+                else:
+                    rec["i_frames"] = []
+                return rec
             offset += n
         raise IndexError("databasemap index out of range")
 
@@ -141,12 +150,21 @@ class ThreadSafeMap:
         return True
 
     def _ensure_duration(self, v: dict) -> dict:
-        """确保视频对象包含 duration，若缺失则根据 total_frames/video_fps 计算"""
+        """确保视频对象包含 duration，若缺失则根据 total_frames/video_fps 计算；规范化 i_frames。"""
+        v = dict(v)
         if "duration" not in v or v["duration"] is None:
             tf = v.get("total_frames")
             fps = v.get("video_fps")
             v = dict(v)
             v["duration"] = (tf / fps if tf is not None and fps and fps > 0 else None)
+        raw_ix = v.get("i_frames")
+        if raw_ix is None:
+            v["i_frames"] = []
+        else:
+            try:
+                v["i_frames"] = sorted(set(int(x) for x in raw_ix))
+            except (TypeError, ValueError):
+                v["i_frames"] = []
         return v
 
     def _convert_legacy_to_videos(self, records: list) -> list:
@@ -157,7 +175,7 @@ class ThreadSafeMap:
             key = (r["source_path"], r["total_frames"], r["video_fps"])
             if key not in by_path:
                 entry = {"source_path": r["source_path"], "total_frames": r["total_frames"],
-                         "video_fps": r["video_fps"], "frames": []}
+                         "video_fps": r["video_fps"], "frames": [], "i_frames": []}
                 # 旧格式可能带 duration
                 if "duration" in r:
                     entry["duration"] = r["duration"]
@@ -174,17 +192,42 @@ class ThreadSafeMap:
             fid = item["frame_id"]
             duration = item.get("duration")
             if self._videos and self._videos[-1]["source_path"] == sp:
+                self._videos[-1].setdefault("i_frames", [])
                 self._videos[-1]["frames"].append(fid)
                 if duration is not None and "duration" not in self._videos[-1]:
                     self._videos[-1]["duration"] = duration
             else:
+                pending_ix = self._pending_i_frames.pop(sp, None)
+                init_ix = list(pending_ix) if pending_ix is not None else []
                 self._videos.append({
                     "source_path": sp,
                     "total_frames": tf,
                     "video_fps": fps,
                     "duration": duration,
                     "frames": [fid],
+                    "i_frames": init_ix,
                 })
+
+    def register_i_frames(self, source_path, i_frame_indices):
+        """
+        由编排层在开始处理某个 source_path 时调用，写入该视频的 I 帧索引列表（与 SymVideoInputByGOP 一致）。
+
+        若该路径已在 _videos 中存在，则就地更新 i_frames；否则暂存，待首条 append 同路径时并入。
+        """
+        with self.acquire():
+            if not source_path:
+                return
+            try:
+                indices = sorted(set(int(x) for x in (i_frame_indices or [])))
+            except (TypeError, ValueError):
+                indices = []
+            updated = False
+            for v in self._videos:
+                if v.get("source_path") == source_path:
+                    v["i_frames"] = list(indices)
+                    updated = True
+            if not updated:
+                self._pending_i_frames[source_path] = list(indices)
 
     def get(self, index: int):
         """获取指定索引的记录"""
@@ -197,6 +240,7 @@ class ThreadSafeMap:
         """清空 databasemap"""
         with self.acquire():
             self._videos.clear()
+            self._pending_i_frames.clear()
 
     def __len__(self):
         """总向量数"""
@@ -204,7 +248,7 @@ class ThreadSafeMap:
             return self._total_frames_count()
 
     def __getitem__(self, index: int) -> dict:
-        """按 FAISS 索引获取 {source_path, frame_id, total_frames, video_fps, duration}"""
+        """按 FAISS 索引获取 {source_path, frame_id, total_frames, video_fps, duration, i_frames}"""
         with self.acquire():
             return self._index_to_record(index)
 
@@ -245,6 +289,9 @@ class MemoryManagerBase:
         self.databasemap_file_path = config.memory_databasemap_file_path  # databasemap文件路径
         self.databasemap = None  # 线程安全的databasemap
         self.memory_topk = config.memory_topk  # topk参数
+
+        self.memory_retrieve_item_type = config.memory_retrieve_item_type   
+       
         self.memory_save_retrieved_frames = config.memory_save_retrieved_frames
         self.memory_save_injected_frames = config.memory_save_injected_frames
         self.memory_retrieve_save_dir = os.path.join("logs", "memory", "retrieve")
@@ -269,6 +316,20 @@ class MemoryManagerBase:
     def register_retrieve_hook(self, fn: Callable[[np.ndarray, List[float]], None]):
         """注册检索钩子，在每次 retrieve 时调用。fn(query_vector, all_scores)"""
         self._retrieve_hooks.append(fn)
+
+    def register_i_frames(self, source_path, i_frame_indices):
+        """
+        编排层在开始处理某个本地视频 source_path 时调用，将 I 帧索引写入 databasemap
+        （与 SymVideoInputByGOP.i_frame_indices 或 ffprobe 扫描结果一致）。
+
+        须保证与后续入库向量的 source_path 字符串一致（含绝对/相对路径）。
+        """
+        if self.databasemap is None:
+            log = getattr(self, "logger", None)
+            if log:
+                log.warning("register_i_frames: databasemap 未初始化，请先 init_sync 或 start")
+            return
+        self.databasemap.register_i_frames(source_path, i_frame_indices)
 
     def _set_logger(self):
         """设置日志记录器"""
@@ -593,7 +654,8 @@ class MemoryManagerBase:
         """根据查询向量检索匹配的帧数据
 
         Returns:
-            tuple: (分数列表, 元数据列表)，元数据每项为 {frame_id, video_fps, source_path}
+            tuple: (分数列表, 元数据列表)，元数据每项含 frame_id, video_fps, source_path,
+            total_frames, i_frames（I 帧索引列表，可能为空表示旧库未登记）
         """
         # 若有注册的钩子，计算全量相似度并调用
         if self._retrieve_hooks:
@@ -609,15 +671,18 @@ class MemoryManagerBase:
         if self.memory_save_retrieved_frames:
             self._save_retrieved_frames(vector_ids, scores)
 
-        # 构建元数据（frame_id, video_fps）
+        # 构建元数据（frame_id, video_fps, total_frames, i_frames 供 GOP 导出等）
         metadata_list = []
         for vid in vector_ids:
             rec = self.databasemap[vid]
-            metadata_list.append({
+            meta = {
                 "frame_id": rec["frame_id"],
                 "video_fps": rec.get("video_fps") or 1.0,
                 "source_path": rec.get("source_path"),
-            })
+                "total_frames": rec.get("total_frames"),
+                "i_frames": rec.get("i_frames") or [],
+            }
+            metadata_list.append(meta)
 
         # 边端实时优先：查询阶段只返回元数据，不读取像素帧
         self.logger.debug(f"查询阶段返回元数据 {len(metadata_list)} 条（不含像素帧）")
@@ -1223,6 +1288,8 @@ class MemoryManagerOnlineV3(MemoryManagerOnlineV2):
                         "frame_id": -1,
                         "video_fps": 1.0,
                         "source_path": None,
+                        "total_frames": None,
+                        "i_frames": [],
                     }
                 )
                 continue
@@ -1232,6 +1299,8 @@ class MemoryManagerOnlineV3(MemoryManagerOnlineV2):
                     "frame_id": rec["frame_id"],
                     "video_fps": rec.get("video_fps") or 1.0,
                     "source_path": rec.get("source_path"),
+                    "total_frames": rec.get("total_frames"),
+                    "i_frames": rec.get("i_frames") or [],
                 }
             )
 
