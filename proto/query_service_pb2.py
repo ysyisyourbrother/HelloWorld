@@ -24,17 +24,23 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19proto/query_service.proto\x12\rquery_service\"_\n\x0cQueryRequest\x12\x12\n\nquery_text\x18\x01 \x01(\t\x12\x16\n\x0ememory_results\x18\x02 \x01(\x0c\x12\x10\n\x08query_id\x18\x03 \x01(\x05\x12\x11\n\tdialog_id\x18\x04 \x01(\x05\"S\n\rQueryResponse\x12\x10\n\x08query_id\x18\x01 \x01(\x05\x12\x0e\n\x06result\x18\x02 \x01(\t\x12\r\n\x05\x65rror\x18\x03 \x01(\t\x12\x11\n\ttimestamp\x18\x04 \x01(\x01\x32\xf0\x01\n\x0cQueryService\x12\x42\n\x05Query\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse\x12J\n\x0bQueryStream\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse0\x01\x12P\n\x0fQueryBidiStream\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponse(\x01\x30\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19proto/query_service.proto\x12\rquery_service\"\xac\x01\n\x0fMemoryClipInput\x12\x14\n\x0c\x63lip_payload\x18\x01 \x01(\x0c\x12\x11\n\tclip_mime\x18\x02 \x01(\t\x12?\n\tclip_tags\x18\x03 \x03(\x0b\x32,.query_service.MemoryClipInput.ClipTagsEntry\x1a/\n\rClipTagsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xda\x01\n\x0cQueryRequest\x12\x12\n\nquery_text\x18\x01 \x01(\t\x12\x16\n\x0ememory_results\x18\x02 \x01(\x0c\x12\x10\n\x08query_id\x18\x03 \x01(\x05\x12\x11\n\tdialog_id\x18\x04 \x01(\x05\x12:\n\x12memory_clip_inputs\x18\x05 \x03(\x0b\x32\x1e.query_service.MemoryClipInput\x12\x18\n\x10memory_clip_uris\x18\x06 \x03(\t\x12#\n\x1bmax_decoded_frames_per_clip\x18\x07 \x01(\x05\"S\n\rQueryResponse\x12\x10\n\x08query_id\x18\x01 \x01(\x05\x12\x0e\n\x06result\x18\x02 \x01(\t\x12\r\n\x05\x65rror\x18\x03 \x01(\t\x12\x11\n\ttimestamp\x18\x04 \x01(\x01\x32R\n\x0cQueryService\x12\x42\n\x05Query\x12\x1b.query_service.QueryRequest\x1a\x1c.query_service.QueryResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'proto.query_service_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_QUERYREQUEST']._serialized_start=44
-  _globals['_QUERYREQUEST']._serialized_end=139
-  _globals['_QUERYRESPONSE']._serialized_start=141
-  _globals['_QUERYRESPONSE']._serialized_end=224
-  _globals['_QUERYSERVICE']._serialized_start=227
-  _globals['_QUERYSERVICE']._serialized_end=467
+  _globals['_MEMORYCLIPINPUT_CLIPTAGSENTRY']._loaded_options = None
+  _globals['_MEMORYCLIPINPUT_CLIPTAGSENTRY']._serialized_options = b'8\001'
+  _globals['_MEMORYCLIPINPUT']._serialized_start=45
+  _globals['_MEMORYCLIPINPUT']._serialized_end=217
+  _globals['_MEMORYCLIPINPUT_CLIPTAGSENTRY']._serialized_start=170
+  _globals['_MEMORYCLIPINPUT_CLIPTAGSENTRY']._serialized_end=217
+  _globals['_QUERYREQUEST']._serialized_start=220
+  _globals['_QUERYREQUEST']._serialized_end=438
+  _globals['_QUERYRESPONSE']._serialized_start=440
+  _globals['_QUERYRESPONSE']._serialized_end=523
+  _globals['_QUERYSERVICE']._serialized_start=525
+  _globals['_QUERYSERVICE']._serialized_end=607
 # @@protoc_insertion_point(module_scope)

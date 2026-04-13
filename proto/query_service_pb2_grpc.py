@@ -40,16 +40,6 @@ class QueryServiceStub(object):
                 request_serializer=proto_dot_query__service__pb2.QueryRequest.SerializeToString,
                 response_deserializer=proto_dot_query__service__pb2.QueryResponse.FromString,
                 _registered_method=True)
-        self.QueryStream = channel.unary_stream(
-                '/query_service.QueryService/QueryStream',
-                request_serializer=proto_dot_query__service__pb2.QueryRequest.SerializeToString,
-                response_deserializer=proto_dot_query__service__pb2.QueryResponse.FromString,
-                _registered_method=True)
-        self.QueryBidiStream = channel.stream_stream(
-                '/query_service.QueryService/QueryBidiStream',
-                request_serializer=proto_dot_query__service__pb2.QueryRequest.SerializeToString,
-                response_deserializer=proto_dot_query__service__pb2.QueryResponse.FromString,
-                _registered_method=True)
 
 
 class QueryServiceServicer(object):
@@ -63,35 +53,11 @@ class QueryServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def QueryStream(self, request, context):
-        """服务器端流式RPC - 多轮对话（预留接口）
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def QueryBidiStream(self, request_iterator, context):
-        """双向流式RPC - 多轮对话（预留接口）
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
 
 def add_QueryServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Query': grpc.unary_unary_rpc_method_handler(
                     servicer.Query,
-                    request_deserializer=proto_dot_query__service__pb2.QueryRequest.FromString,
-                    response_serializer=proto_dot_query__service__pb2.QueryResponse.SerializeToString,
-            ),
-            'QueryStream': grpc.unary_stream_rpc_method_handler(
-                    servicer.QueryStream,
-                    request_deserializer=proto_dot_query__service__pb2.QueryRequest.FromString,
-                    response_serializer=proto_dot_query__service__pb2.QueryResponse.SerializeToString,
-            ),
-            'QueryBidiStream': grpc.stream_stream_rpc_method_handler(
-                    servicer.QueryBidiStream,
                     request_deserializer=proto_dot_query__service__pb2.QueryRequest.FromString,
                     response_serializer=proto_dot_query__service__pb2.QueryResponse.SerializeToString,
             ),
@@ -122,60 +88,6 @@ class QueryService(object):
             request,
             target,
             '/query_service.QueryService/Query',
-            proto_dot_query__service__pb2.QueryRequest.SerializeToString,
-            proto_dot_query__service__pb2.QueryResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def QueryStream(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_stream(
-            request,
-            target,
-            '/query_service.QueryService/QueryStream',
-            proto_dot_query__service__pb2.QueryRequest.SerializeToString,
-            proto_dot_query__service__pb2.QueryResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def QueryBidiStream(request_iterator,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.stream_stream(
-            request_iterator,
-            target,
-            '/query_service.QueryService/QueryBidiStream',
             proto_dot_query__service__pb2.QueryRequest.SerializeToString,
             proto_dot_query__service__pb2.QueryResponse.FromString,
             options,

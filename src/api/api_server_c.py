@@ -1,6 +1,4 @@
 import pickle
-import time
-import queue
 import logging
 from logging.handlers import RotatingFileHandler
 import glob
@@ -12,7 +10,7 @@ import multiprocessing as mp
 
 # 本项目
 from src.config import Config
-from src.llm.reasoner import QueryRequest, QueryResponse
+from src.llm.reasoner import QueryRequest
 
 # 导入生成的 gRPC 代码
 import sys
@@ -75,48 +73,6 @@ class QueryServiceServicer(query_service_pb2_grpc.QueryServiceServicer):
         self.logger.info(f"查询 {query_id} 处理完成")
         return grpc_response
     
-    def QueryStream(self, request: query_service_pb2.QueryRequest, context):
-        """
-        服务器端流式RPC - 多轮对话（预留接口）
-        
-        Args:
-            request: 查询请求
-            context: gRPC 上下文
-            
-        Yields:
-            查询响应流
-        """
-        # TODO: 实现服务器端流式RPC
-        self.logger.warning("QueryStream 方法尚未实现")
-        yield query_service_pb2.QueryResponse(
-            query_id=request.query_id,
-            result="",
-            error="QueryStream 方法尚未实现",
-            timestamp=time.time()
-        )
-    
-    def QueryBidiStream(self, request_iterator, context):
-        """
-        双向流式RPC - 多轮对话（预留接口）
-        
-        Args:
-            request_iterator: 请求迭代器
-            context: gRPC 上下文
-            
-        Yields:
-            查询响应流
-        """
-        # TODO: 实现双向流式RPC
-        self.logger.warning("QueryBidiStream 方法尚未实现")
-        for request in request_iterator:
-            yield query_service_pb2.QueryResponse(
-                query_id=request.query_id,
-                result="",
-                error="QueryBidiStream 方法尚未实现",
-                timestamp=time.time()
-            )
-
-
 class APIServerC:
     """云端 gRPC API 服务器"""
     

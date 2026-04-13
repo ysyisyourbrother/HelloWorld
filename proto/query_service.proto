@@ -2,30 +2,67 @@ syntax = "proto3";
 
 package query_service;
 
+// ===========================================================================
+// QueryRequest 记忆载荷：字段命名与兼容策略（服务端实现须与此一致）
+//
+// 【旧路径 · 不变】
+//   - 仅 `memory_results`（字段 2）非空：bytes 为 pickle 序列化的多帧数组
+//     （与现网 api_server_e / api_server_c 行为一致），新字段全部留空即可。
+//
+// 【新路径 · 压缩视频】
+//   - `memory_clip_inputs`（字段 5）：边端上传若干段完整容器字节（约定为 MP4），
+//     云端解码为帧张量后再送入大模型，减轻相对 RGB 裸上传的带宽。
+//   - `memory_clip_uris`（字段 6）：可选；若边端与云端共享对象存储 / 内网 URL，
+//     可只传 URI，由云端拉取字节再解码；与 `memory_clip_inputs` 二选一或只填其一，
+//     合并语义为「多段 clip」列表（实现时可规定 URI 与 bytes 不得混用，或允许交错）。
+//
+// 【互斥】
+//   - `memory_results` 与（非空的 `memory_clip_inputs` 或 非空的 `memory_clip_uris`）
+//     不得同时携带有效载荷；否则服务端应返回明确 error，避免「先 pickle 还是先 mp4」歧义。
+//
+// 【全空】
+//   - 所有记忆字段为空：纯文本 query（若 Reasoner 支持无视觉条件）。
+//
+// 【采样】
+//   - `max_decoded_frames_per_clip`：每个 clip 解码后参与推理的帧数上限（如均匀采样）；
+//     0 表示服务端默认策略。
+// ===========================================================================
+
+// 单段检索片段（例如单个 GOP 导出的 MP4），用于上行传压缩视频而非 pickle 帧。
+message MemoryClipInput {
+  // 完整容器文件字节；默认按 MP4 解码。
+  bytes clip_payload = 1;
+  // 可选 MIME，如 "video/mp4"；空则服务端按 MP4 尝试。
+  string clip_mime = 2;
+  // 可选键值：如 gop_start、gop_end、vector_id、score，便于日志与对齐 benchmark JSON。
+  map<string, string> clip_tags = 3;
+}
+
 // 查询请求消息
 message QueryRequest {
-    string query_text = 1;           // 查询文本
-    bytes memory_results = 2;        // 记忆检索结果（序列化的帧数据）
-    int32 query_id = 3;              // 查询ID
-    int32 dialog_id = 4;             // 对话ID（多轮对话时用于云端记忆）
+  string query_text = 1;           // 查询文本
+  bytes memory_results = 2;        // 记忆检索结果（pickle 的帧数据列表；与现网一致）
+  int32 query_id = 3;              // 查询ID
+  int32 dialog_id = 4;             // 对话ID（多轮对话时用于云端记忆）
+
+  // 新增：多段 clip 字节（与 memory_results 互斥）
+  repeated MemoryClipInput memory_clip_inputs = 5;
+  // 新增：多段 clip 的可拉取地址（与 pickle 互斥；与 clip_payload 二选一或按实现约定合并）
+  repeated string memory_clip_uris = 6;
+  // 新增：每段 clip 解码后参与推理的帧数上限，0 = 服务端默认
+  int32 max_decoded_frames_per_clip = 7;
 }
 
 // 查询响应消息
 message QueryResponse {
-    int32 query_id = 1;              // 查询ID
-    string result = 2;               // 完整结果
-    string error = 3;                // 错误信息
-    double timestamp = 4;            // 时间戳
+  int32 query_id = 1;              // 查询ID
+  string result = 2;               // 完整结果
+  string error = 3;                // 错误信息
+  double timestamp = 4;            // 时间戳
 }
 
 // 查询服务定义
 service QueryService {
-    // 一元RPC - 单轮对话
-    rpc Query(QueryRequest) returns (QueryResponse);
-    
-    // 服务器端流式RPC - 多轮对话（预留接口）
-    rpc QueryStream(QueryRequest) returns (stream QueryResponse);
-    
-    // 双向流式RPC - 多轮对话（预留接口）
-    rpc QueryBidiStream(stream QueryRequest) returns (stream QueryResponse);
+  // 一元RPC - 单轮对话
+  rpc Query(QueryRequest) returns (QueryResponse);
 }
