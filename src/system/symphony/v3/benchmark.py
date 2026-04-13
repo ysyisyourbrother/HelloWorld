@@ -4,13 +4,13 @@
 
 在 v1（SymVideoInput + SymFrameVectorizer 按 GOP 注入）基础上：
 - 使用配置 ``memory_manager.retrieve_item_type``：``frame``（默认）或 ``clip``；
-- ``clip`` 时在每次检索后对 topk 元数据调用 ``ffmpeg_utils`` 导出去重 GOP 临时 mp4。
+- ``clip`` 时由 ``MemoryManager`` 将 GOP mp4 写入 ``logs/memory/retrieve/clips/dialog_{id}/``，
+  新 ``dialog_id`` 会删除上一对话对应子目录；同对话内每次检索会清空该对话子目录再写入。
 """
 
 import logging
 import os
 import sys
-import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
@@ -22,13 +22,12 @@ sys.path.insert(0, _project_root)
 
 from src.benchmark.utils import build_rag_prompt
 from src.system.symphony.v1.benchmark import SymphonySystemBench
-from src.video_utils import ffmpeg_utils
 
 
 class SymphonySystemBenchV3(SymphonySystemBench):
     """
     继承 v1 ``SymphonySystemBench``（GOP 选帧注入 + ``register_i_frames``），
-    查询阶段根据 ``config.memory_retrieve_item_type`` 支持 clip 导出。
+    检索 clip 由 ``MemoryManager.retrieve_sync(..., dialog_id=...)`` 统一导出。
     """
 
     def _setup_logger(self):
@@ -47,11 +46,14 @@ class SymphonySystemBenchV3(SymphonySystemBench):
         sample_id: str = "",
         sample: Optional[Dict[str, Any]] = None,
         video_time: Optional[float] = None,
+        dialog_id: int = 0,
     ) -> Dict[str, Any]:
-        """编码查询向量、检索；``clip`` 模式下导出 GOP 临时 mp4 路径列表。"""
+        """编码查询向量、检索；clip 路径由 MemoryManager 写入 logs/memory/retrieve/clips/。"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
-        scores, frames_metadata = self.memory_manager.retrieve_sync(query_vector)
+        scores, frames_metadata, clip_info = self.memory_manager.retrieve_sync(
+            query_vector, dialog_id=dialog_id
+        )
         retrieve_time = time.time() - t0
 
         result = {
@@ -70,23 +72,16 @@ class SymphonySystemBenchV3(SymphonySystemBench):
         if rit not in ("frame", "clip"):
             rit = "frame"
         result["retrieve_item_type"] = rit
+        result["retrieve_dialog_id"] = int(dialog_id)
 
-        result["retrieve_clip_paths"] = []
-        result["retrieve_clip_temp_dir"] = None
-        if rit == "clip" and frames_metadata:
-            tmpdir = tempfile.mkdtemp(prefix="symphony_v3_clip_")
-            result["retrieve_clip_temp_dir"] = tmpdir
-            try:
-                pairs = ffmpeg_utils.export_unique_gop_mp4s_from_memory_records(
-                    frames_metadata, output_dir=tmpdir, prefix="hit"
-                )
-                result["retrieve_clip_paths"] = [
-                    {"gop_start": int(rng[0]), "gop_end": int(rng[1]), "path": p}
-                    for rng, p in pairs
-                ]
-            except Exception as e:
-                self.logger.warning("检索 clip 导出失败: %s", e)
-                result["retrieve_clip_error"] = str(e)
+        if clip_info:
+            result["retrieve_clip_paths"] = clip_info.get("paths") or []
+            result["retrieve_clip_dir"] = clip_info.get("dir")
+            if clip_info.get("error"):
+                result["retrieve_clip_error"] = clip_info["error"]
+        else:
+            result["retrieve_clip_paths"] = []
+            result["retrieve_clip_dir"] = None
 
         query_text = question
         select_frame_num = len(frames_metadata) if frames_metadata else 0
@@ -104,9 +99,9 @@ class SymphonySystemBenchV3(SymphonySystemBench):
         result["rag_question"] = query_text
         result["select_frame_num"] = select_frame_num
 
-        result["cloud_result"] = None
-        result["cloud_error"] = "实时模式已切换为仅返回检索元数据，不再返回检索帧"
-        result["total_time_sec"] = retrieve_time
+        self._fill_reasoner_result(
+            t0, retrieve_time, query_text, frames_metadata, str(sample_id), result
+        )
 
         return result
 
@@ -125,8 +120,9 @@ class SymphonySystemBenchV3(SymphonySystemBench):
             r = query_results[i]
             for key in (
                 "retrieve_item_type",
+                "retrieve_dialog_id",
                 "retrieve_clip_paths",
-                "retrieve_clip_temp_dir",
+                "retrieve_clip_dir",
                 "retrieve_clip_error",
             ):
                 if key in r:

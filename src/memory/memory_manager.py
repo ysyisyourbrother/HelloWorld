@@ -7,6 +7,7 @@ import queue
 import json
 import glob
 import os
+import shutil
 import faiss
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Sequence, Callable, Dict, Any
@@ -34,6 +35,9 @@ class MemoryResult:
     trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
     # 与 metadata_list 等长；BGR uint8 ndarray，供边端跳过按路径再解码（MemoryManagerOnlineV3）
     retrieval_frames: Optional[List[Any]] = None
+    # retrieve_item_type=clip 时：GOP mp4 路径列表与输出目录（见 logs/memory/retrieve/clips/）
+    retrieve_clip_paths: Optional[List[Dict[str, Any]]] = None
+    retrieve_clip_dir: Optional[str] = None
 
 class ThreadSafeFaiss:
     """线程安全的Faiss索引类"""
@@ -312,6 +316,9 @@ class MemoryManagerBase:
         # 检索钩子：每次 retrieve 时调用，传入 (query_vector, all_scores)
         # all_scores: List[float]，长度为 vector_count，all_scores[i] 为向量 i 与 query 的距离
         self._retrieve_hooks: List[Callable[[np.ndarray, List[float]], None]] = []
+        # clip 导出：按 dialog_id 分目录，新对话时删除上一对话子目录
+        self._last_retrieve_clip_dialog_id = None  # type: Optional[int]
+        self._retrieve_clip_lock = threading.RLock()
 
     def register_retrieve_hook(self, fn: Callable[[np.ndarray, List[float]], None]):
         """注册检索钩子，在每次 retrieve 时调用。fn(query_vector, all_scores)"""
@@ -648,14 +655,62 @@ class MemoryManagerBase:
             except Exception as e:
                 self.logger.warning(f"保存检索帧失败，vector_id={vector_id}, err={e}")
 
+    def _prepare_retrieve_clip_output_dir(self, dialog_id: int) -> str:
+        """
+        在 logs/memory/retrieve/clips/dialog_{dialog_id}/ 下创建空目录并写入 GOP mp4。
+        若 dialog_id 与上次不同，则删除上一对话对应子目录；同一对话内每次检索会先清空本子目录再写入。
+        """
+        base = os.path.abspath(self.memory_retrieve_save_dir)
+        os.makedirs(base, exist_ok=True)
+        clips_root = os.path.join(base, "clips")
+        d = int(dialog_id)
+        with self._retrieve_clip_lock:
+            last = self._last_retrieve_clip_dialog_id
+            if last is not None and int(last) != d:
+                prev = os.path.join(clips_root, "dialog_%d" % int(last))
+                if os.path.isdir(prev):
+                    shutil.rmtree(prev, ignore_errors=True)
+            self._last_retrieve_clip_dialog_id = d
+            out = os.path.join(clips_root, "dialog_%d" % d)
+            if os.path.isdir(out):
+                shutil.rmtree(out, ignore_errors=True)
+            os.makedirs(out, exist_ok=True)
+        return out
+
+    def _export_retrieve_clips_if_needed(
+        self, metadata_list: List[dict], dialog_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        clip 模式下将 topk 元数据导出为 GOP mp4；返回 {"paths": [...], "dir": str} 或 None。
+        """
+        if self.memory_retrieve_item_type != "clip" or not metadata_list:
+            return None
+        from src.video_utils import ffmpeg_utils
+
+        out_dir = self._prepare_retrieve_clip_output_dir(dialog_id)
+        try:
+            pairs = ffmpeg_utils.export_unique_gop_mp4s_from_memory_records(
+                metadata_list, output_dir=out_dir, prefix="gop"
+            )
+            paths = [
+                {"gop_start": int(rng[0]), "gop_end": int(rng[1]), "path": p}
+                for rng, p in pairs
+            ]
+            return {"paths": paths, "dir": out_dir}
+        except Exception as e:
+            log = getattr(self, "logger", None)
+            if log:
+                log.warning("检索 clip 导出失败: %s", e)
+            return {"paths": [], "dir": out_dir, "error": str(e)}
+
     def _retrieve(
-        self, query_vector: np.ndarray, top_k: int = 5
-    ) -> Tuple[List[float], List[dict]]:
+        self, query_vector: np.ndarray, top_k: int = 5, dialog_id: int = 0
+    ) -> Tuple[List[float], List[dict], Optional[Dict[str, Any]]]:
         """根据查询向量检索匹配的帧数据
 
         Returns:
-            tuple: (分数列表, 元数据列表)，元数据每项含 frame_id, video_fps, source_path,
-            total_frames, i_frames（I 帧索引列表，可能为空表示旧库未登记）
+            tuple: (分数列表, 元数据列表, clip_info)。
+            clip_info 为 None（非 clip）或 {"paths": [...], "dir": str}；paths 每项含 gop_start、gop_end、path。
         """
         # 若有注册的钩子，计算全量相似度并调用
         if self._retrieve_hooks:
@@ -684,9 +739,11 @@ class MemoryManagerBase:
             }
             metadata_list.append(meta)
 
+        clip_info = self._export_retrieve_clips_if_needed(metadata_list, dialog_id)
+
         # 边端实时优先：查询阶段只返回元数据，不读取像素帧
         self.logger.debug(f"查询阶段返回元数据 {len(metadata_list)} 条（不含像素帧）")
-        return scores, metadata_list
+        return scores, metadata_list, clip_info
     
     def init_sync(self):
         """同步初始化数据库（在主进程调用，供 benchmark 使用）"""
@@ -699,11 +756,15 @@ class MemoryManagerBase:
             self._add_vector(vd)
 
     def retrieve_sync(
-        self, query_vector: np.ndarray, top_k: int = None
-    ) -> Tuple[List[float], List[dict]]:
-        """同步检索，供 benchmark 使用。返回 (分数列表, 元数据列表)。"""
+        self, query_vector: np.ndarray, top_k: int = None, dialog_id: int = 0
+    ) -> Tuple[List[float], List[dict], Optional[Dict[str, Any]]]:
+        """同步检索，供 benchmark 使用。
+
+        Returns:
+            (分数列表, 元数据列表, clip_info)；clip_info 见 ``_retrieve``。
+        """
         k = top_k if top_k is not None else self.memory_topk
-        return self._retrieve(query_vector, k)
+        return self._retrieve(query_vector, k, dialog_id=dialog_id)
 
     def query_text_sync(
         self,
@@ -739,12 +800,19 @@ class MemoryManagerBase:
         merged_trace.update(qvd.trace_ts or {})
         merged_trace["memory_query_dequeue_at"] = time.time()
         retrieve_start = time.time()
-        scores, metadata_list = self._retrieve(qvd.vector, self.memory_topk)
+        scores, metadata_list, clip_info = self._retrieve(
+            qvd.vector, self.memory_topk, dialog_id=qvd.dialog_id
+        )
         merged_trace["memory_query_retrieved_at"] = time.time()
         self.logger.info(
             f"[Latency][Query] memory_retrieve query_id={qvd.query_id} "
             f"{(merged_trace['memory_query_retrieved_at'] - retrieve_start) * 1000:.2f} ms"
         )
+        clip_paths = None
+        clip_dir = None
+        if clip_info:
+            clip_paths = clip_info.get("paths")
+            clip_dir = clip_info.get("dir")
         return MemoryResult(
             metadata_list=metadata_list,
             timestamp=qvd.timestamp,
@@ -752,6 +820,8 @@ class MemoryManagerBase:
             dialog_id=qvd.dialog_id,
             scores=scores,
             trace_ts=merged_trace,
+            retrieve_clip_paths=clip_paths,
+            retrieve_clip_dir=clip_dir,
         )
 
     def save_database_sync(self):
@@ -1304,6 +1374,13 @@ class MemoryManagerOnlineV3(MemoryManagerOnlineV2):
                 }
             )
 
+        clip_info = self._export_retrieve_clips_if_needed(metadata_list, dialog_id)
+        clip_paths = None
+        clip_dir = None
+        if clip_info:
+            clip_paths = clip_info.get("paths")
+            clip_dir = clip_info.get("dir")
+
         mono = time.time()
         retrieval_frames = self._build_retrieval_frames(vector_ids, mono)
         merged_trace["memory_query_retrieved_at"] = time.time()
@@ -1320,6 +1397,8 @@ class MemoryManagerOnlineV3(MemoryManagerOnlineV2):
             scores=scores,
             trace_ts=merged_trace,
             retrieval_frames=retrieval_frames,
+            retrieve_clip_paths=clip_paths,
+            retrieve_clip_dir=clip_dir,
         )
 
     def stop(self):

@@ -299,7 +299,9 @@ class VenusSystemMoti:
         """单次查询：编码 -> 检索 -> 推理"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
-        scores, frames_metadata = self.memory_manager.retrieve_sync(query_vector)
+        scores, frames_metadata, _clip_info = self.memory_manager.retrieve_sync(
+            query_vector
+        )
         retrieve_time = time.time() - t0
 
         result = {

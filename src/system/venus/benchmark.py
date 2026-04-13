@@ -31,6 +31,7 @@ from src.memory.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query_vectorizer import QueryVectorizer
 from src.llm.reasoner import ReasonerBase, QueryRequest
+from src.video_utils.about_frame import extract_frame_by_index
 
 
 class VenusSystemBench:
@@ -273,17 +274,84 @@ class VenusSystemBench:
                 pass
         return None
 
+    def _decode_retrieval_frames_bgr(
+        self, frames_metadata: Optional[List[Dict[str, Any]]]
+    ) -> List[Any]:
+        """按检索元数据从 source_path + frame_id 解码 BGR 帧（与边端 gRPC 打包逻辑一致）。"""
+        out = []
+        for m in frames_metadata or []:
+            source_path = m.get("source_path")
+            frame_id = m.get("frame_id")
+            if not source_path or frame_id is None:
+                continue
+            if not os.path.isfile(source_path):
+                continue
+            try:
+                frame = extract_frame_by_index(
+                    video_path=source_path,
+                    frame_index=int(frame_id),
+                    backend="cv2",
+                )
+            except Exception as e:
+                self.logger.debug("benchmark 解码检索帧失败 path=%s idx=%s: %s", source_path, frame_id, e)
+                continue
+            if frame is not None:
+                out.append(frame)
+        return out
+
+    def _fill_reasoner_result(
+        self,
+        t0: float,
+        retrieve_time: float,
+        query_text: str,
+        frames_metadata: Optional[List[Dict[str, Any]]],
+        sample_id: str,
+        result: Dict[str, Any],
+    ) -> None:
+        """根据检索元数据解码帧后调用 Reasoner，就地写入 cloud_result / cloud_error / total_time_sec。"""
+        frame_list = self._decode_retrieval_frames_bgr(frames_metadata)
+        if self.use_cloud and frame_list:
+            frames_rgb = [
+                cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+                if f.ndim == 3
+                else cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
+                for f in frame_list
+            ]
+            qid = (
+                (hash(sample_id) % (2**31))
+                if sample_id
+                else int(time.time())
+            )
+            query_request = QueryRequest(
+                query_text=query_text,
+                memory_results=frames_rgb,
+                query_id=qid,
+                dialog_id=0,
+            )
+            reasoner = self._get_reasoner()
+            response = reasoner.infer_sync(query_request)
+            result["cloud_result"] = response.result
+            result["cloud_error"] = response.error
+            result["total_time_sec"] = time.time() - t0
+        else:
+            result["cloud_result"] = None
+            result["cloud_error"] = "use_cloud=False 或 无检索帧"
+            result["total_time_sec"] = retrieve_time
+
     def _run_query_single(
         self,
         question: str,
         sample_id: str = "",
         sample: Optional[Dict[str, Any]] = None,
         video_time: Optional[float] = None,
+        dialog_id: int = 0,
     ) -> Dict[str, Any]:
         """单次查询：编码 -> 检索 -> 推理（直接变量传递，无 gRPC）。若提供 sample 和 video_time，则用 build_rag_prompt 构造 RAG 提示传给推理。"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
-        scores, frames_metadata = self.memory_manager.retrieve_sync(query_vector)
+        scores, frames_metadata, _clip_info = self.memory_manager.retrieve_sync(
+            query_vector, dialog_id=dialog_id
+        )
         retrieve_time = time.time() - t0
 
         result = {"question": question, "retrieve_time_sec": retrieve_time, "scores": scores}
@@ -305,9 +373,9 @@ class VenusSystemBench:
         result["rag_question"] = query_text
         result["select_frame_num"] = select_frame_num
 
-        result["cloud_result"] = None
-        result["cloud_error"] = "实时模式已切换为仅返回检索元数据，不再返回检索帧"
-        result["total_time_sec"] = retrieve_time
+        self._fill_reasoner_result(
+            t0, retrieve_time, query_text, frames_metadata, sample_id, result
+        )
 
         return result
 
