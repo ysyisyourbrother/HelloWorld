@@ -30,7 +30,7 @@ def parse_args():
         "-o",
         "--output_path",
         type=str,
-        default="motivation_results_symphony/retrieve",
+        default="motivation_results_symphony_v1/retrieve",
         help="输出图片路径",
     )
     return parser.parse_args()
