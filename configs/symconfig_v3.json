@@ -1,6 +1,7 @@
 {
   "video_input": {
-    "original_fps": false
+    "original_fps": false,
+    "version": "V1"
   },
   "memory_manager": {
     "retrieve_item_type": "clip"
