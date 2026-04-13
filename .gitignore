@@ -9,8 +9,8 @@ database
 database/
 local_datasets/
 benchmark_results/
-motivation_results/
-motivation_results_symphony/
+motivation_results*/
+motivation_results_symphony*/
 test_rtsp/recordings/
 logs/
 # Byte-compiled / optimized / DLL files
