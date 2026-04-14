@@ -20,7 +20,7 @@ class CLIPVisionTower(nn.Module):
         self.select_feature = getattr(args, "mm_vision_select_feature", "patch")
 
         if not delay_load:
-            rank0_print(f"Loading vision tower: {vision_tower}")
+            # rank0_print(f"Loading vision tower: {vision_tower}")
             self.load_model()
         elif getattr(args, "unfreeze_mm_vision_tower", False):
             # TODO: better detector is needed.

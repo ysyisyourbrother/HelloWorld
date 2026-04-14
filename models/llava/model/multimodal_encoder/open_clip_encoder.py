@@ -8,7 +8,7 @@ try:
     import torchvision
     from open_clip.transformer import _expand_token
 except ImportError:
-    print("OpenCLIP not installed")
+    # print("OpenCLIP not installed")
     open_clip = None
 
 HIDDEN_SIZE_DICT = {
@@ -27,7 +27,7 @@ class OpenCLIPVisionTower(nn.Module):
         self.select_feature = getattr(args, "mm_vision_select_feature", "patch")
 
         if not delay_load:
-            rank0_print(f"Loading vision tower: {vision_tower}")
+            # rank0_print(f"Loading vision tower: {vision_tower}")
             self.load_model()
         elif getattr(args, "unfreeze_mm_vision_tower", False):
             # TODO: better detector is needed.

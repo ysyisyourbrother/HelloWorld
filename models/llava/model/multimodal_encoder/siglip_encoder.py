@@ -547,11 +547,11 @@ class SigLipVisionTower(nn.Module):
 
         self.image_processor = SigLipImageProcessor()
         if vision_tower_cfg == None:
-            rank0_print(f"Loading vision tower: {vision_tower}")
+            # rank0_print(f"Loading vision tower: {vision_tower}")
             self.load_model()
             return 
         if not delay_load:
-            rank0_print(f"Loading vision tower: {vision_tower}")
+            # rank0_print(f"Loading vision tower: {vision_tower}")
             self.load_model()
         elif getattr(vision_tower_cfg, "unfreeze_mm_vision_tower", False):
             # TODO: better detector is needed.

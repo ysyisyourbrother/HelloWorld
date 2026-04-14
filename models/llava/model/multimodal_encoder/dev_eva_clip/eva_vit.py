@@ -39,7 +39,7 @@ class EvaViTWrapper(nn.Module):
         self.model_config = get_model_config(self.vision_tower_name)
 
         if not delay_load:
-            rank0_print(f"Loading vision tower: {vision_tower}")
+            # rank0_print(f"Loading vision tower: {vision_tower}")
             self.load_model()
         elif getattr(args, "unfreeze_mm_vision_tower", False):
             # TODO: better detector is needed.
