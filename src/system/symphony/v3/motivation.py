@@ -218,16 +218,9 @@ class SymphonySystemMotiV3(SymphonySystemMoti):
         if rit not in ("frame", "clip"):
             rit = "frame"
         result["retrieve_item_type"] = rit
-        result["retrieve_dialog_id"] = int(dialog_id)
 
-        if clip_info:
-            result["retrieve_clip_paths"] = clip_info.get("paths") or []
-            result["retrieve_clip_dir"] = clip_info.get("dir")
-            if clip_info.get("error"):
-                result["retrieve_clip_error"] = clip_info.get("error")
-        else:
-            result["retrieve_clip_paths"] = []
-            result["retrieve_clip_dir"] = None
+        if clip_info and clip_info.get("error"):
+            result["retrieve_clip_error"] = clip_info.get("error")
 
         query_text = question
         select_frame_num = len(frames_metadata) if frames_metadata else 0

@@ -14,6 +14,7 @@
     "retrieve_item_type": "clip"
   },
   "benchmark": {
+    "use_cloud": true,
     "db_dir_egoschema": "database/egoschema/symphony_v3",
     "db_dir_videomme": "database/videomme/symphony_v3",
     "result_dir": "benchmark_results/symphony_v3"

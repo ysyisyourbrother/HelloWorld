@@ -4,10 +4,15 @@
 #     --resume benchmark_results/symphony_v1/benchmark_Video-MME_short_20260319_153714.json \
 #     --config configs/symconfig.json > symphony_v1_short_resume.out 2>&1 & echo $! > symphony_v1_short_resume.pid
 
+# nohup python launch_benchmark_symphony_v3.py \
+#     --subset short \
+#     --config configs/symconfig_v3.json > symphony_v3_short.out 2>&1 & echo $! > symphony_v3_short.pid
+# nohup python launch_benchmark_symphony_v3.py \
+#     --subset medium \
+#     --config configs/symconfig_v3.json > symphony_v3_medium.out 2>&1 & echo $! > symphony_v3_medium.pid
 nohup python launch_benchmark_symphony_v3.py \
-    --subset short \
-    --config configs/symconfig_v3.json > symphony_v3_short.out 2>&1 & echo $! > symphony_v3_short.pid
-
+    --subset long \
+    --config configs/symconfig_v3.json > symphony_v3_long.out 2>&1 & echo $! > symphony_v3_long.pid
 # 断点续跑 v3 时取消下行注释并填写已有 JSON 路径：
 
 # nohup python launch_benchmark_symphony_v3.py \
