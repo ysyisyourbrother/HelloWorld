@@ -389,7 +389,7 @@ class MemoryManagerBase:
         """初始化向量数据库和databasemap"""
         # 尝试从本地加载faiss文件
         if os.path.isfile(self.faiss_file_path):
-            self.logger.info(f"从本地文件 {self.faiss_file_path} 加载向量数据库")
+            self.logger.debug(f"从本地文件 {self.faiss_file_path} 加载向量数据库")
             local_faiss = faiss.read_index(self.faiss_file_path)
             self.index = ThreadSafeFaiss(local_faiss)
             self.dimension = local_faiss.d
@@ -406,7 +406,7 @@ class MemoryManagerBase:
             else:
                 self.logger.warning(f"databasemap文件 {self.databasemap_file_path} 不存在或加载失败")
         else:
-            self.logger.info(f"本地文件 {self.faiss_file_path} 不存在，将根据*视频文件名*创建新的向量数据库")
+            self.logger.debug(f"本地文件 {self.faiss_file_path} 不存在，将根据*视频文件名*创建新的向量数据库")
             if self.faiss_index_type == "FlatL2":
                 local_faiss = faiss.IndexFlatL2(self.dimension)
             elif self.faiss_index_type == "FlatIP":
@@ -441,8 +441,8 @@ class MemoryManagerBase:
             # 保存databasemap
             self.databasemap.save_local(save_map_path)
 
-            self.logger.info(f"向量数据库已保存到 {save_faiss_path}，包含 {self.vector_count} 个向量")
-            self.logger.info(f"databasemap已保存到 {save_map_path}，包含 {len(self.databasemap)} 条记录")
+            self.logger.debug(f"向量数据库已保存到 {save_faiss_path}，包含 {self.vector_count} 个向量")
+            self.logger.debug(f"databasemap已保存到 {save_map_path}，包含 {len(self.databasemap)} 条记录")
     
     def _add_vector(self, vector_data: FrameVectorData):
         """添加单个向量到数据库"""
@@ -515,7 +515,6 @@ class MemoryManagerBase:
         vector_ids = indices[0].tolist()
         scores = distances[0].tolist()
         
-        self.logger.info(f"查询完成，返回 {len(vector_ids)} 个结果")
         return vector_ids, scores
 
     def _query_faiss_all_scores(self, query_vector: np.ndarray) -> List[float]:
