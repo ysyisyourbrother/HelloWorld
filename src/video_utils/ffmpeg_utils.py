@@ -89,7 +89,7 @@ def export_gop_range_copy_mp4(
         raise ValueError("video_fps 必须为正数，当前为 %s" % (video_fps,))
 
     start = int(gop_start)
-    end = int(gop_end) - 1
+    end = max(start + 1, int(gop_end) - 1)
     if start < 0 or end <= start:
         raise ValueError("无效的 GOP 区间: [%s, %s)" % (start, end))
 
@@ -99,23 +99,38 @@ def export_gop_range_copy_mp4(
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
+    # cmd = [
+    #     ffmpeg,
+    #     "-hide_banner",
+    #     "-loglevel", "error",
+    #     "-y",
+    #     "-ss", "%.6f" % ss,
+    #     "-i", video_path,
+    #     "-t", "%.6f" % dur,
+    #     "-c", "copy",
+    #     "-avoid_negative_ts", "make_zero",
+    #     output_path,
+    # ]
+
+    # cmd = [
+    #     ffmpeg,
+    #     "-i", video_path,          # -ss 放在 -i 之后，或者不用 -ss
+    #     "-vf", f"trim=start={ss}:duration={dur},setpts=PTS-STARTPTS", # 使用滤镜裁剪
+    #     "-c:v", "libx264",         # 必须重编码，因为切断了 GOP 依赖
+    #     "-c:a", "aac",             # 音频也要处理
+    #     "-strict", "experimental",
+    #     output_path
+    # ]
+
     cmd = [
         ffmpeg,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-ss",
-        "%.6f" % ss,
-        "-i",
-        video_path,
-        "-t",
-        "%.6f" % dur,
-        "-c",
-        "copy",
-        "-avoid_negative_ts",
-        "make_zero",
-        output_path,
+        "-i", video_path,          # -ss 放在 -i 之后，或者不用 -ss
+        "-vf", f"select='between(n,{start},{end})',setpts=N/({fps}*TB)", # 使用滤镜裁剪
+        "-af", f"atrim=start={start/fps}:end={end/fps},asetpts=PTS-STARTPTS",
+        "-shortest",
+        "-c:v", "libx264",         # 必须重编码，因为切断了 GOP 依赖
+        "-c:a", "aac",             # 音频也要处理
+        output_path
     ]
     p = subprocess.run(
         cmd,
