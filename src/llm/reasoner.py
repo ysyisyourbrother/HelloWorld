@@ -33,6 +33,32 @@ from models.llava.constants import (
 from models.llava.conversation import SeparatorStyle, conv_qwen
 
 
+def _uniform_subsample_image_list(images, max_n):
+    # type: (List[Any], Optional[int]) -> List[Any]
+    """
+    沿时间顺序对图像列表做均匀下采样，最多保留 max_n 张（含首尾附近索引）。
+    max_n 为 None 或 <=0 时返回原列表的浅拷贝；len(images) <= max_n 时全量返回。
+    """
+    if not images:
+        return list(images)
+    if max_n is None or max_n <= 0:
+        return list(images)
+    n = len(images)
+    k = int(max_n)
+    if n <= k:
+        return list(images)
+    if k == 1:
+        return [images[n // 2]]
+    indices = [int(round(j * (n - 1) / float(k - 1))) for j in range(k)]
+    seen = set()
+    out = []
+    for i in indices:
+        if i not in seen:
+            seen.add(i)
+            out.append(images[i])
+    return out
+
+
 @dataclass
 class QueryRequest:
     """查询请求结构体"""
@@ -88,7 +114,8 @@ class ReasonerBase:
         self.num_beams = config.reasoner_num_beams
         self.do_sample = config.reasoner_do_sample
         self.max_history_turns = getattr(config, "reasoner_max_history_turns", None)
-        
+        self.max_img_num = getattr(config, "reasoner_max_img_num", None)
+
         # 模型相关
         self.model = None
         self.tokenizer = None
@@ -309,6 +336,19 @@ class ReasonerBase:
                     error=None,
                     timestamp=time.time()
                 )
+
+            if memory_results and len(memory_results) > 0 and self.max_img_num:
+                n_before = len(memory_results)
+                memory_results = _uniform_subsample_image_list(
+                    memory_results, self.max_img_num
+                )
+                if len(memory_results) < n_before:
+                    self.logger.info(
+                        "Reasoner max_img_num=%d: 检索图像 %d -> %d（均匀稀疏采样）",
+                        int(self.max_img_num),
+                        n_before,
+                        len(memory_results),
+                    )
 
             frames_tensor = None
             if memory_results and len(memory_results) > 0:
