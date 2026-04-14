@@ -17,7 +17,7 @@ _project_root = os.path.abspath(
 sys.path.insert(0, _project_root)
 
 from src.config import SymConfig
-from src.memory.frame_vectorizer import SymFrameVectorizer
+from src.memory.frame_vectorizer import SymFrameVectorizerByGOP
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query_vectorizer import QueryVectorizer
 from src.system.venus.motivation import VenusSystemMoti
@@ -68,7 +68,7 @@ class SymphonySystemMoti(VenusSystemMoti):
         if video_path:
             self.config.video_file_path = video_path
             self.video_input = make_sym_video_input(self.config)
-            self.frame_vectorizer = SymFrameVectorizer(self.config)
+            self.frame_vectorizer = SymFrameVectorizerByGOP(self.config)
             for fn, need_hs, need_attn in self._encode_hooks:
                 self.frame_vectorizer.register_encode_hook(
                     fn, need_hidden_states=need_hs, need_attentions=need_attn

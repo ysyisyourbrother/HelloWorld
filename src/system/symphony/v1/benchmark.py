@@ -16,7 +16,7 @@ _project_root = os.path.abspath(
 )
 sys.path.insert(0, _project_root)
 
-from src.memory.frame_vectorizer import SymFrameVectorizer
+from src.memory.frame_vectorizer import SymFrameVectorizerByGOP
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query_vectorizer import QueryVectorizer
 from src.system.venus.benchmark import VenusSystemBench
@@ -60,7 +60,7 @@ class SymphonySystemBench(VenusSystemBench):
         if video_path:
             self.config.video_file_path = video_path
             self.video_input = make_sym_video_input(self.config)
-            self.frame_vectorizer = SymFrameVectorizer(self.config)
+            self.frame_vectorizer = SymFrameVectorizerByGOP(self.config)
             self.video_input.init_for_file(video_path)
             ixs = getattr(self.video_input, "i_frame_indices", None)
             if ixs:
