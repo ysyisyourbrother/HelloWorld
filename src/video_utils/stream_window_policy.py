@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-与在线 StreamVideoInput 一致的「按窗触发 + 按包长累积抽样」纯策略（无 GStreamer 依赖）。
+与在线 StreamVideoInput 共用的「按窗触发 + 按包长累积抽样」纯策略（无 GStreamer 依赖）。
 
+warmup 窗内不判定触发，但仍按 ``stream_target_decode_fps`` 预算抽样并并入关键帧。
 离线分窗使用每帧媒体时间（秒），由 ffprobe 的 pkt_pts_time / best_effort_timestamp_time 等得到。
 """
 
@@ -34,6 +35,20 @@ def cumulative_sample_indices_by_pkt_sizes(pkt_sizes, k):
     return out
 
 
+def indices_for_decode_budget(pkt_sizes, is_key, target_decode_fps, window_duration_sec):
+    # type: (List[int], List[bool], float, float) -> List[int]
+    """
+    按 ``target_decode_fps * window_duration_sec`` 得 k（至少 1），对窗口内包长做累积等分抽样，
+    并与所有关键帧下标合并、排序去重。
+    """
+    k = int(target_decode_fps * window_duration_sec)
+    if k < 1:
+        k = 1
+    cum_idx = cumulative_sample_indices_by_pkt_sizes(pkt_sizes, k)
+    key_idx = [i for i in range(len(pkt_sizes)) if is_key[i]]
+    return sorted(set(cum_idx) | set(key_idx))
+
+
 def select_frames_for_window(
     window_rows,
     target_decode_fps,
@@ -47,6 +62,9 @@ def select_frames_for_window(
     # type: (List[Dict[str, Any]], float, float, Optional[float], float, int, int, float) -> Tuple[List[int], Optional[float], bool]
     """
     根据窗口内帧元数据决定是否触发，并返回应编码的帧在 window_rows 中的下标列表。
+
+    warmup 期内不判定触发，但仍按 ``target_decode_fps`` 预算做累积包长抽样并并入关键帧；
+    此时 ``triggered`` 恒为 False。
 
     Returns:
         (selected_indices_in_window, new_baseline_non_i, triggered)
@@ -66,14 +84,17 @@ def select_frames_for_window(
     triggered = False
     new_baseline = baseline_non_i
 
-    # windows_seen 为已结束的窗口数（从 1 起）；前 warmup_windows 个窗口仅更新基线、不触发
+    # windows_seen 为已结束的窗口数（从 1 起）；前 warmup_windows 个窗口不触发，但照常按预算抽样出帧
     if windows_seen <= warmup_windows:
         if non_i_mean > 0:
             if new_baseline is None:
                 new_baseline = non_i_mean
             else:
                 new_baseline = alpha_baseline * non_i_mean + (1.0 - alpha_baseline) * new_baseline
-        return [], new_baseline, False
+        merged_warm = indices_for_decode_budget(
+            pkt_sizes, is_key, target_decode_fps, window_duration_sec
+        )
+        return merged_warm, new_baseline, False
 
     if new_baseline is not None and new_baseline > 0 and non_i_mean > new_baseline * trigger_ratio:
         triggered = True
@@ -86,13 +107,9 @@ def select_frames_for_window(
                 new_baseline = alpha_baseline * non_i_mean + (1.0 - alpha_baseline) * new_baseline
         return [], new_baseline, False
 
-    k = int(target_decode_fps * window_duration_sec)
-    if k < 1:
-        k = 1
-
-    cum_idx = cumulative_sample_indices_by_pkt_sizes(pkt_sizes, k)
-    key_idx = [i for i in range(len(window_rows)) if is_key[i]]
-    merged = sorted(set(cum_idx) | set(key_idx))
+    merged = indices_for_decode_budget(
+        pkt_sizes, is_key, target_decode_fps, window_duration_sec
+    )
     return merged, new_baseline, True
 
 
