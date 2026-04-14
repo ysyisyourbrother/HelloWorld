@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from src.config import Config
 from src.video_input.video_input import VideoInputBase
-from src.benchmark.utils import build_rag_prompt
+from src.benchmark.prompt_template import build_rag_prompt_with_frames
 from src.memory.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query_vectorizer import QueryVectorizer
@@ -244,7 +244,7 @@ class VenusSystemBench:
         """懒加载 Reasoner（benchmark 云边一体，直接变量传递，无需 gRPC）"""
         if self.reasoner is None:
             self.reasoner = ReasonerBase(self.config)
-            self.logger.info("已初始化 Reasoner（同步推理，无 gRPC）")
+            self.logger.debug("已初始化 Reasoner（同步推理，无 gRPC）")
         return self.reasoner
 
     def _get_video_time(self, map_path: Optional[str] = None) -> Optional[float]:
@@ -299,23 +299,22 @@ class VenusSystemBench:
                 out.append(frame)
         return out
 
-    def _fill_reasoner_result(
+    def _fill_reasoner_from_bgr_frames(
         self,
         t0: float,
         retrieve_time: float,
         query_text: str,
-        frames_metadata: Optional[List[Dict[str, Any]]],
+        frame_list_bgr: List[Any],
         sample_id: str,
         result: Dict[str, Any],
     ) -> None:
-        """根据检索元数据解码帧后调用 Reasoner，就地写入 cloud_result / cloud_error / total_time_sec。"""
-        frame_list = self._decode_retrieval_frames_bgr(frames_metadata)
-        if self.use_cloud and frame_list:
+        """将已解码的 BGR 帧列表交给 Reasoner（与 ``_fill_reasoner_result`` 共用推理逻辑）。"""
+        if self.use_cloud and frame_list_bgr:
             frames_rgb = [
                 cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
                 if f.ndim == 3
                 else cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
-                for f in frame_list
+                for f in frame_list_bgr
             ]
             qid = (
                 (hash(sample_id) % (2**31))
@@ -337,6 +336,21 @@ class VenusSystemBench:
             result["cloud_result"] = None
             result["cloud_error"] = "use_cloud=False 或 无检索帧"
             result["total_time_sec"] = retrieve_time
+
+    def _fill_reasoner_result(
+        self,
+        t0: float,
+        retrieve_time: float,
+        query_text: str,
+        frames_metadata: Optional[List[Dict[str, Any]]],
+        sample_id: str,
+        result: Dict[str, Any],
+    ) -> None:
+        """根据检索元数据解码帧后调用 Reasoner，就地写入 cloud_result / cloud_error / total_time_sec。"""
+        frame_list = self._decode_retrieval_frames_bgr(frames_metadata)
+        self._fill_reasoner_from_bgr_frames(
+            t0, retrieve_time, query_text, frame_list, sample_id, result
+        )
 
     def _run_query_single(
         self,
@@ -364,7 +378,7 @@ class VenusSystemBench:
             options = sample.get("options", [])
             if not isinstance(options, list):
                 options = list(options) if options else []
-            query_text = build_rag_prompt(
+            query_text = build_rag_prompt_with_frames(
                 video_time=video_time,
                 num_selected_frame=len(frames_metadata),
                 question=question,
@@ -472,7 +486,7 @@ class VenusSystemBench:
         result_list.append(entry)
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(result_list, f, ensure_ascii=False, indent=2)
-        self.logger.info(f"结果已保存（增量）: {out_path}")
+        self.logger.debug(f"结果已保存（增量）: {out_path}")
         return result_list
 
     def _load_resume_result(self, resume_path: str) -> tuple:
@@ -523,7 +537,7 @@ class VenusSystemBench:
             if not reasoner.test_mode and reasoner.model is None:
                 reasoner._set_logger()
                 reasoner._initialize_model()
-                self.logger.info("已预加载 LLaVA 模型")
+                self.logger.debug("已预加载 LLaVA 模型")
 
         ds, dataset_name, subset = self._load_dataset()
         id_key = "question_id" if dataset_name == "Video-MME" else "question_idx"
@@ -622,21 +636,21 @@ class VenusSystemBench:
                 if max_queries is not None and query_count >= max_queries:
                     break
 
+                self.logger.debug(f"Phase 1: Inject - {video_id}")
                 self.logger.info(f"处理视频: {video_id} ({len(samples)} 条问题)")
-                self.logger.info("=" * 50)
-                self.logger.info(f"Inject: {video_path}")
-                self.logger.info("=" * 50)
                 inject_stats = self._run_inject_phase(video_path, video_id, dataset_name, subset)
                 inject_stat = {"video_id": video_id, "path": video_path, **inject_stats}
                 all_inject_stats.append(inject_stat)
                 video_paths_used.append(video_path)
 
-                video_time = self._get_video_time()
+                # 跳过 inject 时 _init_components 未挂 video_input，须从 databasemap 取时长（与 skip_inject 分支一致）
+                _, map_path = self._get_db_paths(dataset_name, video_id, subset)
+                video_time = self._get_video_time(map_path=map_path)
                 if max_queries is not None:
                     remaining = max_queries - query_count
                     samples = samples[:remaining]
 
-                self.logger.info("Phase 2: Query")
+                self.logger.debug("Phase 2: Query")
                 video_query_results = []
                 for sample in samples:
                     question = sample.get("question", "")

@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from src.config import Config
 from src.video_input.video_input import VideoInputBase
-from src.benchmark.utils import build_rag_prompt
+from src.benchmark.prompt_template import build_rag_prompt_with_frames
 from src.memory.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query_vectorizer import QueryVectorizer
@@ -295,12 +295,13 @@ class VenusSystemMoti:
         sample_id: str = "",
         sample: Optional[Dict[str, Any]] = None,
         video_time: Optional[float] = None,
+        dialog_id: int = 0,
     ) -> Dict[str, Any]:
         """单次查询：编码 -> 检索 -> 推理"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
         scores, frames_metadata, _clip_info = self.memory_manager.retrieve_sync(
-            query_vector
+            query_vector, dialog_id=dialog_id
         )
         retrieve_time = time.time() - t0
 
@@ -318,7 +319,7 @@ class VenusSystemMoti:
             options = sample.get("options", [])
             if not isinstance(options, list):
                 options = list(options) if options else []
-            query_text = build_rag_prompt(
+            query_text = build_rag_prompt_with_frames(
                 video_time=video_time,
                 num_selected_frame=len(frames_metadata),
                 question=question,
@@ -391,6 +392,7 @@ class VenusSystemMoti:
             sample_id=sample.get("question_id", sample.get("question_idx", "")) if sample else "",
             sample=sample,
             video_time=video_time,
+            dialog_id=0,
         )
 
     def run_video_flow(
@@ -401,6 +403,7 @@ class VenusSystemMoti:
         dataset_name: str = "Video-MME",
         subset: Optional[str] = None,
         force_update: bool = True,
+        dialog_id: int = 0,
     ) -> Dict[str, Any]:
         """
         对指定视频执行完整流程：inject + 多次 query。
@@ -412,6 +415,7 @@ class VenusSystemMoti:
             dataset_name: 数据集名
             subset: 子集
             force_update: 若为 True（默认），即使 faiss 已存在也强制重新 inject
+            dialog_id: 检索对话 ID（v3 clip 导出目录隔离等）
 
         Returns:
             包含 inject_stats 和 query_results 的字典
@@ -439,6 +443,7 @@ class VenusSystemMoti:
                 sample_id=str(i),
                 sample=sample,
                 video_time=video_time or 0.0,
+                dialog_id=dialog_id,
             )
             query_results.append(r)
 
