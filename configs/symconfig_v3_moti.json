@@ -5,7 +5,7 @@
   },
   "stream_input": {
     "stream_window_duration_sec": 1.0,
-    "stream_target_decode_fps": 2.0,
+    "stream_target_decode_fps": 0.3,
     "stream_trigger_ratio": 1.25,
     "stream_baseline_ewma_alpha": 0.08,
     "stream_warmup_windows": 3

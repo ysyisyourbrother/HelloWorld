@@ -81,7 +81,7 @@ class Config:
         self.stream_uri = _vs("stream_uri", "") or ""
         self.stream_window_duration_sec = float(_vs("stream_window_duration_sec", 1.0))
         self.stream_target_decode_fps = float(_vs("stream_target_decode_fps", 2.0))
-        self.stream_trigger_ratio = float(_vs("stream_trigger_ratio", 1.35))
+        self.stream_trigger_ratio = float(_vs("stream_trigger_ratio", 1.25))
         self.stream_baseline_ewma_alpha = float(_vs("stream_baseline_ewma_alpha", 0.08))
         self.stream_warmup_windows = int(_vs("stream_warmup_windows", 3))
         self.stream_queue_maxsize = int(_vs("stream_queue_maxsize", 100))
@@ -176,7 +176,9 @@ class Config:
         self.reasoner_num_beams = reasoner_config.get("num_beams", 1)
         self.reasoner_do_sample = reasoner_config.get("do_sample", False)
         self.reasoner_max_history_turns = reasoner_config.get("max_history_turns", 10)  # None 表示不限制轮数
-        
+        # 单次推理最多送入的图像张数；超出则沿序列均匀稀疏采样。None 或 <=0 表示不限制
+        self.reasoner_max_img_num = reasoner_config.get("max_img_num", 20)
+
         # API Server E配置
         api_e_config = self._config.get("api_server_e", {})
         self.cloud_server_url = api_e_config.get("cloud_server_url", "127.0.0.1:9000")
