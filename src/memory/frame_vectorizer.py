@@ -289,7 +289,7 @@ class FrameVectorizer:
         return result
 
 
-class SymFrameVectorizer(FrameVectorizer):
+class SymFrameVectorizerByGOP(FrameVectorizer):
     """
     继承 FrameVectorizer，支持按 GOP 编码：通过 select_frame_in_gop 筛选帧后仅编码选中的帧。
     """
@@ -469,3 +469,43 @@ class SymFrameVectorizer(FrameVectorizer):
             ))
         return result
 
+
+class SymFrameVectorizerForV3(SymFrameVectorizerByGOP):
+    """
+    Symphony v3：在 GOP 版向量器之上，提供流式窗已选帧的批量编码（不做 GOP 内 random/first）。
+    """
+
+    def encode_sym_frames_list(self, sym_frames: List[SymFrameData]) -> List[FrameVectorData]:
+        """
+        对已选中的 SymFrameData 列表编码；调用方（如 SymVideoInputByStreamWindow）负责选帧策略。
+        """
+        if not sym_frames:
+            return []
+        if self.vectorizer is None:
+            self._initialize_vectorizer()
+        resolved_frames = [self._resolve_sym_frame_from_reference(sf) for sf in sym_frames]
+        selected_and_frames = [(sf, f) for sf, f in zip(sym_frames, resolved_frames) if f is not None]
+        if not selected_and_frames:
+            return []
+        frames = [self._preprocess_single_frame(x[1]) for x in selected_and_frames]
+        vector_tensors = self.vectorizer.encode_batch(frames)
+        vectors_np = vector_tensors.cpu().numpy()
+        result = []
+        for i, (sf, _) in enumerate(selected_and_frames):
+            vec = vectors_np[i] if len(vectors_np.shape) > 1 else vectors_np
+            if len(vec.shape) == 1:
+                vec = vec.reshape(1, -1)
+            ts = sf.frame_id / sf.video_fps if sf.video_fps else 0.0
+            result.append(
+                FrameVectorData(
+                    vector=vec,
+                    timestamp=ts,
+                    frame_id=sf.frame_id,
+                    source_path=sf.source_path,
+                    total_frames=sf.total_frames,
+                    video_fps=sf.video_fps,
+                    duration=sf.duration,
+                    trace_ts=dict(sf.trace_ts) if sf.trace_ts else None,
+                )
+            )
+        return result
