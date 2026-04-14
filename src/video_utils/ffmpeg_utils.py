@@ -89,7 +89,7 @@ def export_gop_range_copy_mp4(
         raise ValueError("video_fps 必须为正数，当前为 %s" % (video_fps,))
 
     start = int(gop_start)
-    end = int(gop_end)
+    end = int(gop_end) - 1
     if start < 0 or end <= start:
         raise ValueError("无效的 GOP 区间: [%s, %s)" % (start, end))
 
