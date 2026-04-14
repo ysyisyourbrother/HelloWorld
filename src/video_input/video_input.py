@@ -413,7 +413,7 @@ class SymVideoInputByGOP(VideoInputBase):
         """为 SymVideoInput 同步模式初始化视频文件源，并获取 ffprobe 的 I 帧、pict_type、pkt_size 信息"""
         super().init_for_file(video_file_path)
         self.i_frame_indices, self.frame_types, self.pkt_sizes = get_frame_info_for_stream_ffprobe(video_file_path)
-        self.logger.info(f"ffprobe: I 帧数 {len(self.i_frame_indices)}, 总帧类型数 {len(self.frame_types)}, 每帧压缩大小数 {len(self.pkt_sizes)}")
+        self.logger.info(f"ffprobe: I 帧数 {len(self.i_frame_indices)}, 总帧类型数 {len(self.frame_types)}")
 
     def iter_gop_ranges(self) -> Iterator[Tuple[int, int]]:
         """
