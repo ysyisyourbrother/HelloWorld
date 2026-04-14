@@ -105,7 +105,9 @@ def select_frames_for_window(
                 new_baseline = non_i_mean
             else:
                 new_baseline = alpha_baseline * non_i_mean + (1.0 - alpha_baseline) * new_baseline
-        return [], new_baseline, False
+        # 未触发时也保留窗口内全部关键帧，确保每个窗口的 I 帧都可送入后续模块。
+        key_idx = [i for i in range(len(pkt_sizes)) if is_key[i]]
+        return key_idx, new_baseline, False
 
     merged = indices_for_decode_budget(
         pkt_sizes, is_key, target_decode_fps, window_duration_sec
