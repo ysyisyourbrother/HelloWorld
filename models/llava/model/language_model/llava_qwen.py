@@ -126,8 +126,8 @@ class LlavaQwenForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
     ) -> Union[GenerateOutput, torch.LongTensor]:
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
-        print("input shape",inputs.shape)
-        print(inputs.shape)
+        # print("input shape",inputs.shape)
+        # print(inputs.shape)
         
         start_time = time.time()
         if "inputs_embeds" in kwargs:
@@ -136,8 +136,8 @@ class LlavaQwenForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
         if images is not None:
             (inputs, position_ids, attention_mask, _, inputs_embeds, _) = self.prepare_inputs_labels_for_multimodal(inputs, position_ids, attention_mask, None, None,
                                                                                                                     images, modalities, image_sizes=image_sizes)
-            print("inputs_embeds shape", inputs_embeds.shape)
-            print  (inputs_embeds.shape)
+            # print("inputs_embeds shape", inputs_embeds.shape)
+            # print  (inputs_embeds.shape)
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
         end_time = time.time()

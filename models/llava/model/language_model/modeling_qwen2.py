@@ -1160,10 +1160,10 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
         if inputs_embeds != None and inputs_embeds.shape[1] != 1:
-            print("*************************")
-            print("prefilling length:",  inputs_embeds.shape[1])
+            # print("*************************")
+            # print("prefilling length:",  inputs_embeds.shape[1])
             start_time  = time.perf_counter()
-            print("begin prefilling")
+            # print("begin prefilling")
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
