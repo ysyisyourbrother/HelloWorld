@@ -195,7 +195,17 @@ if __name__ == "__main__":
     else:
         print("未在 databasemap 中找到可用 i_frames，跳过 GOP 区间着色")
 
-    ax.plot(frame_ids, all_scores, "b-", linewidth=1, label="Similarity", zorder=3)
+    ax.plot(
+        frame_ids,
+        all_scores,
+        marker="o",
+        linewidth=1,
+        label="Similarity",
+        zorder=3,
+        color="#000000",
+        linestyle="--"
+    )
+   
 
     if args.topk > 0:
         topk = min(args.topk, len(all_scores))
