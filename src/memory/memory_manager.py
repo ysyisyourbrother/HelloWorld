@@ -442,7 +442,7 @@ class MemoryManagerBase:
             self.databasemap.save_local(save_map_path)
 
             self.logger.debug(f"向量数据库已保存到 {save_faiss_path}，包含 {self.vector_count} 个向量")
-            self.logger.debug(f"databasemap已保存到 {save_map_path}，包含 {len(self.databasemap)} 条记录")
+            self.logger.debug(f"数据库索引已保存到 {save_map_path}，包含 {len(self.databasemap)} 条记录")
     
     def _add_vector(self, vector_data: FrameVectorData):
         """添加单个向量到数据库"""

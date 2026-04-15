@@ -71,11 +71,16 @@ class SymphonySystemBench(VenusSystemBench):
             self.frame_vectorizer = None
 
     def _run_inject_phase(
-        self, video_path: str, video_id: str, dataset_name: str, subset: Optional[str] = None
+        self,
+        video_path: str,
+        video_id: str,
+        dataset_name: str,
+        subset: Optional[str] = None,
+        skip_inject: bool = False,
     ) -> Dict[str, Any]:
         """Inject 阶段：按 GOP 迭代、select_frame_in_gop 选帧、encode_frames_by_gop 编码、插入"""
         faiss_path, map_path = self._get_db_paths(dataset_name, video_id, subset)
-        if os.path.isfile(faiss_path):
+        if skip_inject and os.path.isfile(faiss_path):
             self.logger.info(f"向量库已存在，跳过 inject: {faiss_path}")
             self._init_components(video_path=None, faiss_path=faiss_path, map_path=map_path)
             idx = faiss.read_index(faiss_path)
@@ -86,6 +91,18 @@ class SymphonySystemBench(VenusSystemBench):
                 "batch_size": self.batch_size,
                 "skipped": True,
             }
+
+        if os.path.isfile(faiss_path):
+            try:
+                os.remove(faiss_path)
+                self.logger.info(f"已删除旧向量库，将重新 inject: {faiss_path}")
+            except OSError as e:
+                self.logger.warning(f"删除 faiss 文件失败: {e}")
+            if os.path.isfile(map_path):
+                try:
+                    os.remove(map_path)
+                except OSError:
+                    pass
 
         self._init_components(video_path=video_path, faiss_path=faiss_path, map_path=map_path)
 
