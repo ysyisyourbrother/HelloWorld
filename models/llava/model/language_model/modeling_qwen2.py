@@ -1201,7 +1201,7 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
             loss = loss_fct(shift_logits, shift_labels)
         if inputs_embeds != None and inputs_embeds.shape[1] != 1:
             end_time  = time.perf_counter()
-            print("prifilling time:", (end_time - start_time) * 1000, "ms")
+            # print("prifilling time:", (end_time - start_time) * 1000, "ms")
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output

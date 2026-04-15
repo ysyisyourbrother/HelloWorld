@@ -141,7 +141,7 @@ class LlavaQwenForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
         end_time = time.time()
-        print("vision_tower time", (end_time - start_time) * 1000, "ms")
+        # print("vision_tower time", (end_time - start_time) * 1000, "ms")
         return super().generate(position_ids=position_ids, attention_mask=attention_mask, inputs_embeds=inputs_embeds, **kwargs)
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
