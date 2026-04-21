@@ -24,9 +24,9 @@ from src.benchmark.retrieve_clip_frames import (
 from src.benchmark.prompt_template import build_rag_prompt_with_clips, build_rag_prompt_with_frames
 from src.config import SymConfig
 from src.llm.reasoner import QueryRequest
-from src.memory.frame_vectorizer import SymFrameVectorizerForV3
+from src.memory.frame.frame_vectorizer import SymFrameVectorizerForV3
 from src.memory.memory_manager import MemoryManagerBase
-from src.memory.query_vectorizer import QueryVectorizer
+from src.memory.query.query_vectorizer import QueryVectorizer
 from src.system.symphony.v1.motivation import SymphonySystemMoti
 from src.video_input.video_input import SymVideoInputByStreamWindow
 from src.video_utils.about_frame import extract_frame_by_index

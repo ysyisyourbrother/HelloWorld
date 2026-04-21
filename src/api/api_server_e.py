@@ -12,7 +12,7 @@ import cv2
 
 # 本项目
 from src.config import Config
-from src.memory.query_vectorizer import QueryData
+from src.memory.query.query_vectorizer import QueryData
 from src.memory.memory_manager import MemoryManagerBase, MemoryResult
 from src.video_utils.about_frame import extract_frame_by_index
 

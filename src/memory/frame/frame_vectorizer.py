@@ -10,7 +10,7 @@ import glob
 import os
 # 本项目
 from src.config import Config
-from src.memory.image_bge_vectorizer import ImageBGEVectorizer
+from src.memory.frame.image_bge_vectorizer import ImageBGEVectorizer
 from src.video_input.video_input import FrameData, SymFrameData, SymVideoInputByGOP
 from src.video_utils.file_video_reader import open_file_video_reader
 

@@ -37,3 +37,14 @@ class ThreadSafeFaiss:
         """线程安全的搜索方法"""
         with self.acquire():
             return self._index.search(query_vector, top_k)
+
+    def subset(self, start_id: int, n: int) -> np.ndarray:
+        """线程安全地返回向量库子集[start_id, start_id + n)"""
+        if n <= 0:
+            return np.empty((0, self._index.d), dtype=np.float32)
+
+        with self.acquire():
+            end_id = min(start_id + n, self._index.ntotal)
+            if start_id < 0 or start_id >= end_id:
+                return np.empty((0, self._index.d), dtype=np.float32)
+            return self._index.reconstruct_n(start_id, end_id - start_id)

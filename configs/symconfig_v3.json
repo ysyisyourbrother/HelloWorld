@@ -11,7 +11,8 @@
     "stream_warmup_windows": 3
   },
   "memory_manager": {
-    "retrieve_item_type": "clip"
+    "retrieve_item_type": "frame",
+    "topk": 2
   },
   "benchmark": {
     "db_dir_egoschema": "database/egoschema/symphony_v3",

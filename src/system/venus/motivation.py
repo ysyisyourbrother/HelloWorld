@@ -26,9 +26,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 from src.config import Config
 from src.video_input.video_input import VideoInputBase
 from src.benchmark.prompt_template import build_rag_prompt_with_frames
-from src.memory.frame_vectorizer import FrameVectorizer
+from src.memory.frame.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
-from src.memory.query_vectorizer import QueryVectorizer
+from src.memory.query.query_vectorizer import QueryVectorizer
 from src.llm.reasoner import ReasonerBase, QueryRequest
 
 

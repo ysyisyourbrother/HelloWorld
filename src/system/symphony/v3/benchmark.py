@@ -32,9 +32,9 @@ from src.benchmark.retrieve_clip_frames import (
     decode_clip_info_all_frames_bgr,
 )
 from src.benchmark.prompt_template import build_rag_prompt_with_clips, build_rag_prompt_with_frames
-from src.memory.frame_vectorizer import SymFrameVectorizerForV3
+from src.memory.frame.frame_vectorizer import SymFrameVectorizerForV3
 from src.memory.memory_manager import MemoryManagerBase
-from src.memory.query_vectorizer import QueryVectorizer
+from src.memory.query.query_vectorizer import QueryVectorizer
 from src.system.symphony.v1.benchmark import SymphonySystemBench
 from src.video_input.video_input import SymVideoInputByStreamWindow
 

@@ -17,9 +17,9 @@ _project_root = os.path.abspath(
 sys.path.insert(0, _project_root)
 
 from src.config import SymConfig
-from src.memory.frame_vectorizer import SymFrameVectorizerByGOP
+from src.memory.frame.frame_vectorizer import SymFrameVectorizerByGOP
 from src.memory.memory_manager import MemoryManagerBase
-from src.memory.query_vectorizer import QueryVectorizer
+from src.memory.query.query_vectorizer import QueryVectorizer
 from src.system.venus.motivation import VenusSystemMoti
 from src.video_input.video_input import make_sym_video_input
 
