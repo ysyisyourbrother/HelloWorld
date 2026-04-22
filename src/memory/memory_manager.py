@@ -17,6 +17,7 @@ from src.config import Config
 from src.memory.frame.frame_vectorizer import FrameVectorData, FrameVectorizer
 from src.memory.index.faiss import ThreadSafeFaiss
 from src.memory.index.map import ThreadSafeMap
+from src.memory.index.srt import ThreadSafeSRT
 from src.memory.query.query_vectorizer import QueryData, QueryVectorizer
 from src.video_input.video_input import FrameData
 from src.video_utils.about_frame import extract_save_frame_by_index, extract_frame_by_index
@@ -67,6 +68,8 @@ class MemoryManagerBase:
         self.dimension = config.memory_dimension  # 向量维度
         self.databasemap_file_path = config.memory_databasemap_file_path  # databasemap文件路径
         self.databasemap = None  # 线程安全的databasemap
+        self.srt_file_path = config.memory_srt_file_path  # 字幕srt路径
+        self.srt = None  # 线程安全的字幕索引
         self.memory_topk = config.memory_topk  # topk参数
 
         self.memory_retrieve_item_type = config.memory_retrieve_item_type   
@@ -82,6 +85,7 @@ class MemoryManagerBase:
 
         self._frame_encoder: Optional[FrameVectorizer] = None
         self._query_encoder: Optional[QueryVectorizer] = None
+        self._asr_encoder = None
         self._ready_event = threading.Event()
 
         self.running = False
@@ -192,6 +196,10 @@ class MemoryManagerBase:
             # 初始化空的databasemap
             self.databasemap = ThreadSafeMap()
 
+        # 加载字幕索引（不存在时初始化为空）
+        self.srt = ThreadSafeSRT()
+        self.srt.load_local(self.srt_file_path)
+
     def _save_database(self):
         """保存向量数据库到本地"""
         if self.index is not None and self.vector_count > 0:
@@ -218,6 +226,30 @@ class MemoryManagerBase:
 
             self.logger.debug(f"向量数据库已保存到 {save_faiss_path}，包含 {self.vector_count} 个向量")
             self.logger.debug(f"数据库索引已保存到 {save_map_path}，包含 {len(self.databasemap)} 条记录")
+        if self.srt is not None:
+            self.srt.save_local(self.srt_file_path)
+
+    def _add_subtitle(self, subtitle_items):
+        """添加字幕条目到线程安全 SRT 索引。"""
+        if self.srt is None:
+            self.srt = ThreadSafeSRT()
+        self.srt.append_subtitle(subtitle_items)
+
+    def search_word_time(
+        self, word: str, whole_word: bool = True, case_sensitive: bool = False
+    ) -> List[float]:
+        """查询词在视频中的出现时间。"""
+        if self.srt is None:
+            return []
+        return self.srt.search_word_time(
+            word=word, whole_word=whole_word, case_sensitive=case_sensitive
+        )
+
+    def get_sentence_by_time(self, t: float):
+        """查询指定时间所属的完整句子。"""
+        if self.srt is None:
+            return None
+        return self.srt.get_sentence_by_time(t)
     
     def _add_vector(self, vector_data: FrameVectorData):
         """添加单个向量到数据库"""

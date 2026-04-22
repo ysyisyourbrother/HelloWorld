@@ -102,6 +102,35 @@ class Config:
 
         self.edge_use_stream_input = bool(_vs("edge_use_stream_input", False))
 
+        # Audio Input（供 Memory / ASR 等消费；与 video_input 并列的独立配置段）
+        audio_config = self._config.get("audio_input") or {}
+        self.audio_log_file = audio_config.get("log_file", "logs/audio_input.log")
+        # 留空则使用本配置中已解析的 video_file_path（通常与当前解码视频一致）
+        self.audio_source_path = (audio_config.get("source_path") or "").strip() or None
+        self.audio_stream_as_chunks = bool(audio_config.get("stream_as_chunks", False))
+        self.audio_chunk_duration_sec = float(audio_config.get("chunk_duration_sec", 1.0))
+        # True：固定按 chunk_duration_sec 步进（类似 whisper_online --comp_unaware）；False：按墙钟+sleep（simultaneous 默认可计算感知）
+        self.audio_sim_comp_unaware = bool(audio_config.get("sim_comp_unaware", False))
+
+        # ASR / 字幕识别（与 frame_vectorizer 同级独立段，供后续 asr 模块使用）
+        asr_config = self._config.get("asr") or {}
+        self.asr_log_file = asr_config.get("log_file", "logs/asr.log")
+        self.asr_language = asr_config.get("language", "en") # ["auto", "en"]
+        self.asr_model_size = asr_config.get("model_size", "tiny")
+        self.asr_model_path = asr_config.get(
+            "model_path", "/mnt/share/cache/models/whisper-tiny"
+        )
+        self.asr_backend = asr_config.get(
+            "backend", "faster-whisper"
+        )  # ["transformers", "faster-whisper"]
+        self.asr_device = asr_config.get("device", "auto")
+        self.asr_compute_type = asr_config.get("compute_type", "float16")
+        self.asr_beam_size = int(asr_config.get("beam_size", 5))
+        self.asr_buffer_trimming = asr_config.get(
+            "buffer_trimming", "sentence"
+        )  # ["sentence", "segment"]
+        self.asr_buffer_trimming_sec = float(asr_config.get("buffer_trimming_sec", 15.0))
+
         # Frame Vectorizer配置
         frame_config = self._config.get("frame_vectorizer", {})
         self.frame_log_file = frame_config.get("log_file", "logs/frame_vectorizer.log")
@@ -131,6 +160,7 @@ class Config:
         self.memory_faiss_index_type = memory_config.get("faiss_index_type", "FlatIP")
         self.memory_faiss_file_path = memory_config.get("faiss_file_path", "database/database.faiss")
         self.memory_databasemap_file_path = memory_config.get("databasemap_file_path", "database/databasemap.json")
+        self.memory_srt_file_path = memory_config.get("srt_file_path", "database/subtitles.srt")
         self.memory_dimension = memory_config.get("dimension", 512)
         self.memory_topk = memory_config.get("topk", 5)
         self.memory_mode = memory_config.get("mode", "both")  # ["only_query", "only_inject", "both"]
@@ -230,6 +260,14 @@ class Config:
     def get_stream_config(self):
         """获取 stream_input 配置字典。"""
         return dict(self._config.get("stream_input") or {})
+
+    def get_audio_config(self):
+        """获取 audio_input 配置字典。"""
+        return dict(self._config.get("audio_input") or {})
+
+    def get_asr_config(self):
+        """获取 asr 配置字典。"""
+        return dict(self._config.get("asr") or {})
     
     def get_frame_config(self):
         """获取frame_vectorizer配置"""
