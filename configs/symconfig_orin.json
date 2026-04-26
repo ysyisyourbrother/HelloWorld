@@ -57,7 +57,7 @@
     "model_path": "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2",
     "device": "cuda"
   },
-  "api_server_e": {
+  "client": {
     "log_file": "logs/symphony_edge_orin_api_e.log",
     "cloud_server_url": "127.0.0.1:9000",
     "test_mode": false

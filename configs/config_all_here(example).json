@@ -52,13 +52,13 @@
     "num_beams": 1,
     "do_sample": false
   },
-  "api_server_e": {
-    "log_file": "logs/api_server_e.log",
+  "client": {
+    "log_file": "logs/client.log",
     "cloud_server_url": "127.0.0.1:9000",
     "test_mode": false
   },
-  "api_server_c": {
-    "log_file": "logs/api_server_c.log",
+  "server_simulation": {
+    "log_file": "logs/server_simulation.log",
     "host": "127.0.0.1",
     "port": 9000
   },

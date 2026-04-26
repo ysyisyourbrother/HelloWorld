@@ -127,9 +127,9 @@ class VenusSystemEdge:
             self.video_input = VideoInputOnline(self.config)
             self.memory_manager = MemoryManagerOnline(self.config)
             self.memory_manager.set_frame_queue(self.video_input.frame_queue)
-        from src.api.api_server_e import APIServerE
+        from src.api.client import QueryClient
 
-        self.api_server = APIServerE(self.config)
+        self.api_server = QueryClient(self.config)
         # VideoInput -> MemoryManager 注入线程；APIServerE 同步调用 MemoryManager 查询
         self.api_server.set_memory_manager(self.memory_manager)
         
@@ -141,9 +141,9 @@ class VenusSystemEdge:
             raise FileNotFoundError("query_with_memory 模式需要已存在的向量文件和 databasemap 文件")
 
         self.memory_manager = MemoryManagerOnline(self.config)
-        from src.api.api_server_e import APIServerE
+        from src.api.client import QueryClient
 
-        self.api_server = APIServerE(self.config)
+        self.api_server = QueryClient(self.config)
         # 查询模式无需启动 MemoryManager 子线程，按需在 APIServerE 查询时同步检索
         self.memory_manager.init_sync()
         self.api_server.set_memory_manager(self.memory_manager)

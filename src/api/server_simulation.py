@@ -73,7 +73,7 @@ class QueryServiceServicer(query_service_pb2_grpc.QueryServiceServicer):
         self.logger.info(f"查询 {query_id} 处理完成")
         return grpc_response
     
-class APIServerC:
+class APIServer:
     """云端 gRPC API 服务器"""
     
     def __init__(self, config: Config = None):
@@ -85,13 +85,13 @@ class APIServerC:
         """
         if config is None:
             config = Config()
-        self.log_file = config.api_c_log_file
-        self.server_host = config.server_host
-        self.server_port = config.server_port
+        self.log_file = config.server_simu_log_file
+        self.server_simu_host = config.server_simu_host
+        self.server_simu_port = config.server_simu_port
         
         self.prompt_queue: Optional[mp.Queue] = None # reasoner的输入
         self.result_queue: Optional[mp.Queue] = None # reasoner的输出
-        self.server: Optional[grpc.Server] = None
+        self.grpc_server: Optional[grpc.Server] = None
         self.running = False
         
         self._set_logger()
@@ -157,7 +157,7 @@ class APIServerC:
             ('grpc.max_send_message_length', max_msg_size),
             ('grpc.max_receive_message_length', max_msg_size),
         ]
-        self.server = grpc.server(
+        self.grpc_server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=10),
             options=options
         )
@@ -165,26 +165,26 @@ class APIServerC:
         # 添加服务
         query_service_pb2_grpc.add_QueryServiceServicer_to_server(
             QueryServiceServicer(self.prompt_queue, self.result_queue, self.logger),
-            self.server
+            self.grpc_server
         )
         
         # 监听端口
-        server_host = self.server_host
-        server_port = self.server_port
+        server_host = self.server_simu_host
+        server_port = self.server_simu_port
         listen_addr = f"{server_host}:{server_port}"
-        self.server.add_insecure_port(listen_addr)
+        self.grpc_server.add_insecure_port(listen_addr)
         
         # 启动服务器
-        self.server.start()
+        self.grpc_server.start()
         self.running = True
         self.logger.info(f"gRPC 服务器已启动，监听地址: {listen_addr}")
         
         # 等待服务器关闭
-        self.server.wait_for_termination()
+        self.grpc_server.wait_for_termination()
     
     def stop(self):
         """停止 gRPC 服务器"""
-        if self.server is not None:
-            self.server.stop(grace=5)
+        if self.grpc_server is not None:
+            self.grpc_server.stop(grace=5)
             self.running = False
             self.logger.info("gRPC 服务器已停止")

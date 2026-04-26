@@ -23,7 +23,7 @@ from proto import query_service_pb2
 from proto import query_service_pb2_grpc
 
 
-class APIServerE:
+class QueryClient:
     """边端 gRPC API 客户端"""
     
     def __init__(self, config: Config = None):
@@ -35,10 +35,10 @@ class APIServerE:
         """
         if config is None:
             config = Config()
-        self.log_file = config.api_e_log_file
-        self.test_mode = config.api_e_test_mode
+        self.log_file = config.client_log_file
+        self.test_mode = config.client_test_mode
 
-        self.cloud_server_url = config.cloud_server_url
+        self.server_simu_url = config.client_simu_url_of_server
         self.frame_decode_backend = getattr(config, "frame_decode_backend", "cv2")
         
         self.grpc_channel: Optional[grpc.Channel] = None
@@ -95,7 +95,7 @@ class APIServerE:
     
     def _connect_to_cloud(self):
         """连接到云端 gRPC 服务器"""
-        cloud_server_url = self.cloud_server_url
+        cloud_server_url = self.server_simu_url
         # 从 URL 中提取主机和端口
         # 假设格式为 "grpc://host:port" 或 "http://host:port" 或 "host:port"
         if cloud_server_url.startswith("grpc://"):
@@ -295,3 +295,4 @@ class APIServerE:
 
     def check_cloud_status(self):
         return self.running
+

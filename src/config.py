@@ -209,20 +209,21 @@ class Config:
         # 单次推理最多送入的图像张数；超出则沿序列均匀稀疏采样。None 或 <=0 表示不限制
         self.reasoner_max_img_num = reasoner_config.get("max_img_num", 20)
 
-        # API Server E配置
-        api_e_config = self._config.get("api_server_e", {})
-        self.cloud_server_url = api_e_config.get("cloud_server_url", "127.0.0.1:9000")
-        self.api_e_log_file = api_e_config.get("log_file", "logs/api_server_e.log")
-        self.api_e_test_mode = api_e_config.get("test_mode", False)
+        # APIServerE配置
+        client_config = self._config.get("client", {})
+        self.client_simu_url_of_server = client_config.get("cloud_server_url", "127.0.0.1:9000")
+        self.client_log_file = client_config.get("log_file", "logs/client.log")
+        self.client_test_mode = client_config.get("test_mode", False)
         
-        # API Server C配置
-        api_c_config = self._config.get("api_server_c", {})
-        self.api_c_log_file = api_c_config.get("log_file", "logs/api_server_c.log")
-        self.server_host = api_c_config.get("host", "127.0.0.1")
-        self.server_port = api_c_config.get("port", 9000)
+        # APIServerC配置
+        server_simu_config = self._config.get("server_simulation", {})
+        self.server_simu_log_file = server_simu_config.get("log_file", "logs/server_simulation.log")
+        self.server_simu_host = server_simu_config.get("host", "127.0.0.1")
+        self.server_simu_port = server_simu_config.get("port", 9000)
         
-        # Cloud Server配置
+        # Cloud Server配置：manual=自建 APIServerC+本地 Reasoner；api=厂商云端 HTTP 多模态 API（如 DashScope）
         cloud_config = self._config.get("cloud_server", {})
+        self.cloud_server_type = cloud_config.get("cloud_server_type", "manual")
 
         # Edge 配置
         edge_config = self._config.get("edge", {})

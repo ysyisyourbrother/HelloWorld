@@ -2,6 +2,17 @@
   "video_input": {
     "original_fps": false
   },
+  "audio_input": {
+    "log_file": "logs/audio_input.log",
+    "source_path": "",
+    "stream_as_chunks": false,
+    "chunk_duration_sec": 1.0,
+    "sim_comp_unaware": false
+  },
+  "asr": {
+    "log_file": "logs/asr.log",
+    "language": "auto"
+  },
   "frame_vectorizer": {
   },
   "memory_manager": {

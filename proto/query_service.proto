@@ -7,7 +7,7 @@ package query_service;
 //
 // 【旧路径 · 不变】
 //   - 仅 `memory_results`（字段 2）非空：bytes 为 pickle 序列化的多帧数组
-//     （与现网 api_server_e / api_server_c 行为一致），新字段全部留空即可。
+//     （与现网 client / server_simulation 行为一致），新字段全部留空即可。
 //
 // 【新路径 · 压缩视频】
 //   - `memory_clip_inputs`（字段 5）：边端上传若干段完整容器字节（约定为 MP4），

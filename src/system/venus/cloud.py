@@ -9,7 +9,7 @@ from typing import Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from src.config import Config
-from src.api.api_server_c import APIServerC
+from src.api.server_simulation import APIServer
 from src.llm.reasoner import ReasonerOnline
 
 
@@ -28,7 +28,7 @@ class VenusSystemCloud:
         self.config = config
         
         # 组件
-        self.api_server: Optional[APIServerC] = None
+        self.api_server: Optional[APIServer] = None
         self.reasoner: Optional[ReasonerOnline] = None
         
         # 状态
@@ -71,7 +71,7 @@ class VenusSystemCloud:
         result_queue = self.reasoner.result_queue
         
         # 初始化 API 服务器并设置队列
-        self.api_server = APIServerC(self.config)
+        self.api_server = APIServer(self.config)
         self.api_server.set_prompt_queue(prompt_queue)
         self.api_server.set_result_queue(result_queue)
     
@@ -94,7 +94,7 @@ class VenusSystemCloud:
             self.reasoner.start()
         
         # 启动 API 服务器（阻塞调用）
-        self.logger.info(f"启动 gRPC API 服务器 (监听 {self.config.server_host}:{self.config.server_port})...")
+        self.logger.info(f"启动 gRPC API 服务器 (监听 {self.config.server_simu_host}:{self.config.server_simu_port})...")
         self.running = True
         
         try:

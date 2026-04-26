@@ -4,6 +4,7 @@
 *.out
 *.pid
 *.mdc
+export_api_key.sh
 .vscode/
 database
 database/
@@ -13,6 +14,9 @@ motivation_results*/
 motivation_results_symphony*/
 test_rtsp/recordings/
 logs/
+# Temp
+src/agent/
+src/*/*.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

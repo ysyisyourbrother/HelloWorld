@@ -1,6 +1,6 @@
 import argparse
 import os
-from src.api.api_server_e import APIServerE
+from src.api.client import QueryClient
 from src.config import Config
 
 
@@ -8,8 +8,8 @@ def qa_loop_with_image(dialog_id: int = 1, cloud_url: str = None):
     """在指定 dialog_id 下进行「问题 + 图片」询问循环。输入空行或 'quit' 退出。"""
     config = Config()
     if cloud_url:
-        config.cloud_server_url = cloud_url
-    client = APIServerE(config)
+        config.client_simu_url_of_server = cloud_url
+    client = QueryClient(config)
     client.start()
     print(f"对话 ID={dialog_id}，依次输入问题和图片路径；空行或 quit 退出\n")
     while True:
@@ -36,8 +36,8 @@ def single_query(query_text: str, image_path: str, dialog_id: int = 1, cloud_url
     """单次查询：指定问题和图片路径，发送一次请求。"""
     config = Config()
     if cloud_url:
-        config.cloud_server_url = cloud_url
-    client = APIServerE(config)
+        config.client_simu_url_of_server = cloud_url
+    client = QueryClient(config)
     client.start()
     if not os.path.isfile(image_path):
         print(f"错误: 文件不存在 [{image_path}]")

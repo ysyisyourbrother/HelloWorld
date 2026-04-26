@@ -1,14 +1,14 @@
 import sys
 import argparse
-from src.api.api_server_e import APIServerE
+from src.api.client import QueryClient
 from src.config import Config
 
 def qa_loop_example(dialog_id: int = 1, cloud_url: str = None):
     """在指定 dialog_id 下进行用户询问 -> 获得回答的循环。输入空行或 'quit' 退出。"""
     config = Config()
     if cloud_url:
-        config.cloud_server_url = cloud_url
-    client = APIServerE(config)
+        config.client_simu_url_of_server = cloud_url
+    client = QueryClient(config)
     client.start()
     print(f"对话 ID={dialog_id}，输入问题后回车；空行或 quit 退出\n")
     while True:
