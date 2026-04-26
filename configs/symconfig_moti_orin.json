@@ -10,9 +10,6 @@
     "save_retrieved_frames": true,
     "save_injected_frames": false
   },
-  "reasoner": {
-    "max_history_turns": 10
-  },
   "benchmark": {
     "db_dir_egoschema": "motivation_results_symphony/memory/egoschema",
     "db_dir_videomme": "motivation_results_symphony/memory/videomme",

@@ -29,7 +29,7 @@ from src.benchmark.prompt_template import build_rag_prompt_with_frames
 from src.memory.frame.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
-from src.llm.reasoner import ReasonerBase, QueryRequest
+from src.llm.reasoner import ReasonerLocal, QueryRequest
 
 
 class VenusSystemMoti:
@@ -46,7 +46,7 @@ class VenusSystemMoti:
         self.frame_vectorizer: Optional[FrameVectorizer] = None
         self.memory_manager: Optional[MemoryManagerBase] = None
         self.query_vectorizer: Optional[QueryVectorizer] = None
-        self.reasoner: Optional[ReasonerBase] = None
+        self.reasoner: Optional[ReasonerLocal] = None
 
         # 从 config 读取（兼容 benchmark 配置段）
         self.dataset_path = getattr(config, "benchmark_dataset_path", "local_datasets")
@@ -255,10 +255,10 @@ class VenusSystemMoti:
             "skipped": False,
         }
 
-    def _get_reasoner(self) -> ReasonerBase:
+    def _get_reasoner(self) -> ReasonerLocal:
         """懒加载 Reasoner"""
         if self.reasoner is None:
-            self.reasoner = ReasonerBase(self.config)
+            self.reasoner = ReasonerLocal(self.config)
             self.logger.info("已初始化 Reasoner（同步推理）")
         return self.reasoner
 

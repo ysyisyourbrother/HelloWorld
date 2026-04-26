@@ -30,7 +30,7 @@ from src.benchmark.prompt_template import build_rag_prompt_with_frames
 from src.memory.frame.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
-from src.llm.reasoner import ReasonerBase, QueryRequest
+from src.llm.reasoner import ReasonerLocal, QueryRequest
 from src.video_utils.about_frame import extract_frame_by_index
 
 
@@ -48,7 +48,7 @@ class VenusSystemBench:
         self.frame_vectorizer: Optional[FrameVectorizer] = None
         self.memory_manager: Optional[MemoryManagerBase] = None
         self.query_vectorizer: Optional[QueryVectorizer] = None
-        self.reasoner: Optional[ReasonerBase] = None  # 云端推理，benchmark 直接变量传递
+        self.reasoner: Optional[ReasonerLocal] = None  # 云端推理，benchmark 直接变量传递
 
         # 数据集路径（支持 local_datasets 软链接）
         self.dataset_path = getattr(
@@ -261,10 +261,10 @@ class VenusSystemBench:
             "skipped": False,
         }
 
-    def _get_reasoner(self) -> ReasonerBase:
+    def _get_reasoner(self) -> ReasonerLocal:
         """懒加载 Reasoner（benchmark 云边一体，直接变量传递，无需 gRPC）"""
         if self.reasoner is None:
-            self.reasoner = ReasonerBase(self.config)
+            self.reasoner = ReasonerLocal(self.config)
             self.logger.debug("已初始化 Reasoner（同步推理，无 gRPC）")
         return self.reasoner
 

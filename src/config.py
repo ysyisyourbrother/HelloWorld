@@ -184,30 +184,31 @@ class Config:
         _rit = str(memory_config.get("retrieve_item_type", "frame") or "frame").strip().lower()
         self.memory_retrieve_item_type = _rit if _rit in ("frame", "clip") else "frame"
         
-        # Reasoner配置
-        reasoner_config = self._config.get("reasoner", {})
-        self.reasoner_log_file = reasoner_config.get("log_file", "logs/reasoner.log")
-        self.reasoner_test_mode = reasoner_config.get("test_mode", False)
-        self.reasoner_test_response = reasoner_config.get("test_response", "这是测试模式的响应文本")
-        self.reasoner_model_path = reasoner_config.get("model_path", "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2")
-        self.reasoner_model_name = reasoner_config.get("model_name", "llava_qwen")
-        self.reasoner_model_base = reasoner_config.get("model_base", None)
-        self.reasoner_torch_dtype = reasoner_config.get("torch_dtype", "bfloat16")
-        self.reasoner_load_in_8bit = reasoner_config.get("load_in_8bit", False)
-        self.reasoner_load_in_4bit = reasoner_config.get("load_in_4bit", False)
-        self.reasoner_device_map = reasoner_config.get("device_map", "auto")
-        self.reasoner_attn_implementation = reasoner_config.get("attn_implementation", "eager")
-        self.reasoner_mm_spatial_pool_mode = reasoner_config.get("mm_spatial_pool_mode", "average")
-        self.reasoner_conv_template = reasoner_config.get("conv_template", "qwen_1_5")
-        self.reasoner_device = reasoner_config.get("device", "cuda")
-        self.reasoner_max_new_tokens = reasoner_config.get("max_new_tokens", 128)
-        self.reasoner_temperature = reasoner_config.get("temperature", 0.0)
-        self.reasoner_top_p = reasoner_config.get("top_p", 0.1)
-        self.reasoner_num_beams = reasoner_config.get("num_beams", 1)
-        self.reasoner_do_sample = reasoner_config.get("do_sample", False)
-        self.reasoner_max_history_turns = reasoner_config.get("max_history_turns", 10)  # None 表示不限制轮数
+        # ReasonerLocal配置
+        reasoner_local_config = self._config.get("reasoner_local", {})
+        self.reasoner_local_log_file = reasoner_local_config.get("log_file", "logs/reasoner.log")
+        self.reasoner_local_test_mode = reasoner_local_config.get("test_mode", False)
+        self.reasoner_local_test_response = reasoner_local_config.get("test_response", "这是测试模式的响应文本")
+        self.reasoner_local_model_path = reasoner_local_config.get("model_path", "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2")
+        self.reasoner_local_model_name = reasoner_local_config.get("model_name", "llava_qwen")
+        self.reasoner_local_model_base = reasoner_local_config.get("model_base", None)
+        self.reasoner_local_torch_dtype = reasoner_local_config.get("torch_dtype", "bfloat16")
+        self.reasoner_local_load_in_8bit = reasoner_local_config.get("load_in_8bit", False)
+        self.reasoner_local_load_in_4bit = reasoner_local_config.get("load_in_4bit", False)
+        self.reasoner_local_device_map = reasoner_local_config.get("device_map", "auto")
+        self.reasoner_local_attn_implementation = reasoner_local_config.get("attn_implementation", "eager")
+        self.reasoner_local_mm_spatial_pool_mode = reasoner_local_config.get("mm_spatial_pool_mode", "average")
+        self.reasoner_local_conv_template = reasoner_local_config.get("conv_template", "qwen_1_5")
+        self.reasoner_local_device = reasoner_local_config.get("device", "cuda")
+        self.reasoner_local_max_new_tokens = reasoner_local_config.get("max_new_tokens", 128)
+        self.reasoner_local_temperature = reasoner_local_config.get("temperature", 0.0)
+        self.reasoner_local_top_p = reasoner_local_config.get("top_p", 0.1)
+        self.reasoner_local_num_beams = reasoner_local_config.get("num_beams", 1)
+        self.reasoner_local_do_sample = reasoner_local_config.get("do_sample", False)
         # 单次推理最多送入的图像张数；超出则沿序列均匀稀疏采样。None 或 <=0 表示不限制
-        self.reasoner_max_img_num = reasoner_config.get("max_img_num", 20)
+        self.reasoner_local_max_img_num = reasoner_local_config.get("max_img_num", 20)
+
+
 
         # APIServerE配置
         client_config = self._config.get("client", {})

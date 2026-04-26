@@ -62,7 +62,7 @@ class QueryClient:
             except Exception as e:
                 pass
 
-        self.logger = logging.getLogger(name='APIServerE')
+        self.logger = logging.getLogger(name='QueryClient')
         self.logger.setLevel(logging.DEBUG)
         
         # 控制台处理器
@@ -295,4 +295,3 @@ class QueryClient:
 
     def check_cloud_status(self):
         return self.running
-

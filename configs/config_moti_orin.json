@@ -10,8 +10,7 @@
     "save_retrieved_frames": true,
     "save_injected_frames": false
   },
-  "reasoner": {
-    "max_history_turns": 10
+  "reasoner_local": {
   },
   "benchmark": {
     "db_dir_egoschema": "motivation_results/memory/egoschema",

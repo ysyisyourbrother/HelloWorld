@@ -20,8 +20,5 @@
     "databasemap_file_path": "motivation_results/memory/videomme/short/json/44ivpEIcBhE.json",
     "save_retrieved_frames": true,
     "save_injected_frames": false
-  },
-  "reasoner": {
-    "max_history_turns": 10
   }
 }

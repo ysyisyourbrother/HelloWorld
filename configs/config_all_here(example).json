@@ -30,9 +30,8 @@
     "save_retrieved_frames": true,
     "save_injected_frames": false
   },
-  "reasoner": {
+  "reasoner_local": {
     "log_file": "logs/reasoner.log",
-    "max_history_turns": 10,
     "test_mode": false,
     "test_response": "这是测试模式的响应文本",
     "model_path": "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2",

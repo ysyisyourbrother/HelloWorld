@@ -77,7 +77,7 @@ class QueryResponse:
     timestamp: float             # 时间戳
 
 
-class ReasonerBase:
+class ReasonerLocal:
     def __init__(self, config: Config = None):
         """
         初始化Reasoner模块
@@ -90,30 +90,29 @@ class ReasonerBase:
             config = Config()
         
         # 测试模式配置
-        self.test_mode = config.reasoner_test_mode
-        self.test_response = config.reasoner_test_response
+        self.test_mode = config.reasoner_local_test_mode
+        self.test_response = config.reasoner_local_test_response
         
         # 从Config对象获取配置
-        self.log_file = config.reasoner_log_file
-        self.model_path = config.reasoner_model_path
-        self.model_name = config.reasoner_model_name
-        self.model_base = config.reasoner_model_base
-        self.torch_dtype = config.reasoner_torch_dtype
-        self.load_in_8bit = config.reasoner_load_in_8bit
-        self.load_in_4bit = config.reasoner_load_in_4bit
-        self.device_map = config.reasoner_device_map
-        self.attn_implementation = config.reasoner_attn_implementation
-        self.mm_spatial_pool_mode = config.reasoner_mm_spatial_pool_mode
-        self.conv_template = config.reasoner_conv_template
-        self.device = config.reasoner_device
+        self.log_file = config.reasoner_local_log_file
+        self.model_path = config.reasoner_local_model_path
+        self.model_name = config.reasoner_local_model_name
+        self.model_base = config.reasoner_local_model_base
+        self.torch_dtype = config.reasoner_local_torch_dtype
+        self.load_in_8bit = config.reasoner_local_load_in_8bit
+        self.load_in_4bit = config.reasoner_local_load_in_4bit
+        self.device_map = config.reasoner_local_device_map
+        self.attn_implementation = config.reasoner_local_attn_implementation
+        self.mm_spatial_pool_mode = config.reasoner_local_mm_spatial_pool_mode
+        self.conv_template = config.reasoner_local_conv_template
+        self.device = config.reasoner_local_device
         
         # 生成参数
-        self.max_new_tokens = config.reasoner_max_new_tokens
-        self.temperature = config.reasoner_temperature
-        self.top_p = config.reasoner_top_p
-        self.num_beams = config.reasoner_num_beams
-        self.do_sample = config.reasoner_do_sample
-        self.max_history_turns = getattr(config, "reasoner_max_history_turns", None)
+        self.max_new_tokens = config.reasoner_local_max_new_tokens
+        self.temperature = config.reasoner_local_temperature
+        self.top_p = config.reasoner_local_top_p
+        self.num_beams = config.reasoner_local_num_beams
+        self.do_sample = config.reasoner_local_do_sample
         self.max_img_num = getattr(config, "reasoner_max_img_num", None)
 
         # 模型相关
@@ -357,8 +356,6 @@ class ReasonerBase:
 
             question = self._build_prompt(query_text, has_frames=(frames_tensor is not None))
             history = self.dialog_histories.get(dialog_id, [])
-            if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
-                history = history[-self.max_history_turns:]
 
             start_time = time.time()
             result_text = self._inference_with_history(question, frames_tensor, history=history)
@@ -370,8 +367,6 @@ class ReasonerBase:
             if dialog_id != 0:
                 history_user_msg = self._strip_image_placeholders_for_history(question)
                 self.dialog_histories.setdefault(dialog_id, []).append((history_user_msg, result_text))
-                if getattr(self, "max_history_turns", None) is not None and self.max_history_turns > 0:
-                    self.dialog_histories[dialog_id] = self.dialog_histories[dialog_id][-self.max_history_turns:]
 
             return QueryResponse(
                 query_id=query_id,
@@ -388,7 +383,7 @@ class ReasonerBase:
                 timestamp=time.time()
             )
 
-class ReasonerOnline(ReasonerBase):
+class ReasonerLocalOnline(ReasonerLocal):
     """在线推理类：在 Base 同步能力上提供队列与子进程处理。"""
 
     def __init__(self, config: Config = None):

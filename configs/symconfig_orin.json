@@ -52,7 +52,6 @@
   },
   "reasoner": {
     "log_file": "logs/symphony_edge_orin_reasoner.log",
-    "max_history_turns": 10,
     "test_mode": false,
     "model_path": "/mnt/share/cache/models/LLaVA-Video-7B-Qwen2",
     "device": "cuda"

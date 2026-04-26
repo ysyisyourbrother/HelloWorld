@@ -14,6 +14,7 @@ motivation_results*/
 motivation_results_symphony*/
 test_rtsp/recordings/
 logs/
+test_llm/
 # Temp
 src/agent/
 src/*/*.md
