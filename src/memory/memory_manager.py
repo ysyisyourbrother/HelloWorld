@@ -86,7 +86,6 @@ class MemoryManagerBase:
 
         self._frame_encoder: Optional[FrameVectorizer] = None
         self._query_encoder: Optional[QueryVectorizer] = None
-        self._asr_encoder = None
         self._ready_event = threading.Event()
 
         self.running = False
@@ -283,6 +282,188 @@ class MemoryManagerBase:
         if self.srt is None:
             return None
         return self.srt.get_sentence_by_time(t)
+
+    @staticmethod
+    def _score_segment_keywords(
+        text: str,
+        compilers: Sequence[Tuple[str, Any]],
+    ) -> Tuple[int, int, float, List[str]]:
+        """
+        对一段字幕文本按关键词列表统计：命中词种数、总命中次数、密度（种数/长度）、命中的词列表。
+        compilers 为 (词, 已编译正则) 列表，与 ThreadSafeSRT 检索规则一致。
+        """
+        if not text or not compilers:
+            return 0, 0, 0.0, []
+        matched_words: List[str] = []
+        total_hits = 0
+        for w, pat in compilers:
+            occ = list(pat.finditer(text))
+            if occ:
+                matched_words.append(w)
+                total_hits += len(occ)
+        distinct = len(matched_words)
+        dens = float(distinct) / float(len(text)) if text else 0.0
+        return distinct, total_hits, dens, matched_words
+
+    def retrieve_segment_by_word(
+        self,
+        keywords: Sequence[str],
+        top_k: Optional[int] = None,
+        whole_word: bool = True,
+        case_sensitive: bool = False,
+        use_sentence: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        根据关键词列表在 SRT 字幕索引中检索最相关的若干片段。
+
+        默认将每条命中 cue 用中点时间扩展为 ``get_sentence_by_time`` 的句子范围并去重；
+        ``use_sentence=False`` 时仅在单条 cue 上评分。
+
+        排序：命中关键词种数降序，其次总命中次数降序，再次关键词密度（种数/文本长度）降序。
+        """
+        # 把“脏输入”变成“可检索的 uniq_kw”，并在无数据/无关键词时尽早返回
+        if self.srt is None:
+            return []
+        uniq_kw: List[str] = []
+        seen_kw = set()
+        for raw in keywords:
+            if raw is None:
+                continue
+            w = str(raw).strip()
+            if not w or w in seen_kw:
+                continue
+            seen_kw.add(w)
+            uniq_kw.append(w)
+        if not uniq_kw:
+            return []
+        if len(self.srt) == 0:
+            return []
+
+        # 准备匹配器 + 先找出所有候选字幕下标
+        k = top_k if top_k is not None else self.memory_topk
+        compilers: List[Tuple[str, Any]] = [
+            (
+                w,
+                ThreadSafeSRT._compile_word_pattern(
+                    w, whole_word=whole_word, case_sensitive=case_sensitive
+                ),
+            )
+            for w in uniq_kw
+        ]
+
+        hit_indices: List[int] = []
+        for w in uniq_kw:
+            hit_indices.extend(
+                self.srt.search_word_idx(
+                    w, whole_word=whole_word, case_sensitive=case_sensitive
+                )
+            )
+        if not hit_indices:
+            return []
+
+        n_cues = len(self.srt)
+        rows: List[Tuple[Tuple[int, int, float], Dict[str, Any]]] = []
+
+        if use_sentence:
+            by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
+            for idx in sorted(set(hit_indices)):
+                if idx < 0 or idx >= n_cues:
+                    continue
+                cue = self.srt[idx]
+                mid_t = (float(cue["start_time"]) + float(cue["end_time"])) * 0.5
+                sent = self.srt.get_sentence_by_time(mid_t)
+                if sent is None:
+                    continue
+                key = (int(sent["start_idx"]), int(sent["end_idx"]))
+                if key not in by_span:
+                    by_span[key] = sent
+            for sent in by_span.values():
+                text = str(sent.get("text") or "")
+                d, th, dens, matched = self._score_segment_keywords(text, compilers)
+                if d == 0:
+                    continue
+                rows.append(
+                    (
+                        (-d, -th, -dens),
+                        {
+                            "start_time": float(sent["start_time"]),
+                            "end_time": float(sent["end_time"]),
+                            "text": text,
+                            "start_idx": int(sent["start_idx"]),
+                            "end_idx": int(sent["end_idx"]),
+                            "items": sent.get("items"),
+                            "keyword_match_count": d,
+                            "total_keyword_hits": th,
+                            "keyword_density": dens,
+                            "matched_keywords": matched,
+                        },
+                    )
+                )
+        else:
+            by_idx: Dict[int, Dict[str, Any]] = {}
+            for idx in sorted(set(hit_indices)):
+                if idx < 0 or idx >= n_cues:
+                    continue
+                if idx not in by_idx:
+                    by_idx[idx] = self.srt[idx]
+            for idx, cue in by_idx.items():
+                text = str(cue.get("text") or "")
+                d, th, dens, matched = self._score_segment_keywords(text, compilers)
+                if d == 0:
+                    continue
+                rows.append(
+                    (
+                        (-d, -th, -dens),
+                        {
+                            "start_time": float(cue["start_time"]),
+                            "end_time": float(cue["end_time"]),
+                            "text": text,
+                            "start_idx": idx,
+                            "end_idx": idx,
+                            "items": None,
+                            "keyword_match_count": d,
+                            "total_keyword_hits": th,
+                            "keyword_density": dens,
+                            "matched_keywords": matched,
+                        },
+                    )
+                )
+
+        rows.sort(key=lambda r: r[0])
+        return [r[1] for r in rows[:k]]
+
+    def retrieve_segment_by_period(
+        self,
+        start_t: Optional[float] = None,
+        end_t: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        按时间区间从 SRT 中检索句子片段，返回与 ``retrieve_segment_by_word`` 类似的结构。
+        该接口只按时间过滤，不包含任何关键词匹配、排序或 top-k 截断逻辑。
+        """
+        if self.srt is None:
+            return []
+
+        sentences = self.srt.get_sentence_by_period(start_t=start_t, end_t=end_t)
+        if not sentences:
+            return []
+
+        rows = [
+            {
+                "start_time": float(sent["start_time"]),
+                "end_time": float(sent["end_time"]),
+                "text": str(sent.get("text") or ""),
+                "start_idx": int(sent["start_idx"]),
+                "end_idx": int(sent["end_idx"]),
+                "items": sent.get("items"),
+                "keyword_match_count": 0,
+                "total_keyword_hits": 0,
+                "keyword_density": 0.0,
+                "matched_keywords": [],
+            }
+            for sent in sentences
+        ]
+        return rows
     
     def _add_vector(self, vector_data: FrameVectorData):
         """添加单个向量到数据库"""
