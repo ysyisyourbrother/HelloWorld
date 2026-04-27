@@ -17,7 +17,8 @@ logs/
 test_llm/
 # Temp
 src/agent/
-src/*/*.md
+*_plan.md
+*_design.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
