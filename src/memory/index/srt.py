@@ -15,6 +15,10 @@ class ThreadSafeSRT:
     _SENTENCE_ENDINGS = (".", "!", "?", "。", "！", "？")
 
     def __init__(self):
+        '''
+        初始化字幕数据容器与线程锁。
+        维护时间轴、文本列表和增量保存位置。
+        '''
         self.start_time: List[float] = []
         self.end_time: List[float] = []
         self.texts: List[str] = []
@@ -24,6 +28,10 @@ class ThreadSafeSRT:
 
     @contextmanager
     def acquire(self):
+        '''
+        提供线程安全上下文，统一管理加锁与解锁。
+        用于保护字幕读写操作的并发一致性。
+        '''
         try:
             self._lock.acquire()
             yield self
@@ -32,6 +40,10 @@ class ThreadSafeSRT:
 
     @staticmethod
     def _time_to_seconds(time_str: str) -> float:
+        '''
+        将 SRT 时间行解析为起止秒数。
+        输入格式需为 "HH:MM:SS,ms --> HH:MM:SS,ms"。
+        '''
         match = ThreadSafeSRT._TIME_PATTERN.match(time_str)
         if match is None:
             raise ValueError(f"无效时间行: {time_str}")
@@ -42,6 +54,10 @@ class ThreadSafeSRT:
 
     @staticmethod
     def _seconds_to_time(seconds: float) -> str:
+        '''
+        将秒数格式化为 SRT 时间字符串。
+        输出格式固定为 "HH:MM:SS,ms"。
+        '''
         total_ms = int(round(max(0.0, float(seconds)) * 1000))
         hh = total_ms // 3600000
         rem = total_ms % 3600000
@@ -52,10 +68,18 @@ class ThreadSafeSRT:
         return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
 
     def _refresh_whole_texts(self):
+        '''
+        基于当前字幕片段重建整体文本缓存。
+        便于进行全局文本读取或后续扩展检索。
+        '''
         self.whole_texts = " ".join(self.texts).strip()
 
     @staticmethod
     def _normalize_item(item: Dict[str, Any]) -> Tuple[float, float, str]:
+        '''
+        校验并规范化单条字幕输入。
+        返回统一的 (start_time, end_time, text) 三元组。
+        '''
         if not isinstance(item, dict):
             raise TypeError("字幕条目必须是字典")
         if "start_time" not in item or "end_time" not in item or "text" not in item:
@@ -68,6 +92,10 @@ class ThreadSafeSRT:
         return st, et, txt
 
     def load_local(self, path: str) -> bool:
+        '''
+        从本地 SRT 文件加载字幕到内存索引。
+        文件不存在时返回 False，成功解析并写入返回 True。
+        '''
         if not os.path.isfile(path):
             return False
 
@@ -109,6 +137,10 @@ class ThreadSafeSRT:
         return True
 
     def save_local(self, path: str):
+        '''
+        将新增字幕以增量方式写入本地 SRT 文件。
+        仅保存 latest_idx 之后的条目并更新保存游标。
+        '''
         with self.acquire():
             items = list(
                 zip(
@@ -145,6 +177,10 @@ class ThreadSafeSRT:
     def append_subtitle(
         self, item_or_items: Union[Dict[str, Any], Sequence[Dict[str, Any]]]
     ):
+        '''
+        追加一条或多条字幕到内存索引。
+        自动做输入标准化并刷新整体文本缓存。
+        '''
         if isinstance(item_or_items, dict):
             items = [item_or_items]
         else:
@@ -161,6 +197,10 @@ class ThreadSafeSRT:
             self._refresh_whole_texts()
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
+        '''
+        按索引读取单条字幕信息。
+        支持负索引并返回包含时间与文本的字典。
+        '''
         with self.acquire():
             if idx < 0:
                 idx += len(self.start_time)
@@ -174,10 +214,18 @@ class ThreadSafeSRT:
             }
 
     def __len__(self) -> int:
+        '''
+        返回当前字幕条目总数。
+        用于快速获知内存索引规模。
+        '''
         with self.acquire():
             return len(self.start_time)
 
     def _locate_idx_by_time(self, t: float) -> Optional[int]:
+        '''
+        根据时间戳定位所属字幕片段索引。
+        若时间不落在任何片段内则返回 None。
+        '''
         if not self.start_time:
             return None
         pos = bisect.bisect_right(self.start_time, t) - 1
@@ -188,6 +236,10 @@ class ThreadSafeSRT:
         return pos
 
     def get_text_by_time(self, t: float) -> Optional[Dict[str, Any]]:
+        '''
+        查询指定时间点对应的字幕片段。
+        命中时返回单条字幕信息，未命中返回 None。
+        '''
         with self.acquire():
             idx = self._locate_idx_by_time(float(t))
             if idx is None:
@@ -200,6 +252,10 @@ class ThreadSafeSRT:
             }
 
     def _sentence_range_for_idx(self, idx: int) -> Tuple[int, int]:
+        '''
+        以给定字幕索引为中心，向两侧扩展句子边界。
+        依据句末标点确定完整句子的起止索引。
+        '''
         left = idx
         while left > 0:
             prev_text = self.texts[left - 1].strip()
@@ -216,6 +272,10 @@ class ThreadSafeSRT:
         return left, right
 
     def _build_sentence(self, left: int, right: int) -> Dict[str, Any]:
+        '''
+        按句子索引范围组装句子结构化结果。
+        包含句子文本、时间范围及组成片段明细。
+        '''
         return {
             "start_idx": left,
             "end_idx": right,
@@ -234,6 +294,10 @@ class ThreadSafeSRT:
         }
 
     def get_sentence_by_time(self, t: float) -> Optional[Dict[str, Any]]:
+        '''
+        查询指定时间点所在的完整句子。
+        先定位片段，再按标点规则扩展并返回句子结果。
+        '''
         with self.acquire():
             idx = self._locate_idx_by_time(float(t))
             if idx is None:
@@ -244,6 +308,10 @@ class ThreadSafeSRT:
     def get_text_by_period(
         self, start_t: Optional[float] = None, end_t: Optional[float] = None
     ) -> List[Dict[str, Any]]:
+        '''
+        查询时间区间内相交的字幕片段列表。
+        支持开区间输入，结果按时间顺序返回。
+        '''
         with self.acquire():
             if not self.start_time:
                 return []
@@ -270,6 +338,10 @@ class ThreadSafeSRT:
     def get_sentence_by_period(
         self, start_t: Optional[float] = None, end_t: Optional[float] = None
     ) -> List[Dict[str, Any]]:
+        '''
+        查询时间区间内涉及到的完整句子列表。
+        自动去重句子范围，避免同一句重复返回。
+        '''
         with self.acquire():
             items = self.get_text_by_period(start_t, end_t)
             if not items:
@@ -285,6 +357,10 @@ class ThreadSafeSRT:
     def _compile_word_pattern(
         word: str, whole_word: bool = True, case_sensitive: bool = False
     ) -> re.Pattern:
+        '''
+        按检索参数构建关键词正则表达式。
+        支持整词匹配与大小写敏感配置。
+        '''
         escaped = re.escape(word)
         pattern = rf"\b{escaped}\b" if whole_word else escaped
         flags = 0 if case_sensitive else re.IGNORECASE
@@ -293,6 +369,10 @@ class ThreadSafeSRT:
     def search_word_idx(
         self, word: str, whole_word: bool = True, case_sensitive: bool = False
     ) -> List[int]:
+        '''
+        检索关键词出现位置对应的字幕索引。
+        同一条字幕多次命中会重复记录该索引。
+        '''
         if not word:
             return []
         matcher = self._compile_word_pattern(word, whole_word, case_sensitive)
@@ -306,6 +386,10 @@ class ThreadSafeSRT:
     def search_word_time(
         self, word: str, whole_word: bool = True, case_sensitive: bool = False
     ) -> List[float]:
+        '''
+        估算关键词在视频中的出现时间点。
+        基于命中字符中心在字幕片段时长中的线性映射。
+        '''
         if not word:
             return []
         matcher = self._compile_word_pattern(word, whole_word, case_sensitive)
