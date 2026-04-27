@@ -11,7 +11,7 @@ requests>=2.25.0
 multiprocessing-logging>=0.3.0
 torch>=1.12.0
 torchvision>=0.13.0
-transformers>=4.20.0
+transformers==4.41.2
 accelerate>=0.16.0
 Pillow>=8.0.0
 # matplotlib>=3.5.0

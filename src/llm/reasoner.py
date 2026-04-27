@@ -32,7 +32,6 @@ from models.llava.constants import (
 )
 from models.llava.conversation import SeparatorStyle, conv_qwen
 
-
 def _uniform_subsample_image_list(images, max_n):
     # type: (List[Any], Optional[int]) -> List[Any]
     """

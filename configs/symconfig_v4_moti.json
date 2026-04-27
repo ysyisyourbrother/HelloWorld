@@ -15,6 +15,7 @@
   },
   "benchmark": {
     "use_cloud": true,
+    "is_local_vlm": true,
     "db_dir_egoschema": "database/egoschema/symphony_v4",
     "db_dir_videomme": "database/videomme/symphony_v4",
     "result_dir": "benchmark_results/symphony_v4"
