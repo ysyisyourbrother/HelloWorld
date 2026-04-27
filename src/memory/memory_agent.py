@@ -14,13 +14,49 @@ def local_tool_use(func):
     return wrapper
 
 
+#   基础实现：
+#   1. self._query_faiss_subset(self, query_vector, top_k, start_id=None, subset_vectors=None) 
+#       根据已有subset_vectors，实现MemoryManagerBase的_query_faiss相同的功能。或者如果没有传入就直接调用_query_faiss
+
+#   有关[Scope]的功能：
+#   1. self._get_subset_by_period(self, start_time, end_time):
+#       该函数通过start_time和end_time去计算start_frameid和end_frameid，然后去调用_get_subset获得子集和初始id
+#   2. self._get_subset_by_event_frame(self, event, scope):
+#       该函数通过一个event字符串去计算query_vector，然后去全局的向量库查询top1帧的位置，作为锚点，scope是一个两个int元素的列表，
+#       比如[-15, 15], 代表锚点的前后15秒的内容作为子集返回（调用_get_subset_by_period）。
+#   3. self._get_subset_by_keyword_subtitle(self, keyword, keywords_location, scope):
+#       该函数通过一个keyword字符串尝试去字幕库搜索出现的时间（使用ThreadSafeSRT的search_word_time函数）。
+#       如果出现了多次，则使用 keywords_location(一个字符串，"first"|"last"|"average")来选择哪一个时间作为锚点，"average"代表所有时间取平均
+#       scope是一个两个int元素的列表，比如[-15, 15], 代表锚点的前后15秒的内容作为子集返回（调用_get_subset_by_period）
+
+#   有关[Search]的功能：
+#   1. self._search_frames_with_multiple_entities(self, entities, top_k, start_id=None, subset_vectors=None)
+#       entities是一个字符串列表，首先会通过文本编码器对里面的所有字符串进行编码获得等列表长度的向量列表。
+#       然后对于其中的所有向量都去和subset_vectors做相似度，最后相加获得总的相似度。
+#       然后去取top_k，最后返回和_retrieve函数类似的scores，metadata_list
+#   2. self._search_frames_just_by_scope(self, budget, start_id=None, subset_vectors=None)
+#       通过start_id和subset_vectors可以算得视频的时间区间。然后该函数均匀采样返回budget个区间内的视频帧的metadata_list
+#   3. self._search_subtitles_with_multiple_keywords(self, keywords, top_k, start_id=None, subset_vectors=None)
+#       通过start_id和subset_vectors可以算得视频的时间区间。然后该函数对于在该时间区间内去执行retrieve_segment_by_word_with_scope
+#   4. self._search_subtitles_just_by_scope(self, budget, start_id=None, subset_vectors=None)
+#       通过start_id和subset_vectors可以算得视频的时间区间。然后该函数在该时间区间内去执行MemoryManagerBase的retrieve_segment_by_period
+
+#   有关[Enhance]的功能：
+#   1. self._enhance_via_OCR(self, retrieved_frames)
+#       该函数通过OCR模型去识别retrieved_frames，返回retrieved_frames等长的列表，列表元素是通过OCR模型识别出来的每帧的文本
+#       不过，由于我还没有选好OCR模型，所以你可以先写好接口，先不实现。
+#   2. self._enhance_via_YOLO(self, retrieved_frames, objects=None)
+#       该函数通过YOLO模型去对retrieved_frames进行目标识别，如果没有提供objects则通过一个文本模板描述识别到的物体。
+#       如果提供了objects(一个列表，元素是物体名称的字符串)，则专门去识别在这上面的物体。
+#       最终返回retrieved_frames等长的列表，列表元素是每帧通过文本模板描述识别到的物体的句子
+#       不过，由于我还没有选好YOLO模型，所以你可以先写好接口，先不实现。
 class MemoryAgent(MemoryManagerBase):
-    """在 MemoryManagerBase 上扩展范围检索等能力。"""
+    """在 MemoryManagerBase 上扩展范围检索等工具能力，以便智能体给出规划。"""
 
     def __init__(self, config: Config = None):
         super().__init__(config=config)
 
-    def _get_subset(self, start_frameid: Optional[int], end_frameid: Optional[int]) -> Tuple[int, np.ndarray]:
+    def _get_faiss_subset(self, start_frameid: Optional[int], end_frameid: Optional[int]) -> Tuple[int, np.ndarray]:
         """根据帧号范围返回 (全局起始id, 子集向量)。无结果时返回 (-1, 空数组)。"""
         if self.index is None or self.vector_count == 0:
             return -1, np.empty((0, 0), dtype=np.float32)
@@ -65,71 +101,3 @@ class MemoryAgent(MemoryManagerBase):
         if subset_vectors.ndim == 1:
             subset_vectors = subset_vectors.reshape(1, -1)
         return start_id, subset_vectors
-
-    @local_tool_use
-    def _query_faiss_by_range(
-        self,
-        query_vector: np.ndarray,
-        top_k: int,
-        start_frameid: int,
-        end_frameid: int,
-    ) -> Tuple[List[int], List[float]]:
-        """
-        在指定帧号范围内检索向量。
-
-        Args:
-            query_vector: 查询向量，shape=[D] 或 [1, D]
-            top_k: 返回前 k 个结果
-            start_frameid: 起始帧号（含）
-            end_frameid: 结束帧号（含）
-
-        Returns:
-            (vector_ids, scores):
-                vector_ids: 原始 FAISS 全局向量 id
-                scores: 与 vector_ids
-        """
-        if self.index is None or self.vector_count == 0 or top_k <= 0:
-            return [], []
-
-        if len(query_vector.shape) == 1:
-            query_vector = query_vector.reshape(1, -1)
-
-        query_row = query_vector[0]
-
-        start_id, subset_vectors = self._get_subset(start_frameid, end_frameid)
-        if start_id < 0 or subset_vectors.size == 0:
-            return [], []
-
-        # 与 _query_faiss 保持一致：FlatL2 返回距离，FlatIP 返回内积
-        if self.faiss_index_type == "FlatIP":
-            subset_scores = np.dot(subset_vectors, query_row)
-            rank_idx = np.argsort(subset_scores)[::-1]
-        else:
-            diff = subset_vectors - query_row
-            subset_scores = np.sum(diff * diff, axis=1)
-            rank_idx = np.argsort(subset_scores)
-
-        k = min(top_k, len(rank_idx))
-        top_idx = rank_idx[:k]
-
-        vector_ids = (top_idx + start_id).tolist()
-        scores = subset_scores[top_idx].astype(float).tolist()
-        return vector_ids, scores
-
-    def _retrieve_tasks_loop(self):
-        f'''
-        已有向量数据库和字幕数据库
-        initial_planning: 根据问题文本 query, 定问题类型 -> 定时间范围 -> 定事件范围 -> 定查询实体
-        问题类型:    
-                利用特定图像和文本可解决: 
-                    1. 物体常规属性类(事实型1, 强图片弱文本), 
-                    2. 字幕类(事实型2, 弱图片强文本), 
-                    3. 概括事件类(事实型3, 强图片强文本), 
-                    4. 推断或评价类(推理型1, 弱图片强文本), 
-                    5. 溯因类(推理型2, 强图片弱文本)
-                需要利用额外工具类: 
-                    1. 画面内计数类(事实型4, 利用YoLo探测的数量)
-                    2. 画面内位置类(事实型5, 利用YoLo探测框的位置)
-                    3. OCR类(事实型6, 利用OCR模型识别画面中的文本)。
-        '''
-        pass

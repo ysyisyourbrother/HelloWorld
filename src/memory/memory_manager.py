@@ -305,16 +305,19 @@ class MemoryManagerBase:
         dens = float(distinct) / float(len(text)) if text else 0.0
         return distinct, total_hits, dens, matched_words
 
-    def retrieve_segment_by_word(
+    def retrieve_segment_by_word_with_scope(
         self,
         keywords: Sequence[str],
         top_k: Optional[int] = None,
         whole_word: bool = True,
         case_sensitive: bool = False,
         use_sentence: bool = True,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         根据关键词列表在 SRT 字幕索引中检索最相关的若干片段。
+        可选通过 ``start_time`` / ``end_time`` 指定检索时间范围，后续处理仅在该范围内进行。
 
         默认将每条命中 cue 用中点时间扩展为 ``get_sentence_by_time`` 的句子范围并去重；
         ``use_sentence=False`` 时仅在单条 cue 上评分。
@@ -362,6 +365,19 @@ class MemoryManagerBase:
             return []
 
         n_cues = len(self.srt)
+        st = float(start_time) if start_time is not None else float("-inf")
+        et = float(end_time) if end_time is not None else float("inf")
+        if st > et:
+            return []
+
+        def _in_scope(seg_st: float, seg_et: float) -> bool:
+            # 与区间 [st, et] 有交集才视为在检索范围内
+            if seg_et < st:
+                return False
+            if seg_st > et:
+                return False
+            return True
+
         rows: List[Tuple[Tuple[int, int, float], Dict[str, Any]]] = []
 
         if use_sentence:
@@ -370,16 +386,33 @@ class MemoryManagerBase:
                 if idx < 0 or idx >= n_cues:
                     continue
                 cue = self.srt[idx]
+                cue_st = float(cue["start_time"])
+                cue_et = float(cue["end_time"])
+                if not _in_scope(cue_st, cue_et):
+                    continue
                 mid_t = (float(cue["start_time"]) + float(cue["end_time"])) * 0.5
                 sent = self.srt.get_sentence_by_time(mid_t)
                 if sent is None:
+                    continue
+                sent_st = float(sent["start_time"])
+                sent_et = float(sent["end_time"])
+                if not _in_scope(sent_st, sent_et):
                     continue
                 key = (int(sent["start_idx"]), int(sent["end_idx"]))
                 if key not in by_span:
                     by_span[key] = sent
             for sent in by_span.values():
                 text = str(sent.get("text") or "")
-                d, th, dens, matched = self._score_segment_keywords(text, compilers)
+                scoped_items = []
+                for item in sent.get("items") or []:
+                    item_st = float(item["start_time"])
+                    item_et = float(item["end_time"])
+                    if _in_scope(item_st, item_et):
+                        scoped_items.append(item)
+                score_text = " ".join(
+                    str(item.get("text") or "") for item in scoped_items
+                ).strip()
+                d, th, dens, matched = self._score_segment_keywords(score_text, compilers)
                 if d == 0:
                     continue
                 rows.append(
@@ -404,8 +437,13 @@ class MemoryManagerBase:
             for idx in sorted(set(hit_indices)):
                 if idx < 0 or idx >= n_cues:
                     continue
+                cue = self.srt[idx]
+                cue_st = float(cue["start_time"])
+                cue_et = float(cue["end_time"])
+                if not _in_scope(cue_st, cue_et):
+                    continue
                 if idx not in by_idx:
-                    by_idx[idx] = self.srt[idx]
+                    by_idx[idx] = cue
             for idx, cue in by_idx.items():
                 text = str(cue.get("text") or "")
                 d, th, dens, matched = self._score_segment_keywords(text, compilers)
@@ -438,7 +476,7 @@ class MemoryManagerBase:
         end_t: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
-        按时间区间从 SRT 中检索句子片段，返回与 ``retrieve_segment_by_word`` 类似的结构。
+        按时间区间从 SRT 中检索句子片段，返回与 ``retrieve_segment_by_word_with_scope`` 类似的结构。
         该接口只按时间过滤，不包含任何关键词匹配、排序或 top-k 截断逻辑。
         """
         if self.srt is None:
