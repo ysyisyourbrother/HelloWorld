@@ -18,7 +18,7 @@ import logging
 import faiss
 import cv2
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 
 # 添加项目根目录到路径
@@ -30,7 +30,7 @@ from src.benchmark.prompt_template import build_rag_prompt_with_frames
 from src.memory.frame.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
-from src.llm.reasoner import ReasonerLocal, QueryRequest
+from src.llm.reasoner import ReasonerVLMLocal, ReasonerVLMAPI, QueryRequest
 from src.video_utils.about_frame import extract_frame_by_index
 
 
@@ -48,7 +48,7 @@ class VenusSystemBench:
         self.frame_vectorizer: Optional[FrameVectorizer] = None
         self.memory_manager: Optional[MemoryManagerBase] = None
         self.query_vectorizer: Optional[QueryVectorizer] = None
-        self.reasoner: Optional[ReasonerLocal] = None  # 云端推理，benchmark 直接变量传递
+        self.reasoner: Optional[Union[ReasonerVLMLocal, ReasonerVLMAPI]] = None
 
         # 数据集路径（支持 local_datasets 软链接）
         self.dataset_path = getattr(
@@ -261,11 +261,21 @@ class VenusSystemBench:
             "skipped": False,
         }
 
-    def _get_reasoner(self) -> ReasonerLocal:
-        """懒加载 Reasoner（benchmark 云边一体，直接变量传递，无需 gRPC）"""
+    def _benchmark_uses_api_vlm(self) -> bool:
+        return bool(
+            self.use_cloud
+            and not getattr(self.config, "benchmark_is_local_vlm", True)
+        )
+
+    def _get_reasoner(self) -> Union[ReasonerVLMLocal, ReasonerVLMAPI]:
+        """懒加载 Reasoner：本地 LLaVA 或厂商多模态 API。"""
         if self.reasoner is None:
-            self.reasoner = ReasonerLocal(self.config)
-            self.logger.debug("已初始化 Reasoner（同步推理，无 gRPC）")
+            if self._benchmark_uses_api_vlm():
+                self.reasoner = ReasonerVLMAPI(self.config)
+                self.logger.debug("已初始化 ReasonerVLMAPI（云端多模态）")
+            else:
+                self.reasoner = ReasonerVLMLocal(self.config)
+                self.logger.debug("已初始化 ReasonerVLMLocal（同步推理，无 gRPC）")
         return self.reasoner
 
     def _get_video_time(self, map_path: Optional[str] = None) -> Optional[float]:
@@ -320,6 +330,41 @@ class VenusSystemBench:
                 out.append(frame)
         return out
 
+    def _fill_reasoner_from_media_paths(
+        self,
+        t0: float,
+        retrieve_time: float,
+        query_text: str,
+        media_paths: List[str],
+        sample_id: str,
+        result: Dict[str, Any],
+    ) -> None:
+        """将检索得到的图片或 clip mp4 路径列表交给 ``ReasonerVLMAPI``。"""
+        if not (self.use_cloud and media_paths):
+            result["cloud_result"] = None
+            result["cloud_error"] = (
+                "API VLM：无媒体路径（请开启 memory_manager.save_retrieved_frames，"
+                "clip 模式需成功导出 mp4）"
+            )
+            result["total_time_sec"] = time.time() - t0
+            return
+        qid = (
+            (hash(sample_id) % (2**31))
+            if sample_id
+            else int(time.time())
+        )
+        query_request = QueryRequest(
+            query_text=query_text,
+            memory_results=list(media_paths),
+            query_id=qid,
+            dialog_id=0,
+        )
+        reasoner = self._get_reasoner()
+        response = reasoner.infer_sync(query_request)
+        result["cloud_result"] = response.result
+        result["cloud_error"] = response.error
+        result["total_time_sec"] = time.time() - t0
+
     def _fill_reasoner_from_bgr_frames(
         self,
         t0: float,
@@ -330,6 +375,11 @@ class VenusSystemBench:
         result: Dict[str, Any],
     ) -> None:
         """将已解码的 BGR 帧列表交给 Reasoner（与 ``_fill_reasoner_result`` 共用推理逻辑）。"""
+        if self._benchmark_uses_api_vlm():
+            result["cloud_result"] = None
+            result["cloud_error"] = "内部错误：API VLM 模式不应走 BGR 解码分支"
+            result["total_time_sec"] = time.time() - t0
+            return
         if self.use_cloud and frame_list_bgr:
             frames_rgb = [
                 cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
@@ -366,8 +416,15 @@ class VenusSystemBench:
         frames_metadata: Optional[List[Dict[str, Any]]],
         sample_id: str,
         result: Dict[str, Any],
+        clip_info: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """根据检索元数据解码帧后调用 Reasoner，就地写入 cloud_result / cloud_error / total_time_sec。"""
+        """根据检索元数据解码帧或收集保存路径后调用 Reasoner，就地写入 cloud_result / cloud_error / total_time_sec。"""
+        if self._benchmark_uses_api_vlm():
+            paths = self.memory_manager.list_retrieved_media_paths(clip_info)
+            self._fill_reasoner_from_media_paths(
+                t0, retrieve_time, query_text, paths, sample_id, result
+            )
+            return
         frame_list = self._decode_retrieval_frames_bgr(frames_metadata)
         self._fill_reasoner_from_bgr_frames(
             t0, retrieve_time, query_text, frame_list, sample_id, result
@@ -384,7 +441,7 @@ class VenusSystemBench:
         """单次查询：编码 -> 检索 -> 推理（直接变量传递，无 gRPC）。若提供 sample 和 video_time，则用 build_rag_prompt 构造 RAG 提示传给推理。"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
-        scores, frames_metadata, _clip_info = self.memory_manager.retrieve_sync(
+        scores, frames_metadata, clip_info = self.memory_manager.retrieve_sync(
             query_vector, dialog_id=dialog_id
         )
         retrieve_time = time.time() - t0
@@ -409,7 +466,13 @@ class VenusSystemBench:
         result["select_frame_num"] = select_frame_num
 
         self._fill_reasoner_result(
-            t0, retrieve_time, query_text, frames_metadata, sample_id, result
+            t0,
+            retrieve_time,
+            query_text,
+            frames_metadata,
+            sample_id,
+            result,
+            clip_info=clip_info,
         )
 
         return result

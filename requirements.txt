@@ -20,5 +20,7 @@ av>=9.0.0
 # decord>=0.6.0
 grpcio>=1.50.0
 grpcio-tools>=1.50.0
+openai>=1.0.0
+dashscope>=1.14.0
 # 需与 proto 生成时的版本兼容，否则会出现 "Couldn't parse file content!"
 protobuf>=6.31.1

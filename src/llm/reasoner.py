@@ -77,7 +77,7 @@ class QueryResponse:
     timestamp: float             # 时间戳
 
 
-class ReasonerLocal:
+class ReasonerVLMLocal:
     def __init__(self, config: Config = None):
         """
         初始化Reasoner模块
@@ -113,7 +113,7 @@ class ReasonerLocal:
         self.top_p = config.reasoner_local_top_p
         self.num_beams = config.reasoner_local_num_beams
         self.do_sample = config.reasoner_local_do_sample
-        self.max_img_num = getattr(config, "reasoner_max_img_num", None)
+        self.max_img_num = config.reasoner_local_max_img_num
 
         # 模型相关
         self.model = None
@@ -383,7 +383,7 @@ class ReasonerLocal:
                 timestamp=time.time()
             )
 
-class ReasonerLocalOnline(ReasonerLocal):
+class ReasonerVLMLocalOnline(ReasonerVLMLocal):
     """在线推理类：在 Base 同步能力上提供队列与子进程处理。"""
 
     def __init__(self, config: Config = None):
@@ -471,3 +471,132 @@ class ReasonerLocalOnline(ReasonerLocal):
         """获取结果队列"""
         return self.result_queue
 
+
+class ReasonerVLMAPI:
+    """
+    DashScope ``MultiModalConversation`` 单轮多图 + 文本（与 ``test_llm/qwen3_6_plus_multi_images.py`` 相同用法）。
+    ``memory_results`` 仅为本地**图片**路径列表（``file://``）。不支持 clip 检索给出的 ``.mp4`` 等视频路径。
+    """
+
+    def __init__(self, config: Config = None):
+        if config is None:
+            config = Config()
+        self._api_key = (config.api_vlm_key or "").strip() or os.environ.get(
+            "DASHSCOPE_API_KEY", ""
+        )
+        self._model = config.api_vlm_model_name
+        self._max_media = config.reasoner_local_max_img_num
+
+    @staticmethod
+    def _file_url_for_path(path: str) -> str:
+        return "file://%s" % os.path.abspath(path)
+
+    def infer_sync(self, query_request: QueryRequest) -> QueryResponse:
+        import dashscope
+        from dashscope import MultiModalConversation
+
+        _video_suffix = (".mp4", ".mov", ".mkv", ".webm")
+        try:
+            paths = query_request.memory_results or []
+            if not paths or not isinstance(paths[0], str):
+                return QueryResponse(
+                    query_id=query_request.query_id,
+                    result=None,
+                    error="ReasonerVLMAPI 需要 memory_results 为本地文件路径字符串列表",
+                    timestamp=time.time(),
+                )
+            plist = [str(x) for x in paths]
+            if self._max_media is not None and int(self._max_media) > 0:
+                plist = _uniform_subsample_image_list(plist, int(self._max_media))
+            if not plist:
+                return QueryResponse(
+                    query_id=query_request.query_id,
+                    result=None,
+                    error="无有效媒体路径",
+                    timestamp=time.time(),
+                )
+            for ap in plist:
+                if os.path.abspath(ap).lower().endswith(_video_suffix):
+                    return QueryResponse(
+                        query_id=query_request.query_id,
+                        result=None,
+                        error=(
+                            "ReasonerVLMAPI 不支持 clip 模式下的视频路径（如 .mp4）；"
+                            "请改用 memory.retrieve_item_type=frame 与检索帧图片路径，"
+                            "或使用本地 ReasonerVLMLocal。"
+                        ),
+                        timestamp=time.time(),
+                    )
+
+            dashscope.base_http_api_url = (
+                "https://dashscope.aliyuncs.com/api/v1"
+            )
+            content = [
+                {"image": self._file_url_for_path(str(x))} for x in plist
+            ]
+            content.append({"text": query_request.query_text})
+            messages = [{"role": "user", "content": content}]
+
+            response = MultiModalConversation.call(
+                api_key=self._api_key,
+                model=self._model,
+                messages=messages,
+            )
+            if response.status_code != 200:
+                return QueryResponse(
+                    query_id=query_request.query_id,
+                    result=None,
+                    error=getattr(response, "message", None)
+                    or str(response),
+                    timestamp=time.time(),
+                )
+            out = response.output.choices[0].message.content[0]["text"]
+            text = (out or "").strip()
+            return QueryResponse(
+                query_id=query_request.query_id,
+                result=text,
+                error=None,
+                timestamp=time.time(),
+            )
+        except Exception as e:
+            return QueryResponse(
+                query_id=query_request.query_id,
+                result=None,
+                error=str(e),
+                timestamp=time.time(),
+            )
+
+
+class ReasonerLLMAPI:
+    """厂商 Chat Completions API 多轮对话（OpenAI SDK 兼容）。"""
+
+    def __init__(self, config: Config = None):
+        if config is None:
+            config = Config()
+        from openai import OpenAI
+
+        key = (config.api_llm_key or "").strip() or os.environ.get(
+            "DEEPSEEK_API_KEY", ""
+        )
+        self._client = OpenAI(
+            api_key=key,
+            base_url=config.api_llm_base_url,
+        )
+        self._model = config.api_llm_model_name
+        self.messages: List[Dict[str, str]] = []
+
+    def reset(self) -> None:
+        self.messages = []
+
+    def append_user(self, text: str) -> None:
+        self.messages.append({"role": "user", "content": text})
+
+    def generate(self) -> str:
+        """追加一轮 assistant 回复到 ``messages`` 并返回该回复文本。"""
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=self.messages,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        self.messages.append({"role": "assistant", "content": content})
+        return content

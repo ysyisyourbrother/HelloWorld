@@ -1,3 +1,4 @@
+import re
 import threading
 import numpy as np
 import logging
@@ -35,7 +36,7 @@ class MemoryResult:
     scores: List[float]       # 匹配分数列表
     trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
     # 与 metadata_list 等长；BGR uint8 ndarray，供边端跳过按路径再解码（MemoryManagerOnlineV3）
-    retrieval_frames: Optional[List[Any]] = None
+    retrieve_frames: Optional[List[Any]] = None
     # retrieve_item_type=clip 时：GOP mp4 路径列表与输出目录（见 logs/memory/retrieve/clips/）
     retrieve_clip_paths: Optional[List[Dict[str, Any]]] = None
     retrieve_clip_dir: Optional[str] = None
@@ -102,6 +103,38 @@ class MemoryManagerBase:
     def register_retrieve_hook(self, fn: Callable[[np.ndarray, List[float]], None]):
         """注册检索钩子，在每次 retrieve 时调用。fn(query_vector, all_scores)"""
         self._retrieve_hooks.append(fn)
+
+    def list_retrieved_media_paths(
+        self, clip_info: Optional[Dict[str, Any]] = None
+    ) -> List[str]:
+        """
+        在 ``retrieve_sync`` / ``_retrieve`` 完成后调用。
+        - ``retrieve_item_type=clip`` 且 ``clip_info`` 含 ``paths``：返回各 GOP 导出的 mp4 绝对路径（列表顺序与导出一致）。
+        - 否则：返回 ``logs/memory/retrieve`` 下刚写入的检索帧图片路径，按文件名中的 ``rank`` 升序。
+        """
+        if clip_info and clip_info.get("paths"):
+            out: List[str] = []
+            for item in clip_info["paths"]:
+                if isinstance(item, dict):
+                    p = item.get("path")
+                else:
+                    p = item
+                if p and os.path.isfile(str(p)):
+                    out.append(os.path.abspath(str(p)))
+            return out
+        d = self.memory_retrieve_save_dir
+        if not os.path.isdir(d):
+            return []
+        rows: List[Tuple[int, str]] = []
+        for name in os.listdir(d):
+            lower = name.lower()
+            if not lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")):
+                continue
+            m = re.match(r"rank(\d+)_", name)
+            rank = int(m.group(1)) if m else 9999
+            rows.append((rank, os.path.join(d, name)))
+        rows.sort(key=lambda x: x[0])
+        return [os.path.abspath(p) for _, p in rows]
 
     def register_i_frames(self, source_path, i_frame_indices):
         """
@@ -340,7 +373,7 @@ class MemoryManagerBase:
         return all_scores
     
     def _read_frame_from_video(self, vector_ids: List[int]) -> Optional[List[np.ndarray]]:
-        """根据 vector_ids 读取实际帧数据，并保存到 database/ 目录。
+        """根据 vector_ids 读取实际帧数据
         按视频分组、复用 VideoCapture，避免重复打开同一视频。
         """
         from collections import defaultdict
@@ -1202,7 +1235,7 @@ class MemoryManagerOnlineV3(MemoryManagerOnlineV2):
             dialog_id=qvd.dialog_id,
             scores=scores,
             trace_ts=merged_trace,
-            retrieval_frames=retrieval_frames,
+            retrieve_frames=retrieval_frames,
             retrieve_clip_paths=clip_paths,
             retrieve_clip_dir=clip_dir,
         )

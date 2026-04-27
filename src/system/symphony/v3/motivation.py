@@ -269,42 +269,61 @@ class SymphonySystemMotiV3(SymphonySystemMoti):
             result["select_clip_num"] = 0
             result["reasoner_input_frame_count"] = select_frame_num
 
-        if rit == "clip" and clip_bgr_list:
-            frame_list_bgr = clip_bgr_list
+        if self._benchmark_uses_api_vlm():
+            if rit == "clip" and clip_paths_ok and clip_info:
+                paths = self.memory_manager.list_retrieved_media_paths(clip_info)
+                self._fill_reasoner_from_media_paths(
+                    t0, retrieve_time, query_text, paths, str(sample_id), result
+                )
+            else:
+                self._fill_reasoner_result(
+                    t0,
+                    retrieve_time,
+                    query_text,
+                    frames_metadata,
+                    str(sample_id),
+                    result,
+                    clip_info=clip_info,
+                )
         else:
-            frame_list_bgr = self._decode_retrieval_frames_bgr(frames_metadata)
+            if rit == "clip" and clip_bgr_list:
+                frame_list_bgr = clip_bgr_list
+            else:
+                frame_list_bgr = self._decode_retrieval_frames_bgr(frames_metadata)
 
-        if self.use_cloud and frame_list_bgr:
-            frames_rgb = [
-                cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
-                if f.ndim == 3
-                else cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
-                for f in frame_list_bgr
-            ]
-            qid = (
-                (hash(sample_id) % (2**31))
-                if sample_id
-                else int(time.time())
-            )
-            query_request = QueryRequest(
-                query_text=query_text,
-                memory_results=frames_rgb,
-                query_id=qid,
-                dialog_id=int(dialog_id),
-            )
-            reasoner = self._get_reasoner()
-            response = reasoner.infer_sync(query_request)
-            result["cloud_result"] = response.result
-            result["cloud_error"] = response.error
-            result["total_time_sec"] = time.time() - t0
-        elif self.use_cloud:
-            result["cloud_result"] = None
-            result["cloud_error"] = "use_cloud=True 但无可用图像（clip 解码失败且无检索帧）"
-            result["total_time_sec"] = time.time() - t0
-        else:
-            result["cloud_result"] = None
-            result["cloud_error"] = "use_cloud=False，跳过推理"
-            result["total_time_sec"] = retrieve_time
+            if self.use_cloud and frame_list_bgr:
+                frames_rgb = [
+                    cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+                    if f.ndim == 3
+                    else cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
+                    for f in frame_list_bgr
+                ]
+                qid = (
+                    (hash(sample_id) % (2**31))
+                    if sample_id
+                    else int(time.time())
+                )
+                query_request = QueryRequest(
+                    query_text=query_text,
+                    memory_results=frames_rgb,
+                    query_id=qid,
+                    dialog_id=int(dialog_id),
+                )
+                reasoner = self._get_reasoner()
+                response = reasoner.infer_sync(query_request)
+                result["cloud_result"] = response.result
+                result["cloud_error"] = response.error
+                result["total_time_sec"] = time.time() - t0
+            elif self.use_cloud:
+                result["cloud_result"] = None
+                result["cloud_error"] = (
+                    "use_cloud=True 但无可用图像（clip 解码失败且无检索帧）"
+                )
+                result["total_time_sec"] = time.time() - t0
+            else:
+                result["cloud_result"] = None
+                result["cloud_error"] = "use_cloud=False，跳过推理"
+                result["total_time_sec"] = retrieve_time
 
         return result
 

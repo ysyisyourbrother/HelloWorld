@@ -245,13 +245,35 @@ class SymphonySystemBenchV3(SymphonySystemBench):
             result["select_clip_num"] = 0
             result["reasoner_input_frame_count"] = select_frame_num
 
-        if rit == "clip" and clip_bgr_list:
+        if self._benchmark_uses_api_vlm():
+            if rit == "clip" and clip_paths_ok and clip_info:
+                paths = self.memory_manager.list_retrieved_media_paths(clip_info)
+                self._fill_reasoner_from_media_paths(
+                    t0, retrieve_time, query_text, paths, str(sample_id), result
+                )
+            else:
+                self._fill_reasoner_result(
+                    t0,
+                    retrieve_time,
+                    query_text,
+                    frames_metadata,
+                    str(sample_id),
+                    result,
+                    clip_info=clip_info,
+                )
+        elif rit == "clip" and clip_bgr_list:
             self._fill_reasoner_from_bgr_frames(
                 t0, retrieve_time, query_text, clip_bgr_list, str(sample_id), result
             )
         else:
             self._fill_reasoner_result(
-                t0, retrieve_time, query_text, frames_metadata, str(sample_id), result
+                t0,
+                retrieve_time,
+                query_text,
+                frames_metadata,
+                str(sample_id),
+                result,
+                clip_info=clip_info,
             )
 
         return result

@@ -17,7 +17,7 @@ import logging
 import faiss
 import cv2
 from tqdm import tqdm
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Union
 from pathlib import Path
 
 # 添加项目根目录到路径
@@ -29,7 +29,8 @@ from src.benchmark.prompt_template import build_rag_prompt_with_frames
 from src.memory.frame.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
-from src.llm.reasoner import ReasonerLocal, QueryRequest
+from src.llm.reasoner import ReasonerVLMLocal, ReasonerVLMAPI, QueryRequest
+from src.video_utils.about_frame import extract_frame_by_index
 
 
 class VenusSystemMoti:
@@ -46,7 +47,7 @@ class VenusSystemMoti:
         self.frame_vectorizer: Optional[FrameVectorizer] = None
         self.memory_manager: Optional[MemoryManagerBase] = None
         self.query_vectorizer: Optional[QueryVectorizer] = None
-        self.reasoner: Optional[ReasonerLocal] = None
+        self.reasoner: Optional[Union[ReasonerVLMLocal, ReasonerVLMAPI]] = None
 
         # 从 config 读取（兼容 benchmark 配置段）
         self.dataset_path = getattr(config, "benchmark_dataset_path", "local_datasets")
@@ -255,11 +256,21 @@ class VenusSystemMoti:
             "skipped": False,
         }
 
-    def _get_reasoner(self) -> ReasonerLocal:
-        """懒加载 Reasoner"""
+    def _benchmark_uses_api_vlm(self) -> bool:
+        return bool(
+            self.use_cloud
+            and not getattr(self.config, "benchmark_is_local_vlm", True)
+        )
+
+    def _get_reasoner(self) -> Union[ReasonerVLMLocal, ReasonerVLMAPI]:
+        """懒加载 Reasoner：本地 LLaVA 或厂商多模态 API。"""
         if self.reasoner is None:
-            self.reasoner = ReasonerLocal(self.config)
-            self.logger.info("已初始化 Reasoner（同步推理）")
+            if self._benchmark_uses_api_vlm():
+                self.reasoner = ReasonerVLMAPI(self.config)
+                self.logger.info("已初始化 ReasonerVLMAPI")
+            else:
+                self.reasoner = ReasonerVLMLocal(self.config)
+                self.logger.info("已初始化 ReasonerVLMLocal（同步推理）")
         return self.reasoner
 
     def _get_video_time(self, map_path: Optional[str] = None) -> Optional[float]:
@@ -289,6 +300,136 @@ class VenusSystemMoti:
                 pass
         return None
 
+    def _decode_retrieval_frames_bgr(
+        self, frames_metadata: Optional[List[Dict[str, Any]]]
+    ) -> List[Any]:
+        """按检索元数据从 source_path + frame_id 解码 BGR 帧。"""
+        out = []
+        for m in frames_metadata or []:
+            source_path = m.get("source_path")
+            frame_id = m.get("frame_id")
+            if not source_path or frame_id is None:
+                continue
+            if not os.path.isfile(source_path):
+                continue
+            try:
+                frame = extract_frame_by_index(
+                    video_path=source_path,
+                    frame_index=int(frame_id),
+                    backend="cv2",
+                )
+            except Exception as e:
+                self.logger.debug(
+                    "motivation 解码检索帧失败 path=%s idx=%s: %s",
+                    source_path,
+                    frame_id,
+                    e,
+                )
+                continue
+            if frame is not None:
+                out.append(frame)
+        return out
+
+    def _fill_reasoner_from_media_paths(
+        self,
+        t0: float,
+        retrieve_time: float,
+        query_text: str,
+        media_paths: List[str],
+        sample_id: str,
+        result: Dict[str, Any],
+    ) -> None:
+        """将检索得到的图片或 clip mp4 路径列表交给 ``ReasonerVLMAPI``。"""
+        if not (self.use_cloud and media_paths):
+            result["cloud_result"] = None
+            result["cloud_error"] = (
+                "API VLM：无媒体路径（请开启 memory_manager.save_retrieved_frames，"
+                "clip 模式需成功导出 mp4）"
+            )
+            result["total_time_sec"] = time.time() - t0
+            return
+        qid = (
+            (hash(sample_id) % (2**31))
+            if sample_id
+            else int(time.time())
+        )
+        query_request = QueryRequest(
+            query_text=query_text,
+            memory_results=list(media_paths),
+            query_id=qid,
+            dialog_id=0,
+        )
+        reasoner = self._get_reasoner()
+        response = reasoner.infer_sync(query_request)
+        result["cloud_result"] = response.result
+        result["cloud_error"] = response.error
+        result["total_time_sec"] = time.time() - t0
+
+    def _fill_reasoner_from_bgr_frames(
+        self,
+        t0: float,
+        retrieve_time: float,
+        query_text: str,
+        frame_list_bgr: List[Any],
+        sample_id: str,
+        result: Dict[str, Any],
+    ) -> None:
+        """将已解码的 BGR 帧列表交给本地 ``ReasonerVLMLocal``。"""
+        if self._benchmark_uses_api_vlm():
+            result["cloud_result"] = None
+            result["cloud_error"] = "内部错误：API VLM 模式不应走 BGR 解码分支"
+            result["total_time_sec"] = time.time() - t0
+            return
+        if self.use_cloud and frame_list_bgr:
+            frames_rgb = [
+                cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+                if f.ndim == 3
+                else cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
+                for f in frame_list_bgr
+            ]
+            qid = (
+                (hash(sample_id) % (2**31))
+                if sample_id
+                else int(time.time())
+            )
+            query_request = QueryRequest(
+                query_text=query_text,
+                memory_results=frames_rgb,
+                query_id=qid,
+                dialog_id=0,
+            )
+            reasoner = self._get_reasoner()
+            response = reasoner.infer_sync(query_request)
+            result["cloud_result"] = response.result
+            result["cloud_error"] = response.error
+            result["total_time_sec"] = time.time() - t0
+        else:
+            result["cloud_result"] = None
+            result["cloud_error"] = "use_cloud=False 或 无检索帧"
+            result["total_time_sec"] = retrieve_time
+
+    def _fill_reasoner_result(
+        self,
+        t0: float,
+        retrieve_time: float,
+        query_text: str,
+        frames_metadata: Optional[List[Dict[str, Any]]],
+        sample_id: str,
+        result: Dict[str, Any],
+        clip_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """根据检索结果调用本地或 API Reasoner。"""
+        if self._benchmark_uses_api_vlm():
+            paths = self.memory_manager.list_retrieved_media_paths(clip_info)
+            self._fill_reasoner_from_media_paths(
+                t0, retrieve_time, query_text, paths, sample_id, result
+            )
+            return
+        frame_list = self._decode_retrieval_frames_bgr(frames_metadata)
+        self._fill_reasoner_from_bgr_frames(
+            t0, retrieve_time, query_text, frame_list, sample_id, result
+        )
+
     def _run_query_single(
         self,
         question: str,
@@ -300,7 +441,7 @@ class VenusSystemMoti:
         """单次查询：编码 -> 检索 -> 推理"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
-        scores, frames_metadata, _clip_info = self.memory_manager.retrieve_sync(
+        scores, frames_metadata, clip_info = self.memory_manager.retrieve_sync(
             query_vector, dialog_id=dialog_id
         )
         retrieve_time = time.time() - t0
@@ -328,9 +469,21 @@ class VenusSystemMoti:
         result["rag_question"] = query_text
         result["select_frame_num"] = select_frame_num
 
-        result["cloud_result"] = None
-        result["cloud_error"] = "实时模式已切换为仅返回检索元数据，不再返回检索帧"
-        result["total_time_sec"] = retrieve_time
+        if self.use_cloud:
+            sid = sample_id if sample_id else str(abs(hash(question)) % (2**31))
+            self._fill_reasoner_result(
+                t0,
+                retrieve_time,
+                query_text,
+                frames_metadata,
+                sid,
+                result,
+                clip_info=clip_info,
+            )
+        else:
+            result["cloud_result"] = None
+            result["cloud_error"] = "use_cloud=False，跳过推理"
+            result["total_time_sec"] = retrieve_time
 
         return result
 
@@ -420,7 +573,7 @@ class VenusSystemMoti:
         Returns:
             包含 inject_stats 和 query_results 的字典
         """
-        if self.use_cloud:
+        if self.use_cloud and not self._benchmark_uses_api_vlm():
             reasoner = self._get_reasoner()
             if not reasoner.test_mode and reasoner.model is None:
                 reasoner._set_logger()
@@ -463,18 +616,30 @@ class VenusSystemMoti:
         if not os.path.isfile(image_path):
             raise FileNotFoundError(f"图片不存在: {image_path}")
 
-        img = cv2.imread(image_path)
-        if img is None:
-            raise ValueError(f"无法读取图片: {image_path}")
+        if self._benchmark_uses_api_vlm():
+            query_request = QueryRequest(
+                query_text=question,
+                memory_results=[os.path.abspath(image_path)],
+                query_id=int(time.time()),
+                dialog_id=0,
+            )
+        else:
+            img = cv2.imread(image_path)
+            if img is None:
+                raise ValueError(f"无法读取图片: {image_path}")
 
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            img_rgb = (
+                cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                if img.ndim == 3
+                else cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            )
 
-        query_request = QueryRequest(
-            query_text=question,
-            memory_results=[img_rgb],
-            query_id=int(time.time()),
-            dialog_id=0,
-        )
+            query_request = QueryRequest(
+                query_text=question,
+                memory_results=[img_rgb],
+                query_id=int(time.time()),
+                dialog_id=0,
+            )
         reasoner = self._get_reasoner()
         response = reasoner.infer_sync(query_request)
 

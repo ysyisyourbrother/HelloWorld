@@ -181,8 +181,7 @@ class Config:
         # 流式边端是否使用 OnlineV3（短记忆 + 分段取帧）；False 则仍为 OnlineV2
         self.memory_online_v3 = bool(memory_config.get("online_v3", True))
         # 检索产出类型：frame=仅帧元数据（默认）；clip=按 topk 命中 GOP 导出临时 mp4（需 i_frames 与 ffmpeg）
-        _rit = str(memory_config.get("retrieve_item_type", "frame") or "frame").strip().lower()
-        self.memory_retrieve_item_type = _rit if _rit in ("frame", "clip") else "frame"
+        self.memory_retrieve_item_type = memory_config.get("retrieve_item_type", "frame")
         
         # ReasonerLocal配置
         reasoner_local_config = self._config.get("reasoner_local", {})
@@ -208,8 +207,6 @@ class Config:
         # 单次推理最多送入的图像张数；超出则沿序列均匀稀疏采样。None 或 <=0 表示不限制
         self.reasoner_local_max_img_num = reasoner_local_config.get("max_img_num", 20)
 
-
-
         # APIServerE配置
         client_config = self._config.get("client", {})
         self.client_simu_url_of_server = client_config.get("cloud_server_url", "127.0.0.1:9000")
@@ -224,7 +221,6 @@ class Config:
         
         # Cloud Server配置：manual=自建 APIServerC+本地 Reasoner；api=厂商云端 HTTP 多模态 API（如 DashScope）
         cloud_config = self._config.get("cloud_server", {})
-        self.cloud_server_type = cloud_config.get("cloud_server_type", "manual")
 
         # Edge 配置
         edge_config = self._config.get("edge", {})
@@ -243,6 +239,19 @@ class Config:
         self.benchmark_video_dir_videomme = bench_config.get("video_dir_videomme", "local_datasets/Video-MME/data")
         self.benchmark_db_dir_egoschema = bench_config.get("db_dir_egoschema", "database/egoschema/venus")
         self.benchmark_db_dir_videomme = bench_config.get("db_dir_videomme", "database/videomme/venus")
+        
+        self.benchmark_is_local_vlm = bench_config.get("is_local_vlm", True)
+
+        # 大模型提供商 API（benchmark_is_local_vlm=False 时 VLM 走 ReasonerVLMAPI；LLM 走 ReasonerLLMAPI）
+        api_config = self._config.get("api", {})
+        self.api_vlm_model_name = api_config.get("vlm_model_name", "qwen3.6-plus")
+        self.api_vlm_key = api_config.get("vlm_key", "")
+        self.api_vlm_base_url = api_config.get(
+            "vlm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+        self.api_llm_model_name = api_config.get("llm_model_name", "deepseek-v4-pro")
+        self.api_llm_key = api_config.get("llm_key", "")
+        self.api_llm_base_url = api_config.get("llm_base_url", "https://api.deepseek.com")
 
     def reload(self):
         """重新加载配置"""
