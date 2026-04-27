@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from src.config import Config
 from src.video_input.video_input import VideoInputBase
-from src.benchmark.prompt_template import build_rag_prompt_with_frames
+from src.agent.prompts_for_symphony import rag_prompt_with_frames
 from src.memory.frame.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
@@ -460,11 +460,11 @@ class VenusSystemMoti:
             options = sample.get("options", [])
             if not isinstance(options, list):
                 options = list(options) if options else []
-            query_text = build_rag_prompt_with_frames(
-                video_time=video_time,
-                num_selected_frame=len(frames_metadata),
+            query_text = rag_prompt_with_frames.format(
+                video_time=float(video_time),
+                num_selected_frame=int(len(frames_metadata)),
                 question=question,
-                options=options,
+                options_text=" ".join(options),
             )
         result["rag_question"] = query_text
         result["select_frame_num"] = select_frame_num

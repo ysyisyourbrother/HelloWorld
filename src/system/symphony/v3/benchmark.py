@@ -10,7 +10,7 @@ Inject 使用 ``SymVideoInputByStreamWindow``（ffprobe 媒体时间窗 + 非 I 
 - ``clip`` 时由 ``MemoryManager`` 将 GOP mp4 写入 ``logs/memory/retrieve/clips/dialog_{id}/``，
   新 ``dialog_id`` 会删除上一对话对应子目录；同对话内每次检索会清空该对话子目录再写入。
 - ``clip`` 模式下 Reasoner 的 ``memory_results`` 为上述 mp4 按 GOP 顺序拼接的**全部帧**（RGB），
-  RAG 文案使用 ``build_rag_prompt_with_clips``；``frame`` 模式仍为单帧解码 + ``build_rag_prompt_with_frames``。
+  RAG 文案使用 ``rag_prompt_with_clips_template``；``frame`` 模式仍为单帧解码 + ``rag_prompt_with_frames_template``。
 """
 
 import logging
@@ -31,7 +31,10 @@ from src.benchmark.retrieve_clip_frames import (
     count_existing_clip_mp4s,
     decode_clip_info_all_frames_bgr,
 )
-from src.benchmark.prompt_template import build_rag_prompt_with_clips, build_rag_prompt_with_frames
+from src.agent.prompts_for_symphony import (
+    rag_prompt_with_clips,
+    rag_prompt_with_frames,
+)
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerForV3
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
@@ -219,19 +222,20 @@ class SymphonySystemBenchV3(SymphonySystemBench):
             options = sample.get("options", [])
             if not isinstance(options, list):
                 options = list(options) if options else []
+            options_text = " ".join(options)
             if clip_paths_ok and clip_bgr_list:
-                query_text = build_rag_prompt_with_clips(
-                    video_time=video_time,
-                    num_selected_clips=num_existing_clips,
+                query_text = rag_prompt_with_clips.format(
+                    video_time=float(video_time),
+                    num_selected_clips=int(num_existing_clips),
                     question=question,
-                    options=options,
+                    options_text=options_text,
                 )
             else:
-                query_text = build_rag_prompt_with_frames(
-                    video_time=video_time,
-                    num_selected_frame=len(frames_metadata),
+                query_text = rag_prompt_with_frames.format(
+                    video_time=float(video_time),
+                    num_selected_frame=int(len(frames_metadata)),
                     question=question,
-                    options=options,
+                    options_text=options_text,
                 )
 
         result["rag_question"] = query_text

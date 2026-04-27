@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from src.config import Config
 from src.video_input.video_input import VideoInputBase
-from src.benchmark.prompt_template import build_rag_prompt_with_frames
+from src.agent.prompts_for_symphony import rag_prompt_with_frames
 from src.memory.frame.frame_vectorizer import FrameVectorizer
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
@@ -438,7 +438,7 @@ class VenusSystemBench:
         video_time: Optional[float] = None,
         dialog_id: int = 0,
     ) -> Dict[str, Any]:
-        """单次查询：编码 -> 检索 -> 推理（直接变量传递，无 gRPC）。若提供 sample 和 video_time，则用 build_rag_prompt 构造 RAG 提示传给推理。"""
+        """单次查询：编码 -> 检索 -> 推理（直接变量传递，无 gRPC）。若提供 sample 和 video_time，则用模板构造 RAG 提示传给推理。"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
         scores, frames_metadata, clip_info = self.memory_manager.retrieve_sync(
@@ -448,7 +448,7 @@ class VenusSystemBench:
 
         result = {"question": question, "retrieve_time_sec": retrieve_time, "scores": scores}
 
-        # 构造传给 reasoner 的 query_text：有 RAG 参数则用 build_rag_prompt，否则用原始 question
+        # 构造传给 reasoner 的 query_text：有 RAG 参数则用模板构造，否则用原始 question
         query_text = question
         select_frame_num = len(frames_metadata) if frames_metadata else 0
         assert video_time, "video_time 必须要有才能创建ragprompt"
@@ -456,11 +456,11 @@ class VenusSystemBench:
             options = sample.get("options", [])
             if not isinstance(options, list):
                 options = list(options) if options else []
-            query_text = build_rag_prompt_with_frames(
-                video_time=video_time,
-                num_selected_frame=len(frames_metadata),
+            query_text = rag_prompt_with_frames.format(
+                video_time=float(video_time),
+                num_selected_frame=int(len(frames_metadata)),
                 question=question,
-                options=options,
+                options_text=" ".join(options),
             )
         result["rag_question"] = query_text
         result["select_frame_num"] = select_frame_num

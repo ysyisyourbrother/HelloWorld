@@ -21,7 +21,10 @@ from src.benchmark.retrieve_clip_frames import (
     count_reported_frames_in_clip_info,
     decode_clip_info_all_frames_bgr,
 )
-from src.benchmark.prompt_template import build_rag_prompt_with_clips, build_rag_prompt_with_frames
+from src.agent.prompts_for_symphony import (
+    rag_prompt_with_clips,
+    rag_prompt_with_frames,
+)
 from src.config import SymConfig
 from src.llm.reasoner import QueryRequest
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerForV3
@@ -241,19 +244,20 @@ class SymphonySystemMotiV3(SymphonySystemMoti):
             options = sample.get("options", [])
             if not isinstance(options, list):
                 options = list(options) if options else []
+            options_text = " ".join(options)
             if clip_paths_ok and clip_bgr_list:
-                query_text = build_rag_prompt_with_clips(
-                    video_time=video_time,
-                    num_selected_clips=num_existing_clips,
+                query_text = rag_prompt_with_clips.format(
+                    video_time=float(video_time),
+                    num_selected_clips=int(num_existing_clips),
                     question=question,
-                    options=options,
+                    options_text=options_text,
                 )
             else:
-                query_text = build_rag_prompt_with_frames(
-                    video_time=video_time,
-                    num_selected_frame=len(frames_metadata),
+                query_text = rag_prompt_with_frames.format(
+                    video_time=float(video_time),
+                    num_selected_frame=int(len(frames_metadata)),
                     question=question,
-                    options=options,
+                    options_text=options_text,
                 )
         result["rag_question"] = query_text
         result["select_frame_num"] = select_frame_num
