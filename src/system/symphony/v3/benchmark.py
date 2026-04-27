@@ -63,6 +63,7 @@ class SymphonySystemBenchV3(SymphonySystemBench):
         video_path: Optional[str] = None,
         faiss_path: Optional[str] = None,
         map_path: Optional[str] = None,
+        srt_path: Optional[str] = None,
     ):
         """与 v1 相同，但视频输入固定为 ``SymVideoInputByStreamWindow``。"""
         self.config.memory_mode = "both"
@@ -70,6 +71,8 @@ class SymphonySystemBenchV3(SymphonySystemBench):
             self.config.memory_faiss_file_path = faiss_path
         if map_path is not None:
             self.config.memory_databasemap_file_path = map_path
+        if srt_path is not None:
+            self.config.memory_srt_file_path = srt_path
 
         self.memory_manager = MemoryManagerBase(self.config)
         self.query_vectorizer = QueryVectorizer(self.config)
@@ -99,10 +102,12 @@ class SymphonySystemBenchV3(SymphonySystemBench):
         skip_inject: bool = False,
     ) -> Dict[str, Any]:
         """按媒体时间窗迭代，窗内策略已选好帧，直接编码入库。"""
-        faiss_path, map_path = self._get_db_paths(dataset_name, video_id, subset)
+        faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
         if skip_inject and os.path.isfile(faiss_path):
             self.logger.info("向量库已存在，跳过 inject: %s", faiss_path)
-            self._init_components(video_path=None, faiss_path=faiss_path, map_path=map_path)
+            self._init_components(
+                video_path=None, faiss_path=faiss_path, map_path=map_path, srt_path=srt_path
+            )
             idx = faiss.read_index(faiss_path)
             return {
                 "total_frames": idx.ntotal,
@@ -123,8 +128,15 @@ class SymphonySystemBenchV3(SymphonySystemBench):
                     os.remove(map_path)
                 except OSError:
                     pass
+            if os.path.isfile(srt_path):
+                try:
+                    os.remove(srt_path)
+                except OSError:
+                    pass
 
-        self._init_components(video_path=video_path, faiss_path=faiss_path, map_path=map_path)
+        self._init_components(
+            video_path=video_path, faiss_path=faiss_path, map_path=map_path, srt_path=srt_path
+        )
 
         total_video_frames = int(getattr(self.video_input, "total_frames", 0) or 0)
         total_vectors = 0

@@ -166,7 +166,7 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     all_scores = captured["all_scores"]
-    _faiss_path, map_path = moti._get_db_paths("Video-MME", args.video_id, args.subset)
+    _faiss_path, map_path, _srt_path = moti._get_db_paths("Video-MME", args.video_id, args.subset)
     db_frame_ids, i_frame_ids, db_total_frames = _load_frames_and_i_frames(map_path)
     if len(db_frame_ids) == len(all_scores):
         frame_ids = np.array(db_frame_ids)

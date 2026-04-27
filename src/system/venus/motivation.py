@@ -130,7 +130,7 @@ class VenusSystemMoti:
         return str(path) if path.exists() else None
 
     def _get_db_paths(self, dataset_name: str, video_id: str, subset: Optional[str] = None) -> tuple:
-        """获取该视频的 faiss 和 databasemap 路径。
+        """获取该视频的 faiss/databasemap/srt 路径。
         支持配置中的绝对路径（如 /mnt/share/...）或相对路径（相对于项目根）。"""
         base = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
         if dataset_name == "egoschema":
@@ -144,17 +144,21 @@ class VenusSystemMoti:
             db_path = db_path / subset
         faiss_dir = db_path / "faiss"
         json_dir = db_path / "json"
+        srt_dir = db_path / "srt"
         faiss_dir.mkdir(parents=True, exist_ok=True)
         json_dir.mkdir(parents=True, exist_ok=True)
+        srt_dir.mkdir(parents=True, exist_ok=True)
         faiss_path = str(faiss_dir / f"{video_id}.faiss")
         map_path = str(json_dir / f"{video_id}.json")
-        return faiss_path, map_path
+        srt_path = str(srt_dir / f"{video_id}.srt")
+        return faiss_path, map_path, srt_path
 
     def _init_components(
         self,
         video_path: Optional[str] = None,
         faiss_path: Optional[str] = None,
         map_path: Optional[str] = None,
+        srt_path: Optional[str] = None,
     ):
         """
         初始化各组件（同步模式）。
@@ -165,6 +169,8 @@ class VenusSystemMoti:
             self.config.memory_faiss_file_path = faiss_path
         if map_path is not None:
             self.config.memory_databasemap_file_path = map_path
+        if srt_path is not None:
+            self.config.memory_srt_file_path = srt_path
 
         self.memory_manager = MemoryManagerBase(self.config)
         self.query_vectorizer = QueryVectorizer(self.config)
@@ -197,10 +203,12 @@ class VenusSystemMoti:
         force_update: bool = True,
     ) -> Dict[str, Any]:
         """Inject 阶段：按 batch 读取、向量化、插入，按视频名保存"""
-        faiss_path, map_path = self._get_db_paths(dataset_name, video_id, subset)
+        faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
         if os.path.isfile(faiss_path) and not force_update:
             self.logger.info(f"向量库已存在，跳过 inject: {faiss_path}")
-            self._init_components(video_path=None, faiss_path=faiss_path, map_path=map_path)
+            self._init_components(
+                video_path=None, faiss_path=faiss_path, map_path=map_path, srt_path=srt_path
+            )
             idx = faiss.read_index(faiss_path)
             return {
                 "total_frames": idx.ntotal,
@@ -221,8 +229,15 @@ class VenusSystemMoti:
                     os.remove(map_path)
                 except OSError:
                     pass
+            if os.path.isfile(srt_path):
+                try:
+                    os.remove(srt_path)
+                except OSError:
+                    pass
 
-        self._init_components(video_path=video_path, faiss_path=faiss_path, map_path=map_path)
+        self._init_components(
+            video_path=video_path, faiss_path=faiss_path, map_path=map_path, srt_path=srt_path
+        )
 
         total_frames = 0
         total_vectors = 0
@@ -533,10 +548,10 @@ class VenusSystemMoti:
         Returns:
             查询结果
         """
-        faiss_path, map_path = self._get_db_paths(dataset_name, video_id, subset)
+        faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
         if not os.path.isfile(faiss_path):
             raise FileNotFoundError(f"向量库不存在: {faiss_path}")
-        self._init_components(None, faiss_path=faiss_path, map_path=map_path)
+        self._init_components(None, faiss_path=faiss_path, map_path=map_path, srt_path=srt_path)
         video_time = self._get_video_time(map_path=map_path)
         if video_time is None and sample is not None:
             video_time = 0.0  # 无时长时用 0

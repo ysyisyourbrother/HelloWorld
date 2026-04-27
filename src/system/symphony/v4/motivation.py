@@ -122,7 +122,9 @@ class SymphonySystemMotiV4(SymphonySystemMotiV3):
         if result.get("skipped"):
             return result
 
-        srt_path = getattr(self.config, "memory_srt_file_path", "")
+        srt_path = getattr(self.memory_manager, "srt_file_path", "") or getattr(
+            self.config, "memory_srt_file_path", ""
+        )
         if srt_path and os.path.isfile(srt_path):
             os.remove(srt_path)
             if self.memory_manager.srt is not None:
