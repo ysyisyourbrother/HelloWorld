@@ -183,6 +183,13 @@ class Config:
         # 检索产出类型：frame=仅帧元数据（默认）；clip=按 topk 命中 GOP 导出临时 mp4（需 i_frames 与 ffmpeg）
         self.memory_retrieve_item_type = memory_config.get("retrieve_item_type", "frame")
         
+        # 增强工具的设置
+        enhance_tool_config = self._config.get("enhance_tool", {})
+        self.ocr_language = enhance_tool_config.get("ocr_language", "en") # en, ch_sim
+        self.ocr_conf_threshold = enhance_tool_config.get("ocr_conf_threshold", 0.4) 
+        self.yolo_model_path = enhance_tool_config.get("yolo_model_path", "/mnt/share/cache/models/YOLO/yolo26l.pt") 
+        self.yolo_conf_threshold = enhance_tool_config.get("yolo_conf_threshold", 0.3) 
+
         # ReasonerLocal配置
         reasoner_local_config = self._config.get("reasoner_local", {})
         self.reasoner_local_log_file = reasoner_local_config.get("log_file", "logs/reasoner.log")

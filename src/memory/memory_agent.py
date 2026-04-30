@@ -1,10 +1,13 @@
+import importlib.util
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from src.agent.prompts_for_symphony import ocr_template, yolo_template
 from src.config import Config
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
+from src.video_utils.about_frame import extract_frame_by_index
 
 def local_tool_use(func):
     def wrapper(*args, **kwargs):
@@ -57,6 +60,40 @@ class MemoryAgent(MemoryManagerBase):
     def __init__(self, config: Config = None):
         super().__init__(config=config)
         self._initialize_tools_list()
+        self._initialize_enhance_tools()
+
+    def _initialize_enhance_tools(self):
+        self.ocr_language = self._config.ocr_language
+        self.ocr_conf_threshold = float(self._config.ocr_conf_threshold)
+        self.yolo_model_path = self._config.yolo_model_path
+        self.yolo_conf_threshold = float(self._config.yolo_conf_threshold)
+
+        self.ocr_model = None
+        self.yolo_model = None
+        self.yolo_names = None
+
+        if importlib.util.find_spec("easyocr") is None:
+            raise ImportError("easyocr is not installed. Please install easyocr first.")
+        if importlib.util.find_spec("torch") is None:
+            raise ImportError("torch is not installed. Please install torch first.")
+        if importlib.util.find_spec("ultralytics") is None:
+            raise ImportError("ultralytics is not installed. Please install ultralytics first.")
+
+        import easyocr
+        import torch
+        from ultralytics import YOLO
+
+        langs = [str(self.ocr_language).strip()]
+        if not langs[0]:
+            langs = ["en"]
+
+        self.ocr_model = easyocr.Reader(
+            langs,
+            gpu=bool(torch.cuda.is_available()),
+            download_enabled=False,
+        )
+        self.yolo_model = YOLO(self.yolo_model_path)
+        self.yolo_names = self.yolo_model.names
 
     def _initialize_tools_list(self) -> None:
         self.scope_tools = [
@@ -568,16 +605,134 @@ class MemoryAgent(MemoryManagerBase):
 
     @local_tool_use
     def _enhance_via_OCR(self, retrieved_frames: Sequence[Any]) -> List[str]:
-        return None
+        if not retrieved_frames:
+            return []
+
+        per_frame_lines: List[str] = []
+        for idx, frame_item in enumerate(retrieved_frames):
+            frame_bgr = None
+            if isinstance(frame_item, np.ndarray):
+                frame_bgr = frame_item
+            elif isinstance(frame_item, dict):
+                source_path = frame_item.get("source_path")
+                frame_id = frame_item.get("frame_id")
+                if source_path and frame_id is not None:
+                    frame_bgr = extract_frame_by_index(
+                        str(source_path), int(frame_id), backend="cv2"
+                    )
+
+            if frame_bgr is None:
+                text_line = "frame {idx}: failed to load frame pixels".format(idx=idx)
+                per_frame_lines.append(text_line)
+                continue
+
+            frame_rgb = frame_bgr[:, :, ::-1]
+            ocr_rows = self.ocr_model.readtext(frame_rgb)
+            kept_texts = [
+                str(row[1]).strip()
+                for row in ocr_rows
+                if float(row[2]) >= self.ocr_conf_threshold and str(row[1]).strip()
+            ]
+            if kept_texts:
+                text_line = "frame {idx}: ".format(idx=idx) + "; ".join(
+                    ['"{txt}"'.format(txt=txt) for txt in kept_texts]
+                )
+            else:
+                text_line = "frame {idx}: (no text)".format(idx=idx)
+            per_frame_lines.append(text_line)
+
+        merged_text = "\n".join(per_frame_lines)
+        return [ocr_template.format(ocr_result=merged_text).strip()]
 
     @local_tool_use
     def _enhance_via_YOLO(
         self, retrieved_frames: Sequence[Any], objects: Optional[Sequence[str]] = None
     ) -> List[str]:
-        target_objects = [str(obj).strip() for obj in (objects or []) if str(obj).strip()]
-        if not target_objects:
-            return None
-        object_desc = "、".join(target_objects)
-        return None
+        if not retrieved_frames:
+            return []
 
-    
+        target_objects = [str(obj).strip() for obj in (objects or []) if str(obj).strip()]
+        target_set = set(target_objects)
+
+        per_frame_lines: List[str] = []
+        for idx, frame_item in enumerate(retrieved_frames):
+            frame_bgr = None
+            if isinstance(frame_item, np.ndarray):
+                frame_bgr = frame_item
+            elif isinstance(frame_item, dict):
+                source_path = frame_item.get("source_path")
+                frame_id = frame_item.get("frame_id")
+                if source_path and frame_id is not None:
+                    frame_bgr = extract_frame_by_index(
+                        str(source_path), int(frame_id), backend="cv2"
+                    )
+
+            if frame_bgr is None:
+                yolo_line = "frame {idx}: failed to load frame pixels".format(idx=idx)
+                per_frame_lines.append(yolo_line)
+                continue
+
+            yolo_result = self.yolo_model(frame_bgr, verbose=False)
+            if not yolo_result:
+                per_frame_lines.append(
+                    "frame {idx}: (no objects detected)".format(idx=idx)
+                )
+                continue
+
+            boxes = yolo_result[0].boxes
+            class_count: Dict[str, int] = {}
+            for i in range(len(boxes)):
+                conf = float(boxes.conf[i].item())
+                if conf < self.yolo_conf_threshold:
+                    continue
+                cls_id = int(boxes.cls[i].item())
+                if isinstance(self.yolo_names, dict):
+                    cls_name = str(self.yolo_names.get(cls_id, cls_id))
+                elif isinstance(self.yolo_names, (list, tuple)):
+                    if 0 <= cls_id < len(self.yolo_names):
+                        cls_name = str(self.yolo_names[cls_id])
+                    else:
+                        cls_name = str(cls_id)
+                else:
+                    cls_name = str(cls_id)
+                class_count[cls_name] = class_count.get(cls_name, 0) + 1
+
+            if not class_count:
+                yolo_line = "frame {idx}: (no objects detected)".format(idx=idx)
+                per_frame_lines.append(yolo_line)
+                continue
+
+            det_desc = ", ".join(
+                ["{name}({cnt})".format(name=name, cnt=cnt) for name, cnt in class_count.items()]
+            )
+            yolo_line = "frame {idx}: detected {desc}".format(idx=idx, desc=det_desc)
+
+            if target_set:
+                prioritized_pairs = []
+                for name in target_objects:
+                    count = class_count.get(name, 0)
+                    if count > 0:
+                        prioritized_pairs.append((name, count))
+
+                remaining_pairs = []
+                for name, count in class_count.items():
+                    if name not in target_set:
+                        remaining_pairs.append((name, count))
+
+                if len(prioritized_pairs) == len(target_set):
+                    ordered_pairs = prioritized_pairs
+                else:
+                    ordered_pairs = prioritized_pairs + remaining_pairs
+                det_desc = ", ".join(
+                    [
+                        "{name}({cnt})".format(name=name, cnt=cnt)
+                        for name, cnt in ordered_pairs
+                    ]
+                )
+                yolo_line = "frame {idx}: detected {desc}".format(idx=idx, desc=det_desc)
+
+            per_frame_lines.append(yolo_line)
+
+        merged_text = "\n".join(per_frame_lines)
+        return [yolo_template.format(yolo_result=merged_text).strip()]
+
