@@ -1,10 +1,22 @@
 import importlib.util
+import json
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from src.agent.prompts_for_symphony import ocr_template, yolo_template
+from src.agent.prompts_for_symphony import (
+    ocr_template,
+    output_json_format,
+    possible_tool_list,
+    prompt_enhance_funccall,
+    prompt_generate_plan_with_faiss_and_srt,
+    prompt_scope_funccall,
+    prompt_search_funccall,
+    rag_prompt_after_agentic_retrival,
+    yolo_template,
+)
 from src.config import Config
+from src.llm.reasoner import AgenticRetrieverAPI
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
 from src.video_utils.about_frame import extract_frame_by_index
@@ -59,6 +71,7 @@ class MemoryAgent(MemoryManagerBase):
 
     def __init__(self, config: Config = None):
         super().__init__(config=config)
+        self.agentic_retriever = AgenticRetrieverAPI(config=self._config)
         self._initialize_tools_list()
         self._initialize_enhance_tools()
 
@@ -735,4 +748,328 @@ class MemoryAgent(MemoryManagerBase):
 
         merged_text = "\n".join(per_frame_lines)
         return [yolo_template.format(yolo_result=merged_text).strip()]
+
+    def _parse_plan_steps(self, raw_plan: str) -> List[str]:
+        text = str(raw_plan or "").strip()
+        if not text:
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        return [line.strip() for line in text.splitlines() if line.strip()]
+
+    def _tool_list_to_prompt(self, tools: Sequence[Dict[str, Any]]) -> str:
+        return possible_tool_list.format(
+            tool_list=json.dumps(list(tools), ensure_ascii=False, indent=2)
+        ).strip()
+
+    def _output_schema_prompt(self, tools: Sequence[Dict[str, Any]]) -> str:
+        schema = {
+            "type": "object",
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "enum": [item["function"]["name"] for item in tools],
+                },
+                "arguments": {"type": "object"},
+            },
+            "required": ["tool_name", "arguments"],
+        }
+        return output_json_format.format(
+            tool_input_schema=json.dumps(schema, ensure_ascii=False, indent=2)
+        ).strip()
+
+    def _extract_tool_selection(
+        self, assistant_message: Dict[str, Any]
+    ) -> Tuple[Optional[str], Dict[str, Any]]:
+        calls = assistant_message.get("tool_calls") or []
+        if not calls:
+            return None, {}
+        first_call = calls[0]
+        func = first_call.get("function") or {}
+        tool_name = func.get("name")
+        arg_text = str(func.get("arguments") or "").strip()
+        if not tool_name or not arg_text:
+            return None, {}
+        arguments = json.loads(arg_text)
+        if not isinstance(arguments, dict):
+            return None, {}
+        return tool_name, arguments
+
+    def _call_tool_by_name(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        start_id: Optional[int]=None,
+        subset_vectors: Optional[np.ndarray]=None,
+        retrieved_frames: Sequence[Dict[str, Any]]=None,
+    ) -> Dict[str, Any]:
+        if tool_name == "_get_subset_by_period":
+            new_start_id, new_subset = self._get_subset_by_period(
+                start_time=arguments["start_time"], end_time=arguments["end_time"]
+            )
+            return {
+                "start_id": new_start_id,
+                "subset_vectors": new_subset,
+                "scope_desc": "period [{s}, {e}]".format(
+                    s=arguments["start_time"], e=arguments["end_time"]
+                ),
+            }
+
+        if tool_name == "_get_subset_by_event_frame":
+            new_start_id, new_subset = self._get_subset_by_event_frame(
+                event=arguments["event"], scope=arguments["scope"]
+            )
+            return {
+                "start_id": new_start_id,
+                "subset_vectors": new_subset,
+                "scope_desc": "event '{e}' with scope {s}".format(
+                    e=arguments["event"], s=arguments["scope"]
+                ),
+            }
+
+        if tool_name == "_get_subset_by_keyword_subtitle":
+            new_start_id, new_subset = self._get_subset_by_keyword_subtitle(
+                keyword=arguments["keyword"],
+                keywords_location=arguments["keywords_location"],
+                scope=arguments["scope"],
+            )
+            return {
+                "start_id": new_start_id,
+                "subset_vectors": new_subset,
+                "scope_desc": "subtitle keyword '{k}' ({loc}) scope {s}".format(
+                    k=arguments["keyword"],
+                    loc=arguments["keywords_location"],
+                    s=arguments["scope"],
+                ),
+            }
+
+        if tool_name == "_search_frames_with_multiple_entities":
+            scores, metadata_list = self._search_frames_with_multiple_entities(
+                entities=arguments["entities"],
+                top_k=arguments["top_k"],
+                start_id=start_id,
+                subset_vectors=subset_vectors,
+            )
+            return {"scores": scores, "frame_results": metadata_list, "subtitle_results": []}
+
+        if tool_name == "_search_frames_just_by_scope":
+            metadata_list = self._search_frames_just_by_scope(
+                budget=arguments["budget"],
+                start_id=start_id,
+                subset_vectors=subset_vectors,
+            )
+            return {"scores": [], "frame_results": metadata_list, "subtitle_results": []}
+
+        if tool_name == "_search_subtitles_with_multiple_keywords":
+            subtitle_rows = self._search_subtitles_with_multiple_keywords(
+                keywords=arguments["keywords"],
+                top_k=arguments["top_k"],
+                start_id=start_id,
+                subset_vectors=subset_vectors,
+            )
+            return {"scores": [], "frame_results": [], "subtitle_results": subtitle_rows}
+
+        if tool_name == "_search_subtitles_just_by_scope":
+            subtitle_rows = self._search_subtitles_just_by_scope(
+                budget=arguments["budget"],
+                start_id=start_id,
+                subset_vectors=subset_vectors,
+            )
+            return {"scores": [], "frame_results": [], "subtitle_results": subtitle_rows}
+
+        if tool_name == "_enhance_via_OCR":
+            enhanced_texts = self._enhance_via_OCR(retrieved_frames=retrieved_frames)
+            return {"enhance_results": enhanced_texts}
+
+        if tool_name == "_enhance_via_YOLO":
+            yolo_objects = arguments.get("objects")
+            enhanced_texts = self._enhance_via_YOLO(
+                retrieved_frames=retrieved_frames, objects=yolo_objects
+            )
+            return {"enhance_results": enhanced_texts}
+
+        return {}
+
+    def _format_retrieval_context(
+        self,
+        frame_results: Sequence[Dict[str, Any]],
+        subtitle_results: Sequence[Dict[str, Any]],
+        enhance_results: Sequence[str],
+    ) -> str:
+        lines = []
+
+        frame_count = len(frame_results)
+        if frame_count > 0:
+            lines.append(
+                "We provide {cnt} most relevant frames as visual evidence.".format(
+                    cnt=frame_count
+                )
+            )
+
+        subtitle_count = len(subtitle_results)
+        if subtitle_count > 0:
+            subtitle_texts: List[str] = []
+            for row in subtitle_results:
+                if isinstance(row, dict):
+                    text = (
+                        row.get("text")
+                        or row.get("subtitle")
+                        or row.get("content")
+                        or row.get("sentence")
+                        or ""
+                    )
+                    normalized = str(text).strip()
+                    if normalized:
+                        subtitle_texts.append(normalized)
+                    else:
+                        subtitle_texts.append(json.dumps(row, ensure_ascii=False))
+                else:
+                    subtitle_texts.append(str(row).strip())
+            merged_subtitles = " | ".join([item for item in subtitle_texts if item])
+            lines.append(
+                "We also provide {cnt} most relevant subtitle snippets as language evidence: {subs}".format(
+                    cnt=subtitle_count,
+                    subs=merged_subtitles or "(empty subtitles)",
+                )
+            )
+        else:
+            lines.append("No relevant subtitle evidence was retrieved.")
+
+        if enhance_results:
+            lines.extend([str(item).strip() for item in enhance_results if str(item).strip()])
+        else:
+            lines.append("No enhancement model output is provided.")
+
+        return "\n".join(lines)
+
+    def agentic_retrieve_pipeline(self, user_query: str) -> Dict[str, Any]:
+        with self.databasemap.acquire() as videos:
+            if videos:
+                first_video = videos[0]
+                duration = float(first_video.get("duration") or 0.0)
+            else:
+                duration = 0.0
+
+        self.agentic_retriever.reset_messages()
+        plan_prompt = prompt_generate_plan_with_faiss_and_srt.format(
+            video_duration=duration, question=user_query
+        )
+        self.agentic_retriever.add_message("user", plan_prompt)
+        plan_text = self.agentic_retriever.generate(reset=False)
+        steps = self._parse_plan_steps(plan_text)
+
+        start_id = None
+        subset_vectors = None
+        scope_desc = ""
+        frame_results: List[Dict[str, Any]] = []
+        subtitle_results: List[Dict[str, Any]] = []
+        enhance_results: List[str] = []
+
+        # 以下是我预留的参数，不要改动
+        need_tool_desc = False
+        if need_tool_desc:
+            scope_tool_prompt = self._tool_list_to_prompt(self.scope_tools)
+            search_tool_prompt = self._tool_list_to_prompt(self.search_tools)
+            enhance_tool_prompt = self._tool_list_to_prompt(self.enhance_tools)
+            scope_schema_prompt = self._output_schema_prompt(self.scope_tools)
+            search_schema_prompt = self._output_schema_prompt(self.search_tools)
+            enhance_schema_prompt = self._output_schema_prompt(self.enhance_tools)
+
+        for step in steps:
+            step_text = str(step)
+            if step_text.startswith("[Scope]"):
+                prompt = prompt_scope_funccall.format(
+                    possible_tool_list=scope_tool_prompt,
+                    output_json_format=scope_schema_prompt,
+                    question=user_query,
+                    duration=duration,
+                    scope_plan_step=step_text,
+                )
+                self.agentic_retriever.reset_messages()
+                self.agentic_retriever.add_message("user", prompt)
+                msg = self.agentic_retriever.generate_with_tools(self.scope_tools)
+                tool_name, arguments = self._extract_tool_selection(msg)
+                if tool_name:
+                    scope_out = self._call_tool_by_name(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        start_id=start_id,
+                        subset_vectors=subset_vectors,
+                        retrieved_frames=frame_results,
+                    )
+                    start_id = scope_out.get("start_id", start_id)
+                    subset_vectors = scope_out.get("subset_vectors", subset_vectors)
+                    scope_desc = scope_out.get("scope_desc", scope_desc)
+                continue
+
+            elif step_text.startswith("[Search]"):
+                prompt = prompt_search_funccall.format(
+                    possible_tool_list=search_tool_prompt,
+                    output_json_format=search_schema_prompt,
+                    question=user_query,
+                    duration=duration,
+                    search_plan_step=step_text,
+                )
+                self.agentic_retriever.reset_messages()
+                self.agentic_retriever.add_message("user", prompt)
+                msg = self.agentic_retriever.generate_with_tools(self.search_tools)
+                tool_name, arguments = self._extract_tool_selection(msg)
+                if tool_name:
+                    search_out = self._call_tool_by_name(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        start_id=start_id,
+                        subset_vectors=subset_vectors,
+                        retrieved_frames=frame_results,
+                    )
+                    frame_part = search_out.get("frame_results") or []
+                    subtitle_part = search_out.get("subtitle_results") or []
+                    frame_results.extend(frame_part)
+                    subtitle_results.extend(subtitle_part)
+                continue
+
+            elif step_text.startswith("[Enhance]"):
+                prompt = prompt_enhance_funccall.format(
+                    possible_tool_list=enhance_tool_prompt,
+                    output_json_format=enhance_schema_prompt,
+                    question=user_query,
+                    duration=duration,
+                    enhance_plan_step=step_text,
+                )
+                self.agentic_retriever.reset_messages()
+                self.agentic_retriever.add_message("user", prompt)
+                msg = self.agentic_retriever.generate_with_tools(self.enhance_tools)
+                tool_name, arguments = self._extract_tool_selection(msg)
+                if tool_name:
+                    enhance_out = self._call_tool_by_name(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        start_id=start_id,
+                        subset_vectors=subset_vectors,
+                        retrieved_frames=frame_results,
+                    )
+                    enhance_results.extend(enhance_out.get("enhance_results") or [])
+
+            else:
+                pass
+
+        retrieval_context = self._format_retrieval_context(
+            steps=steps,
+            scope_desc=scope_desc,
+            frame_results=frame_results,
+            subtitle_results=subtitle_results,
+            enhance_results=enhance_results,
+        )
+        rag_prompt = rag_prompt_after_agentic_retrival.format(
+            video_time=duration,
+            question=user_query,
+            options_text="(no options provided)",
+            retrieval_context=retrieval_context,
+        )
+        return {
+            "rag_prompt": rag_prompt,
+            "metadata_list": frame_results,
+        }
 

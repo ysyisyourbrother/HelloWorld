@@ -584,14 +584,43 @@ class ReasonerLLMAPI:
         self._model = config.api_llm_model_name
         self.messages: List[Dict[str, str]] = []
 
-    def reset(self) -> None:
-        self.messages = []
-
     def append_user(self, text: str) -> None:
         self.messages.append({"role": "user", "content": text})
 
-    def generate(self) -> str:
+    def append_assistant(self, text: str) -> None:
+        self.messages.append({"role": "assistant", "content": text})
+
+    def append_tool(self, tool_call_id: str, content: str) -> None:
+        self.messages.append(
+            {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+        )
+
+    def _apply_reset_if_needed(self, reset: bool) -> None:
+        if not reset:
+            return
+        if not self.messages:
+            return
+
+        # reset 时保留所有 system 消息，以及最后一条非 system 消息（通常是本轮输入）。
+        preserved = []
+        for msg in self.messages:
+            if msg.get("role") == "system":
+                preserved.append(msg)
+
+        last_non_system = None
+        for msg in reversed(self.messages):
+            if msg.get("role") != "system":
+                last_non_system = msg
+                break
+
+        if last_non_system is not None:
+            preserved.append(last_non_system)
+
+        self.messages = preserved
+
+    def generate(self, reset: bool = True) -> str:
         """追加一轮 assistant 回复到 ``messages`` 并返回该回复文本。"""
+        self._apply_reset_if_needed(reset)
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=self.messages,
@@ -599,3 +628,71 @@ class ReasonerLLMAPI:
         content = (resp.choices[0].message.content or "").strip()
         self.messages.append({"role": "assistant", "content": content})
         return content
+
+    def generate_with_tools(
+        self, tools: List[Dict[str, Any]], reset: bool = True
+    ) -> Dict[str, Any]:
+        """
+        追加一轮支持工具调用的 assistant 消息，并返回标准化后的消息字典。
+
+        返回格式示例：
+        {
+            "role": "assistant",
+            "content": "...",
+            "tool_calls": [
+                {
+                    "id": "...",
+                    "type": "function",
+                    "function": {"name": "...", "arguments": "..."}
+                }
+            ]
+        }
+        """
+        self._apply_reset_if_needed(reset)
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=self.messages,
+            tools=tools,
+        )
+        message = resp.choices[0].message
+        assistant_message = {
+            "role": "assistant",
+            "content": (message.content or "").strip(),
+        }
+
+        if message.tool_calls:
+            tool_calls = []
+            for call in message.tool_calls:
+                tool_calls.append(
+                    {
+                        "id": call.id,
+                        "type": call.type,
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        },
+                    }
+                )
+            assistant_message["tool_calls"] = tool_calls
+
+        self.messages.append(assistant_message)
+        return assistant_message
+
+
+class AgenticRetrieverAPI(ReasonerLLMAPI):
+    """带默认 system 提示词的检索规划/工具调用 LLM API。"""
+
+    def __init__(self, config: Config = None):
+        super(AgenticRetrieverAPI, self).__init__(config=config)
+        self.messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a cloud-based remote video retrieval assistant. "
+                    "You cannot directly see the user's video content, and you should "
+                    "plan your actions or invoke tools based on the user's question."
+                ),
+            }
+        ]
+
+
