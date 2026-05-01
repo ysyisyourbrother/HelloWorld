@@ -256,7 +256,7 @@ class Config:
         self.api_vlm_base_url = api_config.get(
             "vlm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
-        self.api_llm_model_name = api_config.get("llm_model_name", "deepseek-v4-pro")
+        self.api_llm_model_name = api_config.get("llm_model_name", "deepseek-v4-flash") # deepseek-v4-flash, deepseek-v4-pro
         self.api_llm_key = api_config.get("llm_key", "")
         self.api_llm_base_url = api_config.get("llm_base_url", "https://api.deepseek.com")
 

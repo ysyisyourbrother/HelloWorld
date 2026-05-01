@@ -145,9 +145,11 @@ class VenusSystemMoti:
         faiss_dir = db_path / "faiss"
         json_dir = db_path / "json"
         srt_dir = db_path / "srt"
+        plan_dir = db_path / "plan"
         faiss_dir.mkdir(parents=True, exist_ok=True)
         json_dir.mkdir(parents=True, exist_ok=True)
         srt_dir.mkdir(parents=True, exist_ok=True)
+        plan_dir.mkdir(parents=True, exist_ok=True)
         faiss_path = str(faiss_dir / f"{video_id}.faiss")
         map_path = str(json_dir / f"{video_id}.json")
         srt_path = str(srt_dir / f"{video_id}.srt")

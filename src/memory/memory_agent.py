@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -29,43 +31,6 @@ def local_tool_use(func):
         return result
     return wrapper
 
-
-#   基础实现：
-#   1. self._query_faiss_subset(self, query_vector, top_k, start_id=None, subset_vectors=None) 
-#       根据已有subset_vectors，实现MemoryManagerBase的_query_faiss相同的功能。或者如果没有传入就直接调用_query_faiss
-
-#   有关[Scope]的功能：
-#   1. self._get_subset_by_period(self, start_time, end_time):
-#       该函数通过start_time和end_time去计算start_frameid和end_frameid，然后去调用_get_subset获得子集和初始id
-#   2. self._get_subset_by_event_frame(self, event, scope):
-#       该函数通过一个event字符串去计算query_vector，然后去全局的向量库查询top1帧的位置，作为锚点，scope是一个两个int元素的列表，
-#       比如[-15, 15], 代表锚点的前后15秒的内容作为子集返回（调用_get_subset_by_period）。
-#   3. self._get_subset_by_keyword_subtitle(self, keyword, keywords_location, scope):
-#       该函数通过一个keyword字符串尝试去字幕库搜索出现的时间（使用ThreadSafeSRT的search_word_time函数）。
-#       如果出现了多次，则使用 keywords_location(一个字符串，"first"|"last"|"average")来选择哪一个时间作为锚点，"average"代表所有时间取平均
-#       scope是一个两个int元素的列表，比如[-15, 15], 代表锚点的前后15秒的内容作为子集返回（调用_get_subset_by_period）
-
-#   有关[Search]的功能：
-#   1. self._search_frames_with_multiple_entities(self, entities, top_k, start_id=None, subset_vectors=None)
-#       entities是一个字符串列表，首先会通过文本编码器对里面的所有字符串进行编码获得等列表长度的向量列表。
-#       然后对于其中的所有向量都去和subset_vectors做相似度，最后相加获得总的相似度。
-#       然后去取top_k，最后返回和_retrieve函数类似的scores，metadata_list
-#   2. self._search_frames_just_by_scope(self, budget, start_id=None, subset_vectors=None)
-#       通过start_id和subset_vectors可以算得视频的时间区间。然后该函数均匀采样返回budget个区间内的视频帧的metadata_list
-#   3. self._search_subtitles_with_multiple_keywords(self, keywords, top_k, start_id=None, subset_vectors=None)
-#       通过start_id和subset_vectors可以算得视频的时间区间。然后该函数对于在该时间区间内去执行retrieve_segment_by_word_with_scope
-#   4. self._search_subtitles_just_by_scope(self, budget, start_id=None, subset_vectors=None)
-#       通过start_id和subset_vectors可以算得视频的时间区间。然后该函数在该时间区间内去执行MemoryManagerBase的retrieve_segment_by_period
-
-#   有关[Enhance]的功能：
-#   1. self._enhance_via_OCR(self, retrieved_frames)
-#       该函数通过OCR模型去识别retrieved_frames，返回retrieved_frames等长的列表，列表元素是通过OCR模型识别出来的每帧的文本
-#       不过，由于我还没有选好OCR模型，所以你可以先写好接口，先不实现。
-#   2. self._enhance_via_YOLO(self, retrieved_frames, objects=None)
-#       该函数通过YOLO模型去对retrieved_frames进行目标识别，如果没有提供objects则通过一个文本模板描述识别到的物体。
-#       如果提供了objects(一个列表，元素是物体名称的字符串)，则专门去识别在这上面的物体。
-#       最终返回retrieved_frames等长的列表，列表元素是每帧通过文本模板描述识别到的物体的句子
-#       不过，由于我还没有选好YOLO模型，所以你可以先写好接口，先不实现。
 class MemoryAgent(MemoryManagerBase):
     """在 MemoryManagerBase 上扩展范围检索等工具能力，以便智能体给出规划。"""
 
@@ -687,9 +652,6 @@ class MemoryAgent(MemoryManagerBase):
 
             yolo_result = self.yolo_model(frame_bgr, verbose=False)
             if not yolo_result:
-                per_frame_lines.append(
-                    "frame {idx}: (no objects detected)".format(idx=idx)
-                )
                 continue
 
             boxes = yolo_result[0].boxes
@@ -711,14 +673,17 @@ class MemoryAgent(MemoryManagerBase):
                 class_count[cls_name] = class_count.get(cls_name, 0) + 1
 
             if not class_count:
-                yolo_line = "frame {idx}: (no objects detected)".format(idx=idx)
-                per_frame_lines.append(yolo_line)
                 continue
 
+            def _count_phrase(name: str, cnt: int) -> str:
+                if cnt <= 1:
+                    return "1 {name}".format(name=name)
+                return "{cnt} {name}s".format(cnt=cnt, name=name)
+
             det_desc = ", ".join(
-                ["{name}({cnt})".format(name=name, cnt=cnt) for name, cnt in class_count.items()]
+                [_count_phrase(name, cnt) for name, cnt in class_count.items()]
             )
-            yolo_line = "frame {idx}: detected {desc}".format(idx=idx, desc=det_desc)
+            yolo_line = "frame {idx}: {desc}".format(idx=idx, desc=det_desc)
 
             if target_set:
                 prioritized_pairs = []
@@ -737,12 +702,9 @@ class MemoryAgent(MemoryManagerBase):
                 else:
                     ordered_pairs = prioritized_pairs + remaining_pairs
                 det_desc = ", ".join(
-                    [
-                        "{name}({cnt})".format(name=name, cnt=cnt)
-                        for name, cnt in ordered_pairs
-                    ]
+                    [_count_phrase(name, cnt) for name, cnt in ordered_pairs]
                 )
-                yolo_line = "frame {idx}: detected {desc}".format(idx=idx, desc=det_desc)
+                yolo_line = "frame {idx}: {desc}".format(idx=idx, desc=det_desc)
 
             per_frame_lines.append(yolo_line)
 
@@ -922,11 +884,15 @@ class MemoryAgent(MemoryManagerBase):
                     )
                     normalized = str(text).strip()
                     if normalized:
-                        subtitle_texts.append(normalized)
+                        subtitle_texts.append('"{text}"'.format(text=normalized))
                     else:
-                        subtitle_texts.append(json.dumps(row, ensure_ascii=False))
+                        subtitle_texts.append(
+                            '"{text}"'.format(text=json.dumps(row, ensure_ascii=False))
+                        )
                 else:
-                    subtitle_texts.append(str(row).strip())
+                    normalized = str(row).strip()
+                    if normalized:
+                        subtitle_texts.append('"{text}"'.format(text=normalized))
             merged_subtitles = " | ".join([item for item in subtitle_texts if item])
             lines.append(
                 "We also provide {cnt} most relevant subtitle snippets as language evidence: {subs}".format(
@@ -944,7 +910,56 @@ class MemoryAgent(MemoryManagerBase):
 
         return "\n".join(lines)
 
-    def agentic_retrieve_pipeline(self, user_query: str) -> Dict[str, Any]:
+    def _resolve_plan_json_path(self) -> Optional[str]:
+        """与 databasemap 同级目录下的 plan/{视频名}.json，例如 .../short/json/a.json -> .../short/plan/a.json。"""
+        map_path = getattr(self, "databasemap_file_path", None) or ""
+        map_path = str(map_path).strip()
+        if not map_path:
+            return None
+        json_dir = os.path.dirname(os.path.abspath(map_path))
+        base_dir = os.path.dirname(json_dir)
+        plan_dir = os.path.join(base_dir, "plan")
+        basename = os.path.basename(map_path)
+        return os.path.join(plan_dir, basename)
+
+    def _serialize_tool_result_for_plan(self, result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not result:
+            return None
+        out: Dict[str, Any] = {}
+        for key, val in result.items():
+            if key == "subset_vectors" and isinstance(val, np.ndarray):
+                shape = list(val.shape)
+                out[key] = {
+                    "shape": shape,
+                    "dtype": str(val.dtype),
+                    "note": "numpy array omitted",
+                }
+                continue
+            out[key] = val
+        return out
+
+    def _append_plan_trace_json(
+        self,
+        plan_json_path: str,
+        run_record: Dict[str, Any],
+    ) -> None:
+        os.makedirs(os.path.dirname(os.path.abspath(plan_json_path)), exist_ok=True)
+        data: Dict[str, Any] = {"runs": []}
+        if os.path.isfile(plan_json_path):
+            with open(plan_json_path, "r", encoding="utf-8") as fp:
+                text = fp.read()
+            if text.strip():
+                data = json.loads(text)
+        if "runs" not in data or not isinstance(data["runs"], list):
+            data["runs"] = []
+        data["databasemap_file_path"] = self.databasemap_file_path
+        data["runs"].append(run_record)
+        with open(plan_json_path, "w", encoding="utf-8") as fp:
+            json.dump(data, fp, ensure_ascii=False, indent=2)
+
+    def agentic_retrieve_pipeline(
+        self, user_query: str, options: Optional[Sequence[str]] = None
+    ) -> Dict[str, Any]:
         with self.databasemap.acquire() as videos:
             if videos:
                 first_video = videos[0]
@@ -952,12 +967,11 @@ class MemoryAgent(MemoryManagerBase):
             else:
                 duration = 0.0
 
-        self.agentic_retriever.reset_messages()
         plan_prompt = prompt_generate_plan_with_faiss_and_srt.format(
             video_duration=duration, question=user_query
         )
-        self.agentic_retriever.add_message("user", plan_prompt)
-        plan_text = self.agentic_retriever.generate(reset=False)
+        self.agentic_retriever.append_user(plan_prompt)
+        plan_text = self.agentic_retriever.generate(reset=True)
         steps = self._parse_plan_steps(plan_text)
 
         start_id = None
@@ -966,9 +980,16 @@ class MemoryAgent(MemoryManagerBase):
         frame_results: List[Dict[str, Any]] = []
         subtitle_results: List[Dict[str, Any]] = []
         enhance_results: List[str] = []
+        tool_traces: List[Dict[str, Any]] = []
 
         # 以下是我预留的参数，不要改动
         need_tool_desc = False
+        scope_tool_prompt = ""
+        search_tool_prompt = ""
+        enhance_tool_prompt = ""
+        scope_schema_prompt = ""
+        search_schema_prompt = ""
+        enhance_schema_prompt = ""
         if need_tool_desc:
             scope_tool_prompt = self._tool_list_to_prompt(self.scope_tools)
             search_tool_prompt = self._tool_list_to_prompt(self.search_tools)
@@ -987,10 +1008,10 @@ class MemoryAgent(MemoryManagerBase):
                     duration=duration,
                     scope_plan_step=step_text,
                 )
-                self.agentic_retriever.reset_messages()
-                self.agentic_retriever.add_message("user", prompt)
-                msg = self.agentic_retriever.generate_with_tools(self.scope_tools)
+                self.agentic_retriever.append_user(prompt)
+                msg = self.agentic_retriever.generate_with_tools(self.scope_tools, reset=True)
                 tool_name, arguments = self._extract_tool_selection(msg)
+                scope_out = None
                 if tool_name:
                     scope_out = self._call_tool_by_name(
                         tool_name=tool_name,
@@ -1002,6 +1023,16 @@ class MemoryAgent(MemoryManagerBase):
                     start_id = scope_out.get("start_id", start_id)
                     subset_vectors = scope_out.get("subset_vectors", subset_vectors)
                     scope_desc = scope_out.get("scope_desc", scope_desc)
+                tool_traces.append(
+                    {
+                        "phase": "scope",
+                        "plan_step": step_text,
+                        "tool_name": tool_name,
+                        "arguments": dict(arguments) if arguments else {},
+                        "result": self._serialize_tool_result_for_plan(scope_out),
+                        "assistant_content": (msg.get("content") or "").strip(),
+                    }
+                )
                 continue
 
             elif step_text.startswith("[Search]"):
@@ -1012,10 +1043,10 @@ class MemoryAgent(MemoryManagerBase):
                     duration=duration,
                     search_plan_step=step_text,
                 )
-                self.agentic_retriever.reset_messages()
-                self.agentic_retriever.add_message("user", prompt)
-                msg = self.agentic_retriever.generate_with_tools(self.search_tools)
+                self.agentic_retriever.append_user(prompt)
+                msg = self.agentic_retriever.generate_with_tools(self.search_tools, reset=True)
                 tool_name, arguments = self._extract_tool_selection(msg)
+                search_out = None
                 if tool_name:
                     search_out = self._call_tool_by_name(
                         tool_name=tool_name,
@@ -1028,6 +1059,16 @@ class MemoryAgent(MemoryManagerBase):
                     subtitle_part = search_out.get("subtitle_results") or []
                     frame_results.extend(frame_part)
                     subtitle_results.extend(subtitle_part)
+                tool_traces.append(
+                    {
+                        "phase": "search",
+                        "plan_step": step_text,
+                        "tool_name": tool_name,
+                        "arguments": dict(arguments) if arguments else {},
+                        "result": self._serialize_tool_result_for_plan(search_out),
+                        "assistant_content": (msg.get("content") or "").strip(),
+                    }
+                )
                 continue
 
             elif step_text.startswith("[Enhance]"):
@@ -1038,10 +1079,10 @@ class MemoryAgent(MemoryManagerBase):
                     duration=duration,
                     enhance_plan_step=step_text,
                 )
-                self.agentic_retriever.reset_messages()
-                self.agentic_retriever.add_message("user", prompt)
-                msg = self.agentic_retriever.generate_with_tools(self.enhance_tools)
+                self.agentic_retriever.append_user(prompt)
+                msg = self.agentic_retriever.generate_with_tools(self.enhance_tools, reset=True)
                 tool_name, arguments = self._extract_tool_selection(msg)
+                enhance_out = None
                 if tool_name:
                     enhance_out = self._call_tool_by_name(
                         tool_name=tool_name,
@@ -1051,23 +1092,55 @@ class MemoryAgent(MemoryManagerBase):
                         retrieved_frames=frame_results,
                     )
                     enhance_results.extend(enhance_out.get("enhance_results") or [])
+                tool_traces.append(
+                    {
+                        "phase": "enhance",
+                        "plan_step": step_text,
+                        "tool_name": tool_name,
+                        "arguments": dict(arguments) if arguments else {},
+                        "result": self._serialize_tool_result_for_plan(enhance_out),
+                        "assistant_content": (msg.get("content") or "").strip(),
+                    }
+                )
 
             else:
                 pass
 
         retrieval_context = self._format_retrieval_context(
-            steps=steps,
-            scope_desc=scope_desc,
             frame_results=frame_results,
             subtitle_results=subtitle_results,
             enhance_results=enhance_results,
         )
+        options_text = "(no options provided)"
+        if options:
+            option_items = [str(item).strip() for item in options if str(item).strip()]
+            if option_items:
+                options_text = " ".join(option_items)
+
         rag_prompt = rag_prompt_after_agentic_retrival.format(
             video_time=duration,
             question=user_query,
-            options_text="(no options provided)",
+            options_text=options_text,
             retrieval_context=retrieval_context,
         )
+
+        plan_json_path = self._resolve_plan_json_path()
+        if plan_json_path:
+            option_list = None
+            if options:
+                option_list = [str(item).strip() for item in options if str(item).strip()]
+                if not option_list:
+                    option_list = None
+            run_record = {
+                "ts": time.time(),
+                "question": user_query,
+                "options": option_list,
+                "video_duration_sec": duration,
+                "planning": {"raw": plan_text, "steps": steps},
+                "tool_calls": tool_traces,
+            }
+            self._append_plan_trace_json(plan_json_path, run_record)
+
         return {
             "rag_prompt": rag_prompt,
             "metadata_list": frame_results,
