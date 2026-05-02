@@ -273,6 +273,7 @@ class MemoryAgent(MemoryManagerBase):
 
     def _ensure_query_encoder(self) -> None:
         if self._query_encoder is None:
+            self.logger.debug("MemoryAgent: 惰性初始化 QueryVectorizer")
             self._query_encoder = QueryVectorizer(self._config)
             self._query_encoder._set_logger()
             self._query_encoder._initialize_vectorizer()
@@ -600,6 +601,12 @@ class MemoryAgent(MemoryManagerBase):
                     )
 
             if frame_bgr is None:
+                self.logger.warning(
+                    "MemoryAgent OCR: 无法加载帧像素 idx=%s source=%s frame_id=%s",
+                    idx,
+                    frame_item.get("source_path") if isinstance(frame_item, dict) else None,
+                    frame_item.get("frame_id") if isinstance(frame_item, dict) else None,
+                )
                 text_line = "frame {idx}: failed to load frame pixels".format(idx=idx)
                 per_frame_lines.append(text_line)
                 continue
@@ -646,6 +653,12 @@ class MemoryAgent(MemoryManagerBase):
                     )
 
             if frame_bgr is None:
+                self.logger.warning(
+                    "MemoryAgent YOLO: 无法加载帧像素 idx=%s source=%s frame_id=%s",
+                    idx,
+                    frame_item.get("source_path") if isinstance(frame_item, dict) else None,
+                    frame_item.get("frame_id") if isinstance(frame_item, dict) else None,
+                )
                 yolo_line = "frame {idx}: failed to load frame pixels".format(idx=idx)
                 per_frame_lines.append(yolo_line)
                 continue
@@ -767,6 +780,11 @@ class MemoryAgent(MemoryManagerBase):
         subset_vectors: Optional[np.ndarray]=None,
         retrieved_frames: Sequence[Dict[str, Any]]=None,
     ) -> Dict[str, Any]:
+        self.logger.debug(
+            "MemoryAgent 调用工具 name=%s arg_keys=%s",
+            tool_name,
+            sorted(arguments.keys()) if arguments else [],
+        )
         if tool_name == "_get_subset_by_period":
             new_start_id, new_subset = self._get_subset_by_period(
                 start_time=arguments["start_time"], end_time=arguments["end_time"]
@@ -852,6 +870,7 @@ class MemoryAgent(MemoryManagerBase):
             )
             return {"enhance_results": enhanced_texts}
 
+        self.logger.warning("MemoryAgent 未知工具名: %s", tool_name)
         return {}
 
     def _format_retrieval_context(
@@ -935,6 +954,17 @@ class MemoryAgent(MemoryManagerBase):
                     "note": "numpy array omitted",
                 }
                 continue
+            if key == "frame_results" and isinstance(val, list):
+                stripped: List[Any] = []
+                for row in val:
+                    if isinstance(row, dict) and "i_frames" in row:
+                        stripped.append(
+                            {k: v for k, v in row.items() if k != "i_frames"}
+                        )
+                    else:
+                        stripped.append(row)
+                out[key] = stripped
+                continue
             out[key] = val
         return out
 
@@ -967,12 +997,23 @@ class MemoryAgent(MemoryManagerBase):
             else:
                 duration = 0.0
 
+        self.logger.info(
+            "MemoryAgent agentic 检索开始: 视频时长 %.2fs, 问题长度 %d",
+            duration,
+            len(user_query or ""),
+        )
+
         plan_prompt = prompt_generate_plan_with_faiss_and_srt.format(
             video_duration=duration, question=user_query
         )
         self.agentic_retriever.append_user(plan_prompt)
         plan_text = self.agentic_retriever.generate(reset=True)
         steps = self._parse_plan_steps(plan_text)
+        self.logger.debug(
+            "MemoryAgent 规划完成: 原始输出长度 %d, 步骤数 %d",
+            len(plan_text or ""),
+            len(steps),
+        )
 
         start_id = None
         subset_vectors = None
@@ -1012,6 +1053,11 @@ class MemoryAgent(MemoryManagerBase):
                 msg = self.agentic_retriever.generate_with_tools(self.scope_tools, reset=True)
                 tool_name, arguments = self._extract_tool_selection(msg)
                 scope_out = None
+                if not tool_name:
+                    self.logger.warning(
+                        "MemoryAgent [Scope] 未解析到工具调用: step=%s",
+                        step_text[:200],
+                    )
                 if tool_name:
                     scope_out = self._call_tool_by_name(
                         tool_name=tool_name,
@@ -1047,6 +1093,11 @@ class MemoryAgent(MemoryManagerBase):
                 msg = self.agentic_retriever.generate_with_tools(self.search_tools, reset=True)
                 tool_name, arguments = self._extract_tool_selection(msg)
                 search_out = None
+                if not tool_name:
+                    self.logger.warning(
+                        "MemoryAgent [Search] 未解析到工具调用: step=%s",
+                        step_text[:200],
+                    )
                 if tool_name:
                     search_out = self._call_tool_by_name(
                         tool_name=tool_name,
@@ -1083,6 +1134,11 @@ class MemoryAgent(MemoryManagerBase):
                 msg = self.agentic_retriever.generate_with_tools(self.enhance_tools, reset=True)
                 tool_name, arguments = self._extract_tool_selection(msg)
                 enhance_out = None
+                if not tool_name:
+                    self.logger.warning(
+                        "MemoryAgent [Enhance] 未解析到工具调用: step=%s",
+                        step_text[:200],
+                    )
                 if tool_name:
                     enhance_out = self._call_tool_by_name(
                         tool_name=tool_name,
@@ -1140,6 +1196,14 @@ class MemoryAgent(MemoryManagerBase):
                 "tool_calls": tool_traces,
             }
             self._append_plan_trace_json(plan_json_path, run_record)
+            self.logger.debug("MemoryAgent 已写入 plan trace: %s", plan_json_path)
+
+        self.logger.info(
+            "MemoryAgent agentic 检索结束: 帧证据 %d 条, 字幕 %d 段, 增强文本 %d 条",
+            len(frame_results),
+            len(subtitle_results),
+            len(enhance_results),
+        )
 
         return {
             "rag_prompt": rag_prompt,
