@@ -324,7 +324,7 @@ class ReasonerVLMLocal:
             memory_results = query_request.memory_results
             dialog_id = getattr(query_request, "dialog_id", 0)
 
-            self.logger.info(f"开始处理查询 {query_id}: {query_text} (dialog_id={dialog_id})")
+            self.logger.debug(f"开始处理查询 {query_id}: {query_text} (dialog_id={dialog_id})")
 
             if self.test_mode:
                 self.logger.info(f"测试模式：查询 {query_id} 直接返回测试文本")
