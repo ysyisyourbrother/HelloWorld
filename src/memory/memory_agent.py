@@ -158,11 +158,11 @@ class MemoryAgent(MemoryManagerBase):
                             "entities": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "A list of entity strings to search for",
+                                "description": "A list of entity strings to search for.",
                             },
                             "top_k": {
                                 "type": "integer",
-                                "description": "Number of top frames to return",
+                                "description": "Number of top frames to return. ",
                             },
                         },
                         "required": ["entities", "top_k"],
@@ -914,18 +914,14 @@ class MemoryAgent(MemoryManagerBase):
                         subtitle_texts.append('"{text}"'.format(text=normalized))
             merged_subtitles = " | ".join([item for item in subtitle_texts if item])
             lines.append(
-                "We also provide {cnt} most relevant subtitle snippets as language evidence: {subs}".format(
+                "We provide {cnt} most relevant subtitle snippets as language evidence: {subs}".format(
                     cnt=subtitle_count,
                     subs=merged_subtitles or "(empty subtitles)",
                 )
             )
-        else:
-            lines.append("No relevant subtitle evidence was retrieved.")
 
         if enhance_results:
             lines.extend([str(item).strip() for item in enhance_results if str(item).strip()])
-        else:
-            lines.append("No enhancement model output is provided.")
 
         return "\n".join(lines)
 
