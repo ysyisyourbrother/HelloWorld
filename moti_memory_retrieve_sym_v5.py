@@ -55,6 +55,12 @@ def parse_args():
         default="motivation_results_symphony_v5/retrieve",
         help="输出路径",
     )
+    parser.add_argument(
+        "--system_mode",
+        type=int,
+        default=None,
+        help="覆盖配置中的 system_mode 十进制位掩码（见 src.config 中 SYSTEM_MODE_*）；不传则用配置文件",
+    )
     return parser.parse_args()
 
 
@@ -64,6 +70,8 @@ if __name__ == "__main__":
     captured = {}
 
     config = SymConfig(config_path=args.config)
+    if args.system_mode is not None:
+        config.system_mode = int(args.system_mode)
     moti = SymphonySystemMotiV5(config)
 
     result = moti.run_video_flow(

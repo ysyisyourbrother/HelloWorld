@@ -25,7 +25,7 @@ from src.agent.prompts_for_symphony import (
     rag_prompt_with_clips,
     rag_prompt_with_frames,
 )
-from src.config import SymConfig
+from src.config import SymConfig, system_mode_wants_memory_reinject, system_mode_wants_vlm_qa
 from src.llm.reasoner import QueryRequest
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerForV3
 from src.memory.memory_manager import MemoryManagerBase
@@ -61,7 +61,6 @@ class SymphonySystemMotiV3(SymphonySystemMoti):
         srt_path: Optional[str] = None,
     ):
         """初始化组件：SymVideoInputByStreamWindow + SymFrameVectorizerForV3（支持编码/检索钩子重挂载）。"""
-        self.config.memory_mode = "both"
         if faiss_path is not None:
             self.config.memory_faiss_file_path = faiss_path
         if map_path is not None:
@@ -104,6 +103,38 @@ class SymphonySystemMotiV3(SymphonySystemMoti):
     ) -> Dict[str, Any]:
         """Inject：按媒体时间窗选帧编码并写入向量库。"""
         faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
+        if not system_mode_wants_memory_reinject(self.config.system_mode):
+            if os.path.isfile(faiss_path):
+                self.logger.info(
+                    "system_mode 未启用记忆重注入，加载已有向量库: %s",
+                    faiss_path,
+                )
+                self._init_components(
+                    video_path=None,
+                    faiss_path=faiss_path,
+                    map_path=map_path,
+                    srt_path=srt_path,
+                )
+                idx = faiss.read_index(faiss_path)
+                return {
+                    "total_frames": idx.ntotal,
+                    "total_vectors": idx.ntotal,
+                    "elapsed_sec": 0,
+                    "batch_size": self.batch_size,
+                    "skipped": True,
+                }
+            self.logger.error(
+                "system_mode 未启用记忆重注入但本地无 faiss: %s",
+                faiss_path,
+            )
+            return {
+                "total_frames": 0,
+                "total_vectors": 0,
+                "elapsed_sec": 0.0,
+                "batch_size": self.batch_size,
+                "skipped": False,
+                "error": "missing_faiss_for_local_only_mode",
+            }
         if os.path.isfile(faiss_path) and not force_update:
             self.logger.info("向量库已存在，跳过 inject: %s", faiss_path)
             self._init_components(
@@ -284,6 +315,12 @@ class SymphonySystemMotiV3(SymphonySystemMoti):
         else:
             result["select_clip_num"] = 0
             result["reasoner_input_frame_count"] = select_frame_num
+
+        if not system_mode_wants_vlm_qa(self.config.system_mode):
+            result["cloud_result"] = None
+            result["cloud_error"] = "system_mode 未启用 VLM 问答，仅检索"
+            result["total_time_sec"] = time.time() - t0
+            return result
 
         if self._benchmark_uses_api_vlm():
             if rit == "clip" and clip_paths_ok and clip_info:

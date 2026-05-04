@@ -14,6 +14,7 @@ from src.benchmark.retrieve_clip_frames import (
     count_reported_frames_in_clip_info,
     decode_clip_info_all_frames_bgr,
 )
+from src.config import system_mode_wants_vlm_qa
 from src.llm.reasoner import QueryRequest
 from src.memory.subtitle.asr import SymASR, SymStreamASR
 from src.system.symphony.v3.motivation import SymphonySystemMotiV3
@@ -213,6 +214,12 @@ class SymphonySystemMotiV4(SymphonySystemMotiV3):
         else:
             result["select_clip_num"] = 0
             result["reasoner_input_frame_count"] = select_frame_num
+
+        if not system_mode_wants_vlm_qa(self.config.system_mode):
+            result["cloud_result"] = None
+            result["cloud_error"] = "system_mode 未启用 VLM 问答，仅检索"
+            result["total_time_sec"] = time.time() - t0
+            return result
 
         is_local_vlm = bool(getattr(self.config, "benchmark_is_local_vlm", True))
         if not is_local_vlm:

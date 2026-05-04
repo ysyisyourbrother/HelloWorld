@@ -8,6 +8,11 @@ from typing import Any, Dict, List, Optional
 
 import cv2
 
+from src.config import (
+    system_mode_wants_memory_reinject,
+    system_mode_wants_new_plan,
+    system_mode_wants_vlm_qa,
+)
 from src.llm.reasoner import QueryRequest
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerForV3
 from src.memory.memory_agent import MemoryAgent
@@ -26,7 +31,6 @@ class SymphonySystemMotiV5(SymphonySystemMotiV4):
         map_path: Optional[str] = None,
         srt_path: Optional[str] = None,
     ):
-        self.config.memory_mode = "both"
         if faiss_path is not None:
             self.config.memory_faiss_file_path = faiss_path
         if map_path is not None:
@@ -73,9 +77,46 @@ class SymphonySystemMotiV5(SymphonySystemMotiV4):
                 options = maybe_options
             elif maybe_options:
                 options = list(maybe_options)
-        retrieve_pack = self.memory_manager.agentic_retrieve_pipeline(
-            question, options=options
-        )
+
+        if (
+            system_mode_wants_memory_reinject(self.config.system_mode)
+            and not system_mode_wants_new_plan(self.config.system_mode)
+            and not system_mode_wants_vlm_qa(self.config.system_mode)
+        ):
+            return {
+                "question": question,
+                "retrieve_time_sec": 0.0,
+                "scores": [],
+                "retrieved_frames": [],
+                "retrieved_frames_metadata": [],
+                "rag_question": question,
+                "retrieve_item_type": "frame",
+                "select_frame_num": 0,
+                "select_clip_num": 0,
+                "reasoner_input_frame_count": 0,
+                "cloud_result": None,
+                "cloud_error": (
+                    "system_mode 为仅记忆重注入（未启用新 plan 与 VLM），跳过检索与推理"
+                ),
+                "total_time_sec": time.time() - t0,
+            }
+
+        if system_mode_wants_new_plan(self.config.system_mode):
+            retrieve_pack = self.memory_manager.agentic_retrieve_pipeline(
+                question, options=options
+            )
+        else:
+            plan_path = self.memory_manager._resolve_plan_json_path()
+            if not plan_path or not os.path.isfile(plan_path):
+                raise ValueError(
+                    "system_mode 未启用新 plan，但未找到已有 plan 文件（期望与 databasemap 同名的 "
+                    "plan/*.json）: %r" % (plan_path,)
+                )
+            retrieve_pack = self.memory_manager.agentic_retrieve_pipeline_with_existing_plan(
+                question,
+                options=options,
+                existing_plan_json_path=plan_path,
+            )
         retrieve_time = time.time() - t0
 
         frames_metadata = retrieve_pack.get("metadata_list") or []
@@ -93,6 +134,12 @@ class SymphonySystemMotiV5(SymphonySystemMotiV4):
             "select_clip_num": 0,
             "reasoner_input_frame_count": len(frames_metadata),
         }
+
+        if not system_mode_wants_vlm_qa(self.config.system_mode):
+            result["cloud_result"] = None
+            result["cloud_error"] = "system_mode 未启用 VLM 问答，仅检索"
+            result["total_time_sec"] = time.time() - t0
+            return result
 
         is_local_vlm = bool(
             getattr(self.config, "is_local_vlm", getattr(self.config, "benchmark_is_local_vlm", True))

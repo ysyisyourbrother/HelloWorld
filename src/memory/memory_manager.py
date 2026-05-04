@@ -14,7 +14,11 @@ from typing import List, Optional, Tuple, Sequence, Callable, Dict, Any
 import multiprocessing as mp
 
 # 本项目
-from src.config import Config
+from src.config import (
+    Config,
+    system_mode_online_memory_needs_query_encoder,
+    system_mode_wants_memory_reinject,
+)
 from src.memory.frame.frame_vectorizer import FrameVectorData, FrameVectorizer
 from src.memory.index.faiss import ThreadSafeFaiss
 from src.memory.index.map import ThreadSafeMap
@@ -81,7 +85,7 @@ class MemoryManagerBase:
         self.memory_inject_save_dir = os.path.join("logs", "memory", "inject")
         
         # 队列相关（与 VideoInput.frame_queue 对接，由编排层注入）
-        self.memory_mode = config.memory_mode
+        self.system_mode = config.system_mode
         self.frame_queue = None  # multiprocessing.Queue[FrameData]，原先进 FrameVectorizer
 
         self._frame_encoder: Optional[FrameVectorizer] = None
@@ -912,21 +916,28 @@ class MemoryManagerOnline(MemoryManagerBase):
                 self.logger.error(f"处理帧向量时出错: {e}")
 
     def _process_main(self):
-        """在线主循环：按 memory_mode 启动对应线程/编码器。"""
+        """在线主循环：按 system_mode 位掩码启动对应线程/编码器。"""
         self._set_logger()
         self.logger.info(f"MemoryManager启动, 进程ID: {os.getpid()}")
 
         self._initialize_database()
-        memory_mode = self.memory_mode
-        self.logger.info(f"MemoryManager模式: {memory_mode}")
+        sm = self.system_mode
+        need_inject = system_mode_wants_memory_reinject(sm)
+        need_query_encoder = system_mode_online_memory_needs_query_encoder(sm)
+        self.logger.info(
+            "MemoryManager system_mode=%s inject=%s query_encoder=%s",
+            sm,
+            need_inject,
+            need_query_encoder,
+        )
 
-        if memory_mode in ("only_inject", "both"):
+        if need_inject:
             self._frame_encoder = FrameVectorizer(self._config)
             self._frame_encoder._set_logger()
             self._frame_encoder._initialize_vectorizer()
             if self.frame_queue is None:
                 raise RuntimeError("inject 模式需要设置 frame_queue（通常为 VideoInput.frame_queue）")
-        if memory_mode in ("only_query", "both"):
+        if need_query_encoder:
             self._query_encoder = QueryVectorizer(self._config)
             self._query_encoder._set_logger()
             self._query_encoder._initialize_vectorizer()
@@ -934,16 +945,16 @@ class MemoryManagerOnline(MemoryManagerBase):
         self._ready_event.set()
         threads = []
 
-        if memory_mode in ["only_inject", "both"]:
+        if need_inject:
             frame_thread = threading.Thread(target=self._thread_frame_vectors, daemon=True)
             frame_thread.name = "FrameVectorThread"
             threads.append(frame_thread)
             self.logger.info("帧向量处理线程已创建")
 
-        if len(threads) == 0 and memory_mode == "only_query":
-            self.logger.info("only_query 模式：使用同步 query_text_sync，不启动后台线程")
+        if len(threads) == 0 and need_query_encoder:
+            self.logger.info("无注入线程、仅查询：使用同步 query_text_sync，不启动后台帧线程")
         elif len(threads) == 0:
-            self.logger.error("没有启动任何线程，请检查memory_mode配置")
+            self.logger.error("没有启动任何线程，请检查 system_mode 配置")
             return
 
         for thread in threads:

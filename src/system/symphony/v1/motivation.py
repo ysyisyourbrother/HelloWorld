@@ -16,7 +16,7 @@ _project_root = os.path.abspath(
 )
 sys.path.insert(0, _project_root)
 
-from src.config import SymConfig
+from src.config import SymConfig, system_mode_wants_memory_reinject
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerByGOP
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
@@ -52,7 +52,6 @@ class SymphonySystemMoti(VenusSystemMoti):
         srt_path: Optional[str] = None,
     ):
         """初始化各组件，使用 make_sym_video_input（V1/V2）和 SymFrameVectorizer（不注册编码钩子）"""
-        self.config.memory_mode = "both"
         if faiss_path is not None:
             self.config.memory_faiss_file_path = faiss_path
         if map_path is not None:
@@ -95,6 +94,38 @@ class SymphonySystemMoti(VenusSystemMoti):
     ) -> Dict[str, Any]:
         """Inject 阶段：按 GOP 迭代、select_frame_in_gop 选帧、encode_frames_by_gop 编码、插入"""
         faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
+        if not system_mode_wants_memory_reinject(self.config.system_mode):
+            if os.path.isfile(faiss_path):
+                self.logger.info(
+                    "system_mode 未启用记忆重注入，加载已有向量库: %s",
+                    faiss_path,
+                )
+                self._init_components(
+                    video_path=None,
+                    faiss_path=faiss_path,
+                    map_path=map_path,
+                    srt_path=srt_path,
+                )
+                idx = faiss.read_index(faiss_path)
+                return {
+                    "total_frames": idx.ntotal,
+                    "total_vectors": idx.ntotal,
+                    "elapsed_sec": 0,
+                    "batch_size": self.batch_size,
+                    "skipped": True,
+                }
+            self.logger.error(
+                "system_mode 未启用记忆重注入但本地无 faiss: %s",
+                faiss_path,
+            )
+            return {
+                "total_frames": 0,
+                "total_vectors": 0,
+                "elapsed_sec": 0.0,
+                "batch_size": self.batch_size,
+                "skipped": False,
+                "error": "missing_faiss_for_local_only_mode",
+            }
         if os.path.isfile(faiss_path) and not force_update:
             self.logger.info(f"向量库已存在，跳过 inject: {faiss_path}")
             self._init_components(

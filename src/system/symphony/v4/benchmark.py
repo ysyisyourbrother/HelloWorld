@@ -7,6 +7,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.agent.prompts_for_symphony import rag_prompt_with_frames_and_subtitles
+from src.config import system_mode_wants_vlm_qa
 from src.benchmark.retrieve_clip_frames import (
     count_existing_clip_mp4s,
     decode_clip_info_all_frames_bgr,
@@ -203,6 +204,12 @@ class SymphonySystemBenchV4(SymphonySystemBenchV3):
             if (rit == "clip" and clip_bgr_list)
             else select_frame_num
         )
+
+        if not system_mode_wants_vlm_qa(self.config.system_mode):
+            result["cloud_result"] = None
+            result["cloud_error"] = "system_mode 未启用 VLM 问答，仅检索"
+            result["total_time_sec"] = time.time() - t0
+            return result
 
         is_local_vlm = bool(getattr(self.config, "benchmark_is_local_vlm", True))
         if not is_local_vlm:
