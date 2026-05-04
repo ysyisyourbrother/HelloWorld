@@ -24,9 +24,6 @@
 echo "V5"
 export PYTHONWARNINGS="ignore::FutureWarning"
 export PYTHONWARNINGS="ignore::UserWarning"
-export DASHSCOPE_API_KEY="sk-4b8261173870474290a052c60f183316"
-export DEEPSEEK_API_KEY="sk-e6f0a114a0534d5b95ff692f0fc0af49"
-export ZHIPU_API_KEY="210bd394c54d427c9546e15086da4c33.4AsYXT0R9D7Tiagl"
 
 
 nohup python launch_benchmark_symphony_v5.py \
