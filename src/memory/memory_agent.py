@@ -622,8 +622,6 @@ class MemoryAgent(MemoryManagerBase):
                 text_line = "frame {idx}: ".format(idx=idx) + "; ".join(
                     ['"{txt}"'.format(txt=txt) for txt in kept_texts]
                 )
-            else:
-                text_line = "frame {idx}: (no text)".format(idx=idx)
             per_frame_lines.append(text_line)
 
         merged_text = "\n".join(per_frame_lines)
@@ -983,6 +981,30 @@ class MemoryAgent(MemoryManagerBase):
         with open(plan_json_path, "w", encoding="utf-8") as fp:
             json.dump(data, fp, ensure_ascii=False, indent=2)
 
+    def _select_plan_run_matching_question(
+        self, plan_data: Dict[str, Any], user_query: str
+    ) -> Dict[str, Any]:
+        """从 plan JSON 的 runs 中选出 question 与 user_query（strip 后）完全一致的那一条。"""
+        q = str(user_query or "").strip()
+        runs = plan_data.get("runs")
+        if not isinstance(runs, list) or not runs:
+            raise ValueError("plan JSON 中缺少非空的 runs 列表")
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            rq = str(run.get("question") or "").strip()
+            if rq == q:
+                return run
+        previews: List[str] = []
+        for run in runs:
+            if isinstance(run, dict):
+                previews.append(str(run.get("question") or "")[:120])
+        raise ValueError(
+            "plan JSON 中未找到与 user_query 完全匹配的 question（strip 后相等）；"
+            "user_query=%r；runs 条数=%d；各条 question 前 120 字预览=%r"
+            % (q, len(runs), previews)
+        )
+
     def agentic_retrieve_pipeline(
         self, user_query: str, options: Optional[Sequence[str]] = None
     ) -> Dict[str, Any]:
@@ -1196,6 +1218,159 @@ class MemoryAgent(MemoryManagerBase):
 
         self.logger.info(
             "MemoryAgent agentic 检索结束: 帧证据 %d 条, 字幕 %d 段, 增强文本 %d 条",
+            len(frame_results),
+            len(subtitle_results),
+            len(enhance_results),
+        )
+
+        return {
+            "rag_prompt": rag_prompt,
+            "metadata_list": frame_results,
+        }
+
+    def agentic_retrieve_pipeline_with_existing_plan(
+        self,
+        user_query: str,
+        options: Optional[Sequence[str]] = None,
+        *,
+        existing_plan_json_path: str,
+    ) -> Dict[str, Any]:
+        """与 agentic_retrieve_pipeline 相同的后半段（本地工具检索 + RAG 拼装），但不请求云端规划与选工具；
+        从给定 plan JSON 的 runs 里按 question 匹配一条记录，按其 tool_calls 顺序直接重放工具调用。
+        不向任何 plan 文件写入 trace（只读 existing_plan_json_path）。"""
+        path = str(existing_plan_json_path or "").strip()
+        if not path:
+            raise ValueError("existing_plan_json_path 为空")
+        if not os.path.isfile(path):
+            raise ValueError("plan 文件不存在: %s" % path)
+        with open(path, "r", encoding="utf-8") as fp:
+            plan_file_data = json.load(fp)
+        if not isinstance(plan_file_data, dict):
+            raise ValueError("plan 文件根节点必须是 JSON 对象")
+        matched_run = self._select_plan_run_matching_question(plan_file_data, user_query)
+        recorded_calls = matched_run.get("tool_calls")
+        if not isinstance(recorded_calls, list):
+            raise ValueError("匹配到的 run 缺少 tool_calls 列表")
+
+        with self.databasemap.acquire() as videos:
+            if videos:
+                first_video = videos[0]
+                duration = float(first_video.get("duration") or 0.0)
+            else:
+                duration = 0.0
+
+        self.logger.info(
+            "MemoryAgent agentic 检索(复用 plan)开始: 视频时长 %.2fs, 问题长度 %d, plan=%s",
+            duration,
+            len(user_query or ""),
+            path,
+        )
+
+        start_id = None
+        subset_vectors = None
+        scope_desc = ""
+        frame_results: List[Dict[str, Any]] = []
+        subtitle_results: List[Dict[str, Any]] = []
+        enhance_results: List[str] = []
+
+        for trace_row in recorded_calls:
+            if not isinstance(trace_row, dict):
+                continue
+            phase = str(trace_row.get("phase") or "").strip().lower()
+            step_text = str(trace_row.get("plan_step") or "")
+            raw_name = trace_row.get("tool_name")
+            tool_name = str(raw_name).strip() if raw_name is not None else ""
+            if not tool_name:
+                tool_name = None
+            arguments = trace_row.get("arguments")
+            if not isinstance(arguments, dict):
+                arguments = {}
+
+            if phase == "scope":
+                scope_out = None
+                if not tool_name:
+                    self.logger.warning(
+                        "MemoryAgent [Scope] 复用 plan 无 tool_name: step=%s",
+                        step_text[:200],
+                    )
+                if tool_name:
+                    scope_out = self._call_tool_by_name(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        start_id=start_id,
+                        subset_vectors=subset_vectors,
+                        retrieved_frames=frame_results,
+                    )
+                    start_id = scope_out.get("start_id", start_id)
+                    subset_vectors = scope_out.get("subset_vectors", subset_vectors)
+                    scope_desc = scope_out.get("scope_desc", scope_desc)
+                continue
+
+            if phase == "search":
+                search_out = None
+                if not tool_name:
+                    self.logger.warning(
+                        "MemoryAgent [Search] 复用 plan 无 tool_name: step=%s",
+                        step_text[:200],
+                    )
+                if tool_name:
+                    search_out = self._call_tool_by_name(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        start_id=start_id,
+                        subset_vectors=subset_vectors,
+                        retrieved_frames=frame_results,
+                    )
+                    frame_part = search_out.get("frame_results") or []
+                    subtitle_part = search_out.get("subtitle_results") or []
+                    frame_results.extend(frame_part)
+                    subtitle_results.extend(subtitle_part)
+                continue
+
+            if phase == "enhance":
+                enhance_out = None
+                if not tool_name:
+                    self.logger.warning(
+                        "MemoryAgent [Enhance] 复用 plan 无 tool_name: step=%s",
+                        step_text[:200],
+                    )
+                if tool_name:
+                    enhance_out = self._call_tool_by_name(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        start_id=start_id,
+                        subset_vectors=subset_vectors,
+                        retrieved_frames=frame_results,
+                    )
+                    enhance_results.extend(enhance_out.get("enhance_results") or [])
+                continue
+
+            self.logger.warning(
+                "MemoryAgent 复用 plan 跳过未知 phase=%r plan_step=%s",
+                trace_row.get("phase"),
+                step_text[:200],
+            )
+
+        retrieval_context = self._format_retrieval_context(
+            frame_results=frame_results,
+            subtitle_results=subtitle_results,
+            enhance_results=enhance_results,
+        )
+        options_text = "(no options provided)"
+        if options:
+            option_items = [str(item).strip() for item in options if str(item).strip()]
+            if option_items:
+                options_text = " ".join(option_items)
+
+        rag_prompt = rag_prompt_after_agentic_retrival.format(
+            video_time=duration,
+            question=user_query,
+            options_text=options_text,
+            retrieval_context=retrieval_context,
+        )
+
+        self.logger.info(
+            "MemoryAgent agentic 检索(复用 plan)结束: 帧证据 %d 条, 字幕 %d 段, 增强文本 %d 条",
             len(frame_results),
             len(subtitle_results),
             len(enhance_results),
