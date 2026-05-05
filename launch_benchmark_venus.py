@@ -11,7 +11,7 @@ project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
 from src.system.venus.benchmark import VenusSystemBench
-from src.config import Config
+from src.config import SYSTEM_MODE_VLM_QA, Config
 
 def main():
     import argparse
@@ -20,13 +20,17 @@ def main():
     parser.add_argument("--max-queries", type=int, default=None, help="最多查询条数")
     parser.add_argument("--max-videos", type=int, default=None, help="最多处理视频数")
     parser.add_argument("--config", type=str, default="configs/config.json", help="配置文件路径")
-    parser.add_argument("--no-cloud", action="store_true", help="不调用云端，仅测试边端检索")
+    parser.add_argument(
+        "--no-cloud",
+        action="store_true",
+        help="清除 system_mode 的 VLM 位（仅检索）",
+    )
     parser.add_argument("--resume", type=str, default=None, help="断点续跑：指定已有结果 JSON 路径，从中读取已处理视频并继续")
     args = parser.parse_args()
 
     config = Config(args.config)
     if args.no_cloud:
-        config.benchmark_use_cloud = False
+        config.system_mode = int(config.system_mode) & ~SYSTEM_MODE_VLM_QA
     bench = VenusSystemBench(config)
     bench.run(
         skip_inject=args.skip_inject,

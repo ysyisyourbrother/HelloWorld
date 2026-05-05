@@ -55,7 +55,7 @@ def main():
         captured["all_scores"] = all_scores.copy()
 
     config = SymConfig(config_path="configs/symconfig_moti_orin.json.json")
-    # config.benchmark_use_cloud = False
+    # 仅检索示例：在加载 Config 后清除 system_mode 的 VLM 位（见 src.config.SYSTEM_MODE_VLM_QA）
 
     moti = SymphonySystemMoti(config)
     moti.register_retrieve_hook(capture_all_scores)

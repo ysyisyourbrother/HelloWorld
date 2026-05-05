@@ -23,7 +23,11 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-from src.config import Config, system_mode_wants_memory_reinject, system_mode_wants_vlm_qa
+from src.config import (
+    Config,
+    system_mode_wants_memory_reinject,
+    system_mode_wants_vlm_qa,
+)
 from src.video_input.video_input import VideoInputBase
 from src.agent.prompts_for_symphony import rag_prompt_with_frames
 from src.memory.frame.frame_vectorizer import FrameVectorizer
@@ -53,7 +57,7 @@ class VenusSystemMoti:
         self.dataset_path = getattr(config, "benchmark_dataset_path", "local_datasets")
         self.batch_size = getattr(config, "benchmark_batch_size", 16)
         self.frame_interval = getattr(config, "frame_interval", 10)
-        self.use_cloud = getattr(config, "benchmark_use_cloud", True)
+        self.use_cloud = system_mode_wants_vlm_qa(config.system_mode)
 
         # 检索钩子列表（每次 init 新 memory_manager 时会重新挂入）
         self._retrieve_hooks: List[Callable] = []
@@ -627,7 +631,10 @@ class VenusSystemMoti:
         Returns:
             包含 inject_stats 和 query_results 的字典
         """
-        if self.use_cloud and not self._benchmark_uses_api_vlm():
+        is_local_vlm = bool(
+            getattr(self.config, "is_local_vlm", getattr(self.config, "benchmark_is_local_vlm", True))
+        )
+        if system_mode_wants_vlm_qa(self.config.system_mode) and is_local_vlm:
             reasoner = self._get_reasoner()
             if not reasoner.test_mode and reasoner.model is None:
                 reasoner._set_logger()

@@ -4,7 +4,7 @@
 运行 Symphony v3 的 Video-MME 检索流程，并通过钩子抓取全量相似度，绘制折线图。
 支持 --topk 参数，将相似度最高的 k 个帧在图中标记为五角星。
 
-检索结束后，若配置中 ``benchmark.use_cloud`` 为 true（默认），会经 ``SymphonySystemMotiV3``
+检索结束后，若 ``system_mode`` 启用 VLM 且 ``benchmark_is_local_vlm`` 等条件满足，会经 ``SymphonySystemMotiV3``
 调用大模型（与 v3 Benchmark 一致：frame 模式为 top-k 单帧，clip 模式为 GOP mp4 全帧）。
 """
 import argparse

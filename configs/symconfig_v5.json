@@ -14,7 +14,6 @@
     "retrieve_item_type": "frame"
   },
   "benchmark": {
-    "use_cloud": true,
     "is_local_vlm": true,
     "db_dir_egoschema": "database/egoschema/symphony_v5",
     "db_dir_videomme": "database/videomme/symphony_v5",

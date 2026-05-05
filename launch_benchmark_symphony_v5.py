@@ -10,7 +10,7 @@ import sys
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from src.config import SymConfig
+from src.config import SYSTEM_MODE_VLM_QA, SymConfig
 from src.system.symphony.v5.benchmark import SymphonySystemBenchV5
 
 
@@ -39,6 +39,12 @@ def parse_args():
         default=None,
         help="断点续跑：指定已有结果 JSON 路径，从中读取已处理视频并继续",
     )
+    parser.add_argument(
+        "--system_mode",
+        type=int,
+        default=None,
+        help="覆盖配置中的 system_mode 十进制位掩码（见 src.config 中 SYSTEM_MODE_*）；不传则用配置文件",
+    )
     return parser.parse_args()
 
 
@@ -50,12 +56,14 @@ if __name__ == "__main__":
         raise RuntimeError("benchmark 指定 ffmpeg 导出 clip，但系统未找到 ffmpeg")
 
     config = SymConfig(args.config)
+    if args.system_mode is not None:
+        config.system_mode = int(args.system_mode)
     # v5 编排与 v3/v4 一致：GOP 扫描走 ffprobe（V1），避免误走 GStreamer 路径。
     config.video_input_version = "V1"
     if args.subset:
         config.benchmark_subset = args.subset
     if args.no_cloud:
-        config.benchmark_use_cloud = False
+        config.system_mode = int(config.system_mode) & ~SYSTEM_MODE_VLM_QA
     bench = SymphonySystemBenchV5(config)
     bench.run(
         skip_inject=args.skip_inject,

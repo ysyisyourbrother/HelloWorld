@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.config import Config
+from src.config import SYSTEM_MODE_VLM_QA, Config
 from src.system.venus.motivation import VenusSystemMoti
 
 
@@ -124,7 +124,7 @@ def main():
     args = parse_args()
 
     config = Config(args.config)
-    config.benchmark_use_cloud = False  # skip query for faster run
+    config.system_mode = int(config.system_mode) & ~SYSTEM_MODE_VLM_QA  # 跳过 VLM，加快 inject
 
     if args.frame_interval is not None:
         config.frame_interval = args.frame_interval

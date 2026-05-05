@@ -12,7 +12,6 @@
   "benchmark": {
     "db_dir_egoschema": "motivation_results_symphony/memory/egoschema",
     "db_dir_videomme": "motivation_results_symphony/memory/videomme",
-    "result_dir": "motivation_results_symphony",
-    "use_cloud": false
+    "result_dir": "motivation_results_symphony"
   }
 }

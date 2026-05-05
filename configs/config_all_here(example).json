@@ -75,7 +75,6 @@
     "db_dir_egoschema": "database/egoschema/venus",
     "db_dir_videomme": "database/videomme/venus",
     "batch_size": 16,
-    "result_dir": "benchmark_results",
-    "use_cloud": true
+    "result_dir": "benchmark_results"
   }
 }

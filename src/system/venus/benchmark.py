@@ -24,7 +24,11 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-from src.config import Config, system_mode_wants_memory_reinject, system_mode_wants_vlm_qa
+from src.config import (
+    Config,
+    system_mode_wants_memory_reinject,
+    system_mode_wants_vlm_qa,
+)
 from src.video_input.video_input import VideoInputBase
 from src.agent.prompts_for_symphony import rag_prompt_with_frames
 from src.memory.frame.frame_vectorizer import FrameVectorizer
@@ -56,7 +60,7 @@ class VenusSystemBench:
         )
         self.batch_size = getattr(config, "benchmark_batch_size", 16)
         self.frame_interval = getattr(config, "frame_interval", 10)
-        self.use_cloud = getattr(config, "benchmark_use_cloud", True)
+        self.use_cloud = system_mode_wants_vlm_qa(config.system_mode)
         self.result_dir = getattr(config, "benchmark_result_dir", "benchmark_results")
 
     def _setup_logger(self):
@@ -667,8 +671,10 @@ class VenusSystemBench:
         Returns:
             包含 summary 和 result_path 的字典
         """
-        # 非 no-cloud 模式下，启动时预加载 Reasoner 和大模型
-        if self.use_cloud:
+        is_local_vlm = bool(
+            getattr(self.config, "is_local_vlm", getattr(self.config, "benchmark_is_local_vlm", True))
+        )
+        if system_mode_wants_vlm_qa(self.config.system_mode) and is_local_vlm:
             reasoner = self._get_reasoner()
             if not reasoner.test_mode and reasoner.model is None:
                 reasoner._set_logger()

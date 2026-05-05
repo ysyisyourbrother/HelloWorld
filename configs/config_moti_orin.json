@@ -15,7 +15,6 @@
   "benchmark": {
     "db_dir_egoschema": "motivation_results/memory/egoschema",
     "db_dir_videomme": "motivation_results/memory/videomme",
-    "result_dir": "motivation_results",
-    "use_cloud": false
+    "result_dir": "motivation_results"
   }
 }

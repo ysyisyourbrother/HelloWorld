@@ -10,7 +10,7 @@ import sys
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from src.config import SymConfig
+from src.config import SYSTEM_MODE_VLM_QA, SymConfig
 from src.system.symphony.v3.benchmark import SymphonySystemBenchV3
 
 
@@ -32,7 +32,11 @@ def parse_args():
         default="configs/symconfig_v3.json",
         help="配置文件路径（默认 configs/symconfig_v3.json）",
     )
-    parser.add_argument("--no-cloud", action="store_true", help="不调用云端，仅测试边端检索")
+    parser.add_argument(
+        "--no-cloud",
+        action="store_true",
+        help="清除 system_mode 的 VLM 位（仅检索）",
+    )
     parser.add_argument(
         "--resume",
         type=str,
@@ -55,7 +59,7 @@ if __name__ == "__main__":
     if args.subset:
         config.benchmark_subset = args.subset
     if args.no_cloud:
-        config.benchmark_use_cloud = False
+        config.system_mode = int(config.system_mode) & ~SYSTEM_MODE_VLM_QA
     bench = SymphonySystemBenchV3(config)
     bench.run(
         skip_inject=args.skip_inject,

@@ -238,7 +238,7 @@ class SymphonySystemMotiV3(SymphonySystemMoti):
         video_time: Optional[float] = None,
         dialog_id: int = 0,
     ) -> Dict[str, Any]:
-        """单次查询：编码 -> 检索（支持 dialog_id）；若 ``benchmark_use_cloud`` 为真则调用 Reasoner。"""
+        """单次查询：编码 -> 检索（支持 dialog_id）；若 ``self.use_cloud`` 为真则调用 Reasoner。"""
         t0 = time.time()
         query_vector = self.query_vectorizer.encode_query_sync(question)
         scores, frames_metadata, clip_info = self.memory_manager.retrieve_sync(

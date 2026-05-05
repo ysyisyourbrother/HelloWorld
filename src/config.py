@@ -276,7 +276,6 @@ class Config:
         self.benchmark_dataset_path = bench_config.get("dataset_path", "local_datasets")
         self.benchmark_batch_size = bench_config.get("batch_size", 16)
         self.benchmark_result_dir = bench_config.get("result_dir", "benchmark_results/venus")
-        self.benchmark_use_cloud = bench_config.get("use_cloud", True)
         self.benchmark_video_dir_egoschema = bench_config.get("video_dir_egoschema", "local_datasets/egoschema/videos")
         self.benchmark_video_dir_videomme = bench_config.get("video_dir_videomme", "local_datasets/Video-MME/data")
         self.benchmark_db_dir_egoschema = bench_config.get("db_dir_egoschema", "database/egoschema/venus")

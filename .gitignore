@@ -5,6 +5,7 @@
 *.pid
 *.mdc
 export_api_key.sh
+constraints.txt
 .vscode/
 database
 database/
@@ -15,6 +16,7 @@ motivation_results_symphony*/
 test_rtsp/recordings/
 logs/
 test_llm/
+/*.png
 # Temp
 src/agent/
 *_plan.md
