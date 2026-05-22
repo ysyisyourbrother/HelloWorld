@@ -21,6 +21,8 @@ test_llm/
 src/agent/
 *_plan.md
 *_design.md
+moti_ffprobe_frame_pkt_size.png
+*_diff.mp4
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
