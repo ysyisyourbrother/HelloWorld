@@ -1,8 +1,28 @@
 """从视频中提取单帧图片的工具函数"""
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Sequence, Tuple
+
 import numpy as np
+
+
+def _resize_to_wh(resize: Optional[Sequence[int]]) -> Optional[Tuple[int, int]]:
+    """将 resize 参数规范为 (宽, 高)；None 表示不缩放。"""
+    if resize is None:
+        return None
+    n = len(resize)
+    if n == 1:
+        s = int(resize[0])
+        if s <= 0:
+            raise ValueError("resize 单边尺寸须为正整数")
+        return (s, s)
+    if n == 2:
+        w = int(resize[0])
+        h = int(resize[1])
+        if w <= 0 or h <= 0:
+            raise ValueError("resize 的宽、高须为正整数")
+        return (w, h)
+    raise ValueError("resize 须为长度为 1 或 2 的序列（单边或 [宽, 高]）")
 
 
 def extract_save_frame_by_index(
@@ -10,6 +30,7 @@ def extract_save_frame_by_index(
     output_path: str,
     frame_index: int,
     backend: str = "decord",
+    resize: Optional[Sequence[int]] = None,
 ) -> bool:
     """
     根据帧索引从视频中提取单帧并保存为图片。
@@ -19,6 +40,8 @@ def extract_save_frame_by_index(
         output_path: 输出单帧图片的保存路径
         frame_index: 要提取的帧索引（从 0 开始）
         backend: 选择后端库，可选 "cv2" 或 "decord"
+        resize: 保存前缩放，``None`` 不缩放；长度为 1 表示宽高均为该值；
+            长度为 2 表示 ``[宽, 高]``（与 PIL / OpenCV 一致）
 
     Returns:
         成功返回 True，失败返回 False
@@ -34,6 +57,8 @@ def extract_save_frame_by_index(
     if backend not in {"cv2", "decord"}:
         raise ValueError(f"不支持的 backend: {backend}，请使用 'cv2' 或 'decord'")
 
+    wh = _resize_to_wh(resize)
+
     if backend == "decord":
         from decord import VideoReader, cpu
         from PIL import Image
@@ -47,7 +72,10 @@ def extract_save_frame_by_index(
             )
 
         frame = vr[frame_index].asnumpy()  # RGB, [H, W, C], uint8
-        Image.fromarray(frame).save(str(output_path))
+        pil_img = Image.fromarray(frame)
+        if wh is not None:
+            pil_img = pil_img.resize(wh, Image.LANCZOS)
+        pil_img.save(str(output_path))
         return True
 
     import cv2
@@ -68,6 +96,8 @@ def extract_save_frame_by_index(
         ok, frame_bgr = cap.read()  # BGR
         if not ok or frame_bgr is None:
             raise RuntimeError(f"读取第 {frame_index} 帧失败: {video_path}")
+        if wh is not None:
+            frame_bgr = cv2.resize(frame_bgr, wh, interpolation=cv2.INTER_LANCZOS4)
         return bool(cv2.imwrite(str(output_path), frame_bgr))
     finally:
         cap.release()

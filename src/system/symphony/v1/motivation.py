@@ -20,12 +20,12 @@ from src.config import SymConfig, system_mode_wants_memory_reinject
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerByGOP
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
-from src.system.venus.motivation import VenusSystemMoti
+from src.system.vrag.motivation import VragSystemMoti
 from src.video_input.video_input import make_sym_video_input
 
-class SymphonySystemMoti(VenusSystemMoti):
+class SymphonySystemMoti(VragSystemMoti):
     """
-    继承 VenusSystemMoti，使用 SymVideoInput / SymVideoInputV2（由 config video_input.version 选择）和 SymFrameVectorizer 按 GOP 进行 inject。
+    继承 VragSystemMoti，使用 SymVideoInput / SymVideoInputV2（由 config video_input.version 选择）和 SymFrameVectorizer 按 GOP 进行 inject。
     按 select_strategy 从每个 GOP 中选帧后编码，不依赖编码钩子。
     """
 

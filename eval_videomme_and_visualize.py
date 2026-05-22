@@ -68,7 +68,7 @@ def main():
     parser.add_argument(
         "--results_file",
         type=str,
-        default="benchmark_results/useful/benchmark_Video-MME_medium_20260309_180348.json",
+        default="benchmark_results/symphony_v5/benchmark_Video-MME_short_20260503_161306.json",
         help="指定 benchmark 结果 JSON 路径；未指定时自动检索最新文件",
     )
     parser.add_argument(
@@ -80,7 +80,7 @@ def main():
     parser.add_argument(
         "--video_duration_type",
         type=str,
-        default="medium",
+        default="short",
         help="视频时长类型，如 short/medium/long，默认 short",
     )
     parser.add_argument("--skip_missing", action="store_true", help="跳过缺失样本，不强制要求 300 条")

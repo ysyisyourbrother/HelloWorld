@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Symphony 边端 v2：封装 VenusSystemEdge，作为 Symphony 专用启动入口。
+Symphony 边端 v2：封装 VragSystemEdge，作为 Symphony 专用启动入口。
 流式场景使用 StreamVideoInput + MemoryManagerOnlineV3（由配置 memory_manager.online_v3 控制）。
 """
 
@@ -8,11 +8,11 @@ import argparse
 import os
 import sys
 
-from src.system.venus.edge import VenusSystemEdge
+from src.system.vrag.edge import VragSystemEdge
 
 
-class SymphonySystemEdge(VenusSystemEdge):
-    """与 VenusSystemEdge 行为一致；后续可在本类扩展 Symphony 专用逻辑而不改 venus。"""
+class SymphonySystemEdge(VragSystemEdge):
+    """与 VragSystemEdge 行为一致；后续可在本类扩展 Symphony 专用逻辑而不改 vrag。"""
 
     pass
 

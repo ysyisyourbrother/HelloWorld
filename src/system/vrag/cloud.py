@@ -13,7 +13,7 @@ from src.api.server_simulation import APIServer
 from src.llm.reasoner import ReasonerVLMLocalOnline
 
 
-class VenusSystemCloud:
+class VragSystemCloud:
     """云端系统 - 整合 gRPC API 服务器和推理模块"""
     
     def __init__(self, config: Config = None):
@@ -43,7 +43,7 @@ class VenusSystemCloud:
     
     def _setup_logger(self):
         """设置系统日志"""
-        self.logger = logging.getLogger('VenusSystemCloud')
+        self.logger = logging.getLogger('VragSystemCloud')
         self.logger.setLevel(logging.INFO)
         
         # 控制台输出
@@ -135,6 +135,6 @@ class VenusSystemCloud:
 
 if __name__ == "__main__":
     # 直接运行时的测试代码
-    system = VenusSystemCloud()
+    system = VragSystemCloud()
     system.start()
 

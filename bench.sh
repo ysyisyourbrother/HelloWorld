@@ -1,4 +1,4 @@
-# nohup python launch_benchmark_venus.py --config configs/config.json > bench.out 2>&1 & echo $! > bench.pid
+# nohup python launch_benchmark_vrag.py --config configs/config.json > bench.out 2>&1 & echo $! > bench.pid
 
 # nohup python launch_benchmark_symphony_v1.py \
 #     --resume benchmark_results/symphony_v1/benchmark_Video-MME_short_20260319_153714.json \
@@ -24,8 +24,18 @@
 echo "V5"
 export PYTHONWARNINGS="ignore::FutureWarning"
 export PYTHONWARNINGS="ignore::UserWarning"
+source export_api_key.sh
 
+# nohup python launch_benchmark_symphony_v5.py \
+#     --subset short \
+#     --config configs/symconfig_v5.json > symphony_v5_short.out 2>&1 & echo $! > symphony_v5_short.pid
 
-nohup python launch_benchmark_symphony_v5.py \
-    --subset short \
-    --config configs/symconfig_v5.json > symphony_v5_short.out 2>&1 & echo $! > symphony_v5_short.pid
+# nohup python launch_benchmark_symphony_v5.py \
+#     --subset medium \
+#     --system_mode 1 \
+#     --config configs/symconfig_v5.json > symphony_v5_medium.out 2>&1 & echo $! > symphony_v5_medium.pid
+
+# nohup python launch_benchmark_symphony_v5.py \
+#     --subset long \
+#     --system_mode 1 \
+#     --config configs/symconfig_v5.json > symphony_v5_long.out 2>&1 & echo $! > symphony_v5_long.pid

@@ -3,10 +3,11 @@
 from src.video_utils.about_frame import extract_save_frame_by_index, extract_save_frame_by_time
 
 if __name__ == "__main__":
+    # video_path = "/mnt/share/cache/datasets/Video-MME/data/_cZXyj6rYVg.mp4"
     video_path = "demo/assets/44ivpEIcBhE.mp4"
-    frame_id = 485
-    # output_path = f"frame_{frame_id}.png"
-    output_path = f"frame.png"
-    # extract_save_frame_by_time(video_path, output_path, 24.0)
-    extract_save_frame_by_index(video_path, output_path, frame_id)
-    print(f"已保存到 {output_path}")
+    frame_id = list(range(500, 616, 5))
+
+    for fid in frame_id:
+        output_path = f"rgb_frame_{fid}.png"
+        extract_save_frame_by_index(video_path, output_path, fid, resize=[100])
+        print(f"已保存到 {output_path}")

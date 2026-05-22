@@ -20,12 +20,12 @@ from src.config import system_mode_wants_memory_reinject
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerByGOP
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
-from src.system.venus.benchmark import VenusSystemBench
+from src.system.vrag.benchmark import VragSystemBench
 from src.video_input.video_input import make_sym_video_input
 
-class SymphonySystemBench(VenusSystemBench):
+class SymphonySystemBench(VragSystemBench):
     """
-    继承 VenusSystemBench，使用 SymVideoInput / SymVideoInputV2（由 config video_input.version）和 SymFrameVectorizer 按 GOP 进行 inject。
+    继承 VragSystemBench，使用 SymVideoInput / SymVideoInputV2（由 config video_input.version）和 SymFrameVectorizer 按 GOP 进行 inject。
     按 select_strategy 从每个 GOP 中选帧后编码，不依赖钩子逻辑。
     """
 

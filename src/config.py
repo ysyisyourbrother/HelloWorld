@@ -275,11 +275,11 @@ class Config:
         self.benchmark_subset = bench_config.get("subset", "short")  # egoschema: "Subset"; Video-MME: "short"|"medium"|"long"
         self.benchmark_dataset_path = bench_config.get("dataset_path", "local_datasets")
         self.benchmark_batch_size = bench_config.get("batch_size", 16)
-        self.benchmark_result_dir = bench_config.get("result_dir", "benchmark_results/venus")
+        self.benchmark_result_dir = bench_config.get("result_dir", "benchmark_results/vrag")
         self.benchmark_video_dir_egoschema = bench_config.get("video_dir_egoschema", "local_datasets/egoschema/videos")
         self.benchmark_video_dir_videomme = bench_config.get("video_dir_videomme", "local_datasets/Video-MME/data")
-        self.benchmark_db_dir_egoschema = bench_config.get("db_dir_egoschema", "database/egoschema/venus")
-        self.benchmark_db_dir_videomme = bench_config.get("db_dir_videomme", "database/videomme/venus")
+        self.benchmark_db_dir_egoschema = bench_config.get("db_dir_egoschema", "database/egoschema/vrag")
+        self.benchmark_db_dir_videomme = bench_config.get("db_dir_videomme", "database/videomme/vrag")
         
         self.benchmark_is_local_vlm = bench_config.get("is_local_vlm", True)
 

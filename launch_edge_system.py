@@ -12,7 +12,7 @@ import os
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from src.system.venus.edge import VenusSystemEdge
+from src.system.vrag.edge import VragSystemEdge
 from src.config import Config
 
 
@@ -27,7 +27,7 @@ def main():
     # config.memory_faiss_file_path = "motivation_results_symphony/memory/videomme/short/faiss/44ivpEIcBhE.faiss"
     # config.memory_databasemap_file_path = "motivation_results_symphony/memory/videomme/short/json/44ivpEIcBhE.json"
     # 创建并启动边端系统
-    system = VenusSystemEdge(config)
+    system = VragSystemEdge(config)
     system.start()
 
 if __name__ == "__main__":

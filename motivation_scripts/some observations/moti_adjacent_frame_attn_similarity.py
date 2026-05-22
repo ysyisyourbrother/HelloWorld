@@ -3,7 +3,7 @@
 """
 Adjacent encoded frames: cosine similarity of CLS-to-patch attention patterns.
 
-Uses VenusSystemMoti to encode a video, captures attention_weights via hook,
+Uses VragSystemMoti to encode a video, captures attention_weights via hook,
 extracts CLS-to-visual-token attention per frame, then plots cosine similarity
 between adjacent frames' attention patterns.
 """
@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config import SYSTEM_MODE_VLM_QA, Config
-from src.system.venus.motivation import VenusSystemMoti
+from src.system.vrag.motivation import VragSystemMoti
 
 
 def make_accumulating_attention_hook(captured: dict, layer_idx: int):
@@ -121,7 +121,7 @@ def main():
 
     captured = {}
     hook = make_accumulating_attention_hook(captured, args.layer)
-    moti = VenusSystemMoti(config)
+    moti = VragSystemMoti(config)
     moti.register_encode_hook(hook, need_attentions=True)
 
     # Run inject to encode video (use unique video_id so no skip)

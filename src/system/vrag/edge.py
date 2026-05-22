@@ -26,7 +26,7 @@ EDGE_MODE_ONLY_INJECT = "only_inject"
 EDGE_MODE_BENCHMARK = "benchmark"
 
 
-class VenusSystemEdge:
+class VragSystemEdge:
     """边端系统 - 根据 edge_mode 整合视频编码、检索；query_* 经 APIServerE 与云端 gRPC，retrieve_* 仅本地检索"""
     
     def __init__(self, config: Config = None):
@@ -58,7 +58,7 @@ class VenusSystemEdge:
     
     def _setup_logger(self):
         """设置系统日志"""
-        self.logger = logging.getLogger('VenusSystemEdge')
+        self.logger = logging.getLogger('VragSystemEdge')
         self.logger.setLevel(logging.INFO)
         
         # 控制台输出
@@ -394,5 +394,5 @@ class VenusSystemEdge:
 
 if __name__ == "__main__":
     # 直接运行时的测试代码
-    system = VenusSystemEdge()
+    system = VragSystemEdge()
     system.start()

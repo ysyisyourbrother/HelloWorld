@@ -1,4 +1,4 @@
-result_file_short="benchmark_results/venus/benchmark_Video-MME_short_20260309_170326.json"
+result_file_short="benchmark_results/vrag/benchmark_Video-MME_short_20260309_170326.json"
 python eval_videomme.py --results_file $result_file_short\
     --video_duration_type short \
     --return_categories_accuracy \

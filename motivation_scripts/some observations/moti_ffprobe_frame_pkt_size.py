@@ -12,7 +12,7 @@ from matplotlib.ticker import MultipleLocator
 
 # 添加 src 到路径以便导入 ffprobe_utils
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from video_utils.ffprobe_utils import get_frame_info_with_pkt_size, get_i_frame_indices, get_frame_types
+from src.video_utils.ffprobe_utils import get_frame_info_with_pkt_size, get_i_frame_indices, get_frame_types
 
 # I=red, P=blue, B=purple（与参考脚本一致）
 P_TYPE_COLOR = {"I": "red", "P": "gray", "B": "#C4C4C4"}

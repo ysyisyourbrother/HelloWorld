@@ -50,14 +50,14 @@ def indices_for_decode_budget(pkt_sizes, is_key, target_decode_fps, window_durat
 
 
 def select_frames_for_window(
-    window_rows,
-    target_decode_fps,
-    window_duration_sec,
-    baseline_non_i,
-    trigger_ratio,
-    warmup_windows,
-    windows_seen,
-    alpha_baseline,
+    window_rows,         # 当前窗口内每帧的信息字典组成的列表（每项含 pkt_size, is_keyframe, frame_idx 等）
+    target_decode_fps,   # 窗口内预算目标解码帧率（float）
+    window_duration_sec, # 窗口时长（秒，float）
+    baseline_non_i,      # 非关键帧 pkt_size 均值的历史 EWMA 基线（float 或 None）
+    trigger_ratio,       # 触发系数（float），非关键帧均值超过 baseline*trigger_ratio 认定为“异常”窗口
+    warmup_windows,      # warmup 阶段窗口数，前若干窗口只累计基线但不触发
+    windows_seen,        # 当前已过窗口数（从 1 起，int）
+    alpha_baseline,      # 基线计算用的 EWMA 更新系数（float, 0~1，越大越重视最近窗口）
 ):
     # type: (List[Dict[str, Any]], float, float, Optional[float], float, int, int, float) -> Tuple[List[int], Optional[float], bool]
     """

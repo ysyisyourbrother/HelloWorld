@@ -3,7 +3,7 @@
 """
 Adjacent encoded frames: cosine similarity of hidden_states at a specific layer.
 
-Uses VenusSystemMoti to encode a video, captures hidden_states via hook,
+Uses VragSystemMoti to encode a video, captures hidden_states via hook,
 then plots token-wise cosine similarity between adjacent encoded frames.
 """
 
@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config import SYSTEM_MODE_VLM_QA, Config
-from src.system.venus.motivation import VenusSystemMoti
+from src.system.vrag.motivation import VragSystemMoti
 
 
 def make_accumulating_hidden_states_hook(captured: dict, layer_idx: int):
@@ -133,7 +133,7 @@ def main():
 
     captured = {}
     hook = make_accumulating_hidden_states_hook(captured, args.layer)
-    moti = VenusSystemMoti(config)
+    moti = VragSystemMoti(config)
     moti.register_encode_hook(hook, need_hidden_states=True)
 
     # Run inject to encode video (use unique video_id so no skip)

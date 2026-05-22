@@ -74,7 +74,7 @@ class MemoryAgent(MemoryManagerBase):
         self.yolo_names = self.yolo_model.names
 
     def _initialize_tools_list(self) -> None:
-        self.scope_tools = [
+        self.scope_tools = [ # TODO: 筛准了
             {
                 "type": "function",
                 "function": {
@@ -99,7 +99,7 @@ class MemoryAgent(MemoryManagerBase):
             {
                 "type": "function",
                 "function": {
-                    "name": "_get_subset_by_event_frame",
+                    "name": "_get_subset_by_event_frame", # TODO
                     "description": "Obtain a temporal subset by anchoring at the most relevant frame for an event entity",
                     "parameters": {
                         "type": "object",
@@ -1381,3 +1381,7 @@ class MemoryAgent(MemoryManagerBase):
             "metadata_list": frame_results,
         }
 
+class MemoryAgentV2(MemoryAgent):
+    
+    def __init__(self, config: Config = None):
+        super().__init__(config=config)

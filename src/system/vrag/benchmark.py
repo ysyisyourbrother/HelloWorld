@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VenusSystemBench - 串行执行的云边集成 Benchmark 系统
+VragSystemBench - 串行执行的云边集成 Benchmark 系统
 
 支持：
 - 按 batch 读取视频帧、向量化、插入记忆
@@ -38,7 +38,7 @@ from src.llm.reasoner import ReasonerVLMLocal, ReasonerVLMAPI, QueryRequest
 from src.video_utils.about_frame import extract_frame_by_index
 
 
-class VenusSystemBench:
+class VragSystemBench:
     """云边集成 Benchmark 系统 - 串行执行，无进程/队列开销"""
 
     def __init__(self, config: Config = None):
@@ -64,7 +64,7 @@ class VenusSystemBench:
         self.result_dir = getattr(config, "benchmark_result_dir", "benchmark_results")
 
     def _setup_logger(self):
-        self.logger = logging.getLogger("VenusSystemBench")
+        self.logger = logging.getLogger("VragSystemBench")
         self.logger.setLevel(logging.INFO)
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VenusSystemMoti - Motivation 试验系统
+VragSystemMoti - Motivation 试验系统
 
 支持：
 - 指定 Video-MME 的某一个视频执行流程（inject + query）
@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from src.config import (
     Config,
+    system_mode_online_memory_needs_query_encoder,
     system_mode_wants_memory_reinject,
     system_mode_wants_vlm_qa,
 )
@@ -37,7 +38,7 @@ from src.llm.reasoner import ReasonerVLMLocal, ReasonerVLMAPI, QueryRequest
 from src.video_utils.about_frame import extract_frame_by_index
 
 
-class VenusSystemMoti:
+class VragSystemMoti:
     """Motivation 试验系统 - 指定视频或单图推理"""
 
     def __init__(self, config: Config = None):
@@ -97,7 +98,7 @@ class VenusSystemMoti:
             self.memory_manager.register_retrieve_hook(fn)
 
     def _setup_logger(self):
-        self.logger = logging.getLogger("VenusSystemMoti")
+        self.logger = logging.getLogger("VragSystemMoti")
         self.logger.setLevel(logging.INFO)
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(
@@ -168,7 +169,8 @@ class VenusSystemMoti:
     ):
         """
         初始化各组件（同步模式）。
-        video_path 为 None 时仅初始化 query 相关组件（用于 skip_inject）。
+        video_path 为 None 时不初始化解码与帧编码，常与已有 faiss 配合做检索；
+        system_mode 为仅记忆注入（bit0）时不在此预加载 QueryVectorizer。
         """
         if faiss_path is not None:
             self.config.memory_faiss_file_path = faiss_path
@@ -178,12 +180,17 @@ class VenusSystemMoti:
             self.config.memory_srt_file_path = srt_path
 
         self.memory_manager = MemoryManagerBase(self.config)
-        self.query_vectorizer = QueryVectorizer(self.config)
+        # system_mode 仅为「仅记忆注入」(bit0) 时不在此预加载 Query 编码器，避免与帧编码重复占显存；
+        # 若后续仍调用 query / run_video_flow 含问答，则在 _run_query_single 内惰性初始化。
+        if system_mode_online_memory_needs_query_encoder(self.config.system_mode):
+            self.query_vectorizer = QueryVectorizer(self.config)
+            self.query_vectorizer._initialize_vectorizer()
+        else:
+            self.query_vectorizer = None
 
         self.memory_manager.init_sync()
         for fn in self._retrieve_hooks:
             self.memory_manager.register_retrieve_hook(fn)
-        self.query_vectorizer._initialize_vectorizer()
 
         if video_path:
             self.config.video_file_path = video_path
@@ -492,6 +499,8 @@ class VenusSystemMoti:
     ) -> Dict[str, Any]:
         """单次查询：编码 -> 检索 -> 推理"""
         t0 = time.time()
+        if self.query_vectorizer is None:
+            self.query_vectorizer = QueryVectorizer(self.config)
         query_vector = self.query_vectorizer.encode_query_sync(question)
         scores, frames_metadata, clip_info = self.memory_manager.retrieve_sync(
             query_vector, dialog_id=dialog_id

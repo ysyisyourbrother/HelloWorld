@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from src.config import Config
-from src.system.venus.motivation import VenusSystemMoti
+from src.system.vrag.motivation import VragSystemMoti
 
 
 def parse_args():
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     config = Config(config_path="configs/config_moti.json")
     # 仅检索示例：在加载 Config 后清除 system_mode 的 VLM 位（见 src.config.SYSTEM_MODE_VLM_QA）
 
-    moti = VenusSystemMoti(config)
+    moti = VragSystemMoti(config)
     moti.register_retrieve_hook(capture_all_scores)
 
     result = moti.run_video_flow(
