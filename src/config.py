@@ -283,6 +283,18 @@ class Config:
         
         self.benchmark_is_local_vlm = bench_config.get("is_local_vlm", True)
 
+        # Venus 编排层（场景切分 + 聚类 + OCR/YOLO 增强 + 渐进式检索）
+        venus_config = self._config.get("venus", {})
+        self.venus_k_clusters = int(venus_config.get("k_clusters", 5))
+        self.venus_retrieve_strategy = venus_config.get(
+            "retrieve_strategy", "progressive"
+        )  # "progressive" | "threshold"
+        self.venus_retrieve_tau = float(venus_config.get("retrieve_tau", 0.07))
+        self.venus_retrieve_theta = float(venus_config.get("retrieve_theta", 0.9))
+        self.venus_retrieve_beta = float(venus_config.get("retrieve_beta", 1.0))
+        self.venus_retrieve_n_max = int(venus_config.get("retrieve_n_max", 32))
+        self.venus_retrieve_threshold = float(venus_config.get("retrieve_threshold", 0.2))
+
         # 大模型提供商 API（benchmark_is_local_vlm=False 时 VLM 走 ReasonerVLMAPI；LLM 走 ReasonerLLMAPI）
         api_config = self._config.get("api", {})
         self.api_vlm_model_name = api_config.get("vlm_model_name", "qwen3.6-plus")

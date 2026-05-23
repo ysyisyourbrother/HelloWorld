@@ -1,0 +1,20 @@
+{
+  "video_input": {
+    "target_fps": 8
+  },
+  "venus": {
+    "k_clusters": 5,
+    "retrieve_strategy": "progressive",
+    "retrieve_tau": 0.07,
+    "retrieve_theta": 0.9,
+    "retrieve_beta": 1.0,
+    "retrieve_n_max": 50,
+    "retrieve_threshold": 0.2
+  },
+  "benchmark": {
+    "is_local_vlm": true,
+    "db_dir_egoschema": "database/egoschema/venus",
+    "db_dir_videomme": "database/videomme/venus",
+    "result_dir": "benchmark_results/venus"
+  }
+}

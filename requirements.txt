@@ -25,3 +25,4 @@ dashscope>=1.14.0
 # 需与 proto 生成时的版本兼容，否则会出现 "Couldn't parse file content!"
 protobuf>=6.31.1
 scenedetect==0.7
+scikit-learn>=0.24.2

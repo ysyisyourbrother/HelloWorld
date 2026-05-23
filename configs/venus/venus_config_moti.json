@@ -1,8 +1,6 @@
 {
   "video_input": {
-  },
-  "frame_vectorizer": {
-    "frame_interval": 10
+    "target_fps": 8
   },
   "memory_manager": {
     "faiss_file_path": "motivation_results/memory/videomme/short/faiss/44ivpEIcBhE.faiss",
@@ -13,9 +11,9 @@
   "reasoner_local": {
   },
   "benchmark": {
-    "db_dir_egoschema": "motivation_results/memory/egoschema",
-    "db_dir_videomme": "motivation_results/memory/videomme",
-    "result_dir": "motivation_results"
+    "db_dir_egoschema": "motivation_results_venus/memory/egoschema",
+    "db_dir_videomme": "motivation_results_venus/memory/videomme",
+    "result_dir": "motivation_results_venus"
   },
   "venus": {
     "k_clusters": 5,
