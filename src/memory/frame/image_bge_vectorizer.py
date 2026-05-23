@@ -31,6 +31,12 @@ class ImageBGEVectorizer:
             vector = self.model.encode_image(images=img)
         return vector
 
+    def encode_no_norm(self, frame):
+        img = self.processor(images=frame, return_tensors="pt")["pixel_values"].to(self.device)
+        with torch.no_grad():
+            vector = self.model.get_image_features(images=img)
+        return vector
+
     def encode_batch(self, frames: list):
         """批量编码多帧图像，frames 为 numpy 数组列表 [H,W,C] RGB"""
         if not frames:
@@ -38,6 +44,15 @@ class ImageBGEVectorizer:
         img = self.processor(images=frames, return_tensors="pt")["pixel_values"].to(self.device)
         with torch.no_grad():
             vectors = self.model.encode_image(images=img)
+        return vectors
+
+    def encode_batch_no_norm(self, frames: list):
+        """批量编码多帧图像，但是不归一化，frames 为 numpy 数组列表 [H,W,C] RGB"""
+        if not frames:
+            return torch.empty(0)
+        img = self.processor(images=frames, return_tensors="pt")["pixel_values"].to(self.device)
+        with torch.no_grad():
+            vectors = self.model.get_image_features(images=img)
         return vectors
 
     def encode_batch_with_vision_outputs(

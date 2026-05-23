@@ -1,6 +1,5 @@
 import numpy as np
 import time
-import torch
 import logging
 from logging.handlers import RotatingFileHandler
 import glob
@@ -9,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict
 # 本项目
 from src.config import Config
-from models.bge.modeling_MMRet_CLIP import CLIPModel, CLIPProcessor
+from src.memory.query.text_bge_vectorizer import TextBGEVectorizer
 
 @dataclass
 class QueryData:
@@ -29,40 +28,16 @@ class QueryVectorData:
     timestamp: float          # 时间戳
     trace_ts: Optional[Dict[str, float]] = None  # 链路时延埋点（秒）
 
-class TextBGEVectorizer:
-    """BGE模型向量化器"""
-    def __init__(self, device: str, model_path: str):
-        self.device = device
-        
-        self.model = CLIPModel.from_pretrained(model_path).to(self.device)
-        self.model.set_processor(model_path)
-        self.processor = self.model.processor
-        self.model.eval()
-    
-    def encode(self, query: str):
-        """
-        对查询文本进行向量化
-        TODO: 目前只支持单次 77 token 的编码
-        """
-        txt = self.processor(text=query, 
-                            return_tensors="pt", # Return PyTorch `torch.Tensor` objects.
-                            padding=True, 
-                            truncation=True, 
-                            max_length=77)
-        txt = {k: v.to(self.device) for k, v in txt.items()}
-        with torch.no_grad():
-            vector = self.model.encode_text(txt)
-            return vector.cpu().numpy()
-
 class QueryVectorizer:
     """查询向量化器"""
-    def __init__(self, config: Config = None):
+    def __init__(self, config: Config = None, vectorizer: Optional[TextBGEVectorizer] = None):
         """
         初始化QueryVectorizer模块
         负责把查询文本转换为语义向量
         
         Args:
             config (Config): 配置对象实例
+            vectorizer: 可选，已初始化的 TextBGEVectorizer；传入则复用，不再新建
         """
         if config is None:
             config = Config()
@@ -73,7 +48,7 @@ class QueryVectorizer:
         self.query_device = config.query_device
         self.query_model_path = config.query_model_path
         
-        self.vectorizer = None
+        self.vectorizer = vectorizer
         self.vectorized_query_count = 0
         self.all_query_count = 0
     
@@ -110,8 +85,13 @@ class QueryVectorizer:
         self.logger.addHandler(file_handler)
         self.logger.propagate = False
     
-    def _initialize_vectorizer(self):
+    def _initialize_vectorizer(self, vectorizer: Optional[TextBGEVectorizer] = None):
         """初始化向量化器"""
+        if vectorizer is not None:
+            self.vectorizer = vectorizer
+            return
+        if self.vectorizer is not None:
+            return
         if self.model_type == "BGE":
             self.vectorizer = TextBGEVectorizer(self.query_device, self.query_model_path)
         else:

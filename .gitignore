@@ -17,6 +17,7 @@ test_rtsp/recordings/
 logs/
 test_llm/
 /*.png
+src/system/venus/demo(only_for_example do_not_change_it).py
 # Temp
 src/agent/
 *_plan.md
