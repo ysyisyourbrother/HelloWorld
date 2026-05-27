@@ -1381,7 +1381,3 @@ class MemoryAgent(MemoryManagerBase):
             "metadata_list": frame_results,
         }
 
-class MemoryAgentV2(MemoryAgent):
-    
-    def __init__(self, config: Config = None):
-        super().__init__(config=config)
