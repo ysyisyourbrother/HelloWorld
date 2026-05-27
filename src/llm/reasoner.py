@@ -10,7 +10,7 @@ import glob
 import os
 import copy
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Sequence, Union
 
 # 本项目
 from src.config import Config
@@ -56,6 +56,51 @@ def _uniform_subsample_image_list(images, max_n):
             seen.add(i)
             out.append(images[i])
     return out
+
+
+_VIDEO_SUFFIX = (".mp4", ".mov", ".mkv", ".webm")
+
+
+def _file_url_for_path(path: str) -> str:
+    return "file://%s" % os.path.abspath(path)
+
+
+def _build_openai_multimodal_content(
+    text: str, image_paths: Sequence[str]
+) -> List[Dict[str, Any]]:
+    parts = []
+    for raw_path in image_paths:
+        path = str(raw_path).strip()
+        if not path:
+            continue
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": _file_url_for_path(path)},
+            }
+        )
+    parts.append({"type": "text", "text": text})
+    return parts
+
+
+def _user_content_for_api(
+    content: Union[str, List[Dict[str, Any]]], keep_images_in_history: bool
+) -> Union[str, List[Dict[str, Any]]]:
+    if keep_images_in_history:
+        return content
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+    text_parts = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            piece = str(item.get("text") or "").strip()
+            if piece:
+                text_parts.append(piece)
+    if text_parts:
+        return "\n".join(text_parts)
+    return "(image only)"
 
 
 @dataclass
@@ -471,121 +516,11 @@ class ReasonerVLMLocalOnline(ReasonerVLMLocal):
         return self.result_queue
 
 
-class ReasonerVLMAPI:
-    """
-    DashScope ``MultiModalConversation`` 单轮多图 + 文本（与 ``test_llm/qwen3_6_plus_multi_images.py`` 相同用法）。
-    ``memory_results`` 仅为本地**图片**路径列表（``file://``）。不支持 clip 检索给出的 ``.mp4`` 等视频路径。
-    """
+class BaseChatSession(object):
+    """Chat Completions 会话公共层（messages 管理与 reset 逻辑）。"""
 
-    def __init__(self, config: Config = None):
-        if config is None:
-            config = Config()
-        self._api_key = (config.api_vlm_key or "").strip() or os.environ.get(
-            "DASHSCOPE_API_KEY", ""
-        )
-        self._model = config.api_vlm_model_name
-        self._max_media = config.reasoner_local_max_img_num
-
-    @staticmethod
-    def _file_url_for_path(path: str) -> str:
-        return "file://%s" % os.path.abspath(path)
-
-    def infer_sync(self, query_request: QueryRequest) -> QueryResponse:
-        import dashscope
-        from dashscope import MultiModalConversation
-
-        _video_suffix = (".mp4", ".mov", ".mkv", ".webm")
-        try:
-            paths = query_request.memory_results or []
-            if not paths or not isinstance(paths[0], str):
-                return QueryResponse(
-                    query_id=query_request.query_id,
-                    result=None,
-                    error="ReasonerVLMAPI 需要 memory_results 为本地文件路径字符串列表",
-                    timestamp=time.time(),
-                )
-            plist = [str(x) for x in paths]
-            if self._max_media is not None and int(self._max_media) > 0:
-                plist = _uniform_subsample_image_list(plist, int(self._max_media))
-            if not plist:
-                return QueryResponse(
-                    query_id=query_request.query_id,
-                    result=None,
-                    error="无有效媒体路径",
-                    timestamp=time.time(),
-                )
-            for ap in plist:
-                if os.path.abspath(ap).lower().endswith(_video_suffix):
-                    return QueryResponse(
-                        query_id=query_request.query_id,
-                        result=None,
-                        error=(
-                            "ReasonerVLMAPI 不支持 clip 模式下的视频路径（如 .mp4）；"
-                            "请改用 memory.retrieve_item_type=frame 与检索帧图片路径，"
-                            "或使用本地 ReasonerVLMLocal。"
-                        ),
-                        timestamp=time.time(),
-                    )
-
-            dashscope.base_http_api_url = (
-                "https://dashscope.aliyuncs.com/api/v1"
-            )
-            content = [
-                {"image": self._file_url_for_path(str(x))} for x in plist
-            ]
-            content.append({"text": query_request.query_text})
-            messages = [{"role": "user", "content": content}]
-
-            response = MultiModalConversation.call(
-                api_key=self._api_key,
-                model=self._model,
-                messages=messages,
-            )
-            if response.status_code != 200:
-                return QueryResponse(
-                    query_id=query_request.query_id,
-                    result=None,
-                    error=getattr(response, "message", None)
-                    or str(response),
-                    timestamp=time.time(),
-                )
-            out = response.output.choices[0].message.content[0]["text"]
-            text = (out or "").strip()
-            return QueryResponse(
-                query_id=query_request.query_id,
-                result=text,
-                error=None,
-                timestamp=time.time(),
-            )
-        except Exception as e:
-            return QueryResponse(
-                query_id=query_request.query_id,
-                result=None,
-                error=str(e),
-                timestamp=time.time(),
-            )
-
-
-class ReasonerLLMAPI:
-    """厂商 Chat Completions API 多轮对话（OpenAI SDK 兼容）。"""
-
-    def __init__(self, config: Config = None):
-        if config is None:
-            config = Config()
-        from openai import OpenAI
-
-        key = (config.api_llm_key or "").strip() or os.environ.get(
-            "DEEPSEEK_API_KEY", ""
-        )
-        self._client = OpenAI(
-            api_key=key,
-            base_url=config.api_llm_base_url,
-        )
-        self._model = config.api_llm_model_name
-        self.messages: List[Dict[str, str]] = []
-
-    def append_user(self, text: str) -> None:
-        self.messages.append({"role": "user", "content": text})
+    def __init__(self):
+        self.messages = []  # type: List[Dict[str, Any]]
 
     def append_assistant(self, text: str) -> None:
         self.messages.append({"role": "assistant", "content": text})
@@ -601,7 +536,6 @@ class ReasonerLLMAPI:
         if not self.messages:
             return
 
-        # reset 时保留所有 system 消息，以及最后一条非 system 消息（通常是本轮输入）。
         preserved = []
         for msg in self.messages:
             if msg.get("role") == "system":
@@ -617,6 +551,50 @@ class ReasonerLLMAPI:
             preserved.append(last_non_system)
 
         self.messages = preserved
+
+    @staticmethod
+    def _assistant_message_from_completion(message) -> Dict[str, Any]:
+        assistant_message = {
+            "role": "assistant",
+            "content": (message.content or "").strip(),
+        }
+        if message.tool_calls:
+            tool_calls = []
+            for call in message.tool_calls:
+                tool_calls.append(
+                    {
+                        "id": call.id,
+                        "type": call.type,
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        },
+                    }
+                )
+            assistant_message["tool_calls"] = tool_calls
+        return assistant_message
+
+
+class ReasonerLLMAPI(BaseChatSession):
+    """厂商 Chat Completions API 多轮对话（OpenAI SDK 兼容，纯文本）。"""
+
+    def __init__(self, config: Config = None):
+        BaseChatSession.__init__(self)
+        if config is None:
+            config = Config()
+        from openai import OpenAI
+
+        key = (config.api_llm_key or "").strip() or os.environ.get(
+            "DEEPSEEK_API_KEY", ""
+        )
+        self._client = OpenAI(
+            api_key=key,
+            base_url=config.api_llm_base_url,
+        )
+        self._model = config.api_llm_model_name
+
+    def append_user(self, text: str) -> None:
+        self.messages.append({"role": "user", "content": text})
 
     def generate(self, reset: bool = True) -> str:
         """追加一轮 assistant 回复到 ``messages`` 并返回该回复文本。"""
@@ -634,19 +612,6 @@ class ReasonerLLMAPI:
     ) -> Dict[str, Any]:
         """
         追加一轮支持工具调用的 assistant 消息，并返回标准化后的消息字典。
-
-        返回格式示例：
-        {
-            "role": "assistant",
-            "content": "...",
-            "tool_calls": [
-                {
-                    "id": "...",
-                    "type": "function",
-                    "function": {"name": "...", "arguments": "..."}
-                }
-            ]
-        }
         """
         self._apply_reset_if_needed(reset)
         resp = self._client.chat.completions.create(
@@ -654,29 +619,154 @@ class ReasonerLLMAPI:
             messages=self.messages,
             tools=tools,
         )
-        message = resp.choices[0].message
-        assistant_message = {
-            "role": "assistant",
-            "content": (message.content or "").strip(),
-        }
-
-        if message.tool_calls:
-            tool_calls = []
-            for call in message.tool_calls:
-                tool_calls.append(
-                    {
-                        "id": call.id,
-                        "type": call.type,
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": call.function.arguments,
-                        },
-                    }
-                )
-            assistant_message["tool_calls"] = tool_calls
-
+        assistant_message = self._assistant_message_from_completion(
+            resp.choices[0].message
+        )
         self.messages.append(assistant_message)
         return assistant_message
+
+
+class ReasonerVLMAPI(BaseChatSession):
+    """
+    厂商多模态 Chat Completions API（OpenAI compatible-mode）。
+    ``append_user`` 支持 ``image_paths``；``infer_sync`` 兼容 benchmark 现有调用。
+    ``memory_results`` 仅为本地**图片**路径列表，不支持 ``.mp4`` 等视频路径。
+    """
+
+    def __init__(self, config: Config = None, keep_images_in_history: bool = True):
+        BaseChatSession.__init__(self)
+        if config is None:
+            config = Config()
+        from openai import OpenAI
+
+        key = (config.api_vlm_key or "").strip() or os.environ.get(
+            "DASHSCOPE_API_KEY", ""
+        )
+        self._client = OpenAI(
+            api_key=key,
+            base_url=config.api_vlm_base_url,
+        )
+        self._model = config.api_vlm_model_name
+        self._max_media = config.reasoner_local_max_img_num
+        self.keep_images_in_history = bool(keep_images_in_history)
+        self._dialog_messages = {}  # type: Dict[int, List[Dict[str, Any]]]
+
+    def append_user(
+        self, text: str, image_paths: Optional[Sequence[str]] = None
+    ) -> None:
+        if image_paths:
+            paths = [str(item).strip() for item in image_paths if str(item).strip()]
+            if self._max_media is not None and int(self._max_media) > 0:
+                paths = _uniform_subsample_image_list(paths, int(self._max_media))
+            video_error = self._validate_image_paths(paths)
+            if video_error:
+                raise ValueError(video_error)
+            content = _build_openai_multimodal_content(text, paths)
+        else:
+            content = text
+        self.messages.append({"role": "user", "content": content})
+
+    def _validate_image_paths(self, paths: Sequence[str]) -> Optional[str]:
+        for ap in paths:
+            if os.path.abspath(ap).lower().endswith(_VIDEO_SUFFIX):
+                return (
+                    "ReasonerVLMAPI 不支持 clip 模式下的视频路径（如 .mp4）；"
+                    "请改用 memory.retrieve_item_type=frame 与检索帧图片路径，"
+                    "或使用本地 ReasonerVLMLocal。"
+                )
+        return None
+
+    def _messages_for_api(self) -> List[Dict[str, Any]]:
+        if self.keep_images_in_history:
+            return list(self.messages)
+        api_messages = []
+        for msg in self.messages:
+            row = dict(msg)
+            if msg.get("role") == "user":
+                row["content"] = _user_content_for_api(
+                    msg.get("content"), self.keep_images_in_history
+                )
+            api_messages.append(row)
+        return api_messages
+
+    def generate(self, reset: bool = True) -> str:
+        self._apply_reset_if_needed(reset)
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=self._messages_for_api(),
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        self.messages.append({"role": "assistant", "content": content})
+        return content
+
+    def _prepare_image_paths_from_memory_results(
+        self, memory_results: Sequence[Any]
+    ) -> Tuple[Optional[List[str]], Optional[str]]:
+        paths = memory_results or []
+        if not paths or not isinstance(paths[0], str):
+            return None, "ReasonerVLMAPI 需要 memory_results 为本地文件路径字符串列表"
+        plist = [str(item) for item in paths if str(item).strip()]
+        if self._max_media is not None and int(self._max_media) > 0:
+            plist = _uniform_subsample_image_list(plist, int(self._max_media))
+        if not plist:
+            return None, "无有效媒体路径"
+        video_error = self._validate_image_paths(plist)
+        if video_error:
+            return None, video_error
+        return plist, None
+
+    def infer_sync(self, query_request: QueryRequest) -> QueryResponse:
+        """同步多模态推理；``dialog_id != 0`` 时在实例内按对话 ID 保留历史。"""
+        query_id = query_request.query_id
+        dialog_id = int(getattr(query_request, "dialog_id", 0) or 0)
+        backup_messages = list(self.messages)
+        if dialog_id == 0:
+            self.messages = []
+        else:
+            self.messages = list(self._dialog_messages.get(dialog_id, []))
+
+        plist, path_error = self._prepare_image_paths_from_memory_results(
+            query_request.memory_results or []
+        )
+        if path_error:
+            self.messages = backup_messages
+            return QueryResponse(
+                query_id=query_id,
+                result=None,
+                error=path_error,
+                timestamp=time.time(),
+            )
+
+        reset = dialog_id == 0
+        self.append_user(query_request.query_text, image_paths=plist)
+        api_error = None
+        result_text = None
+        try:
+            result_text = self.generate(reset=reset)
+        except Exception as e:
+            api_error = str(e)
+
+        if dialog_id != 0:
+            if api_error is None:
+                self._dialog_messages[dialog_id] = list(self.messages)
+            self.messages = backup_messages
+        else:
+            self.messages = backup_messages
+
+        if api_error is not None:
+            return QueryResponse(
+                query_id=query_id,
+                result=None,
+                error=api_error,
+                timestamp=time.time(),
+            )
+
+        return QueryResponse(
+            query_id=query_id,
+            result=result_text,
+            error=None,
+            timestamp=time.time(),
+        )
 
 
 class AgenticRetrieverAPI(ReasonerLLMAPI):
@@ -691,6 +781,25 @@ class AgenticRetrieverAPI(ReasonerLLMAPI):
                     "You are a cloud-based remote video retrieval assistant. "
                     "You cannot directly see the user's video content, and you should "
                     "plan your actions or invoke tools based on the user's question."
+                ),
+            }
+        ]
+
+
+class AgenticMultimodalRetrieverAPI(ReasonerVLMAPI):
+    """带默认 system 提示词的检索规划/工具调用 LLM API。"""
+
+    def __init__(self, config: Config = None):
+        super(AgenticMultimodalRetrieverAPI, self).__init__(config=config)
+        self.messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a cloud-based remote video retrieval assistant. "
+                    "You cannot directly see the user's video content, and you should "
+                    "plan your actions or invoke tools based on the user's question. "
+                    "You can only see the content provided by tools, and then collect "
+                    "evidence and answer in the right direction as far as possible "
                 ),
             }
         ]
