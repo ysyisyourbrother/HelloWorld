@@ -171,7 +171,19 @@ class SymASR(SymASRBase):
             torch_dtype=dtype,
             device=device,
         )
-        self.logger.info("SymASR 模型加载完成: %s", self.model_path)
+        lang = _normalize_language(self.language)
+        if lang is None:
+            self.logger.info("SymASR 模型加载完成: %s，语言=auto", self.model_path)
+        else:
+            self.logger.info(
+                "SymASR 模型加载完成: %s，语言=%s", self.model_path, lang
+            )
+
+    def _build_generate_kwargs(self) -> dict:
+        lang = _normalize_language(self.language)
+        if lang is None:
+            return {}
+        return {"language": lang, "task": "transcribe"}
 
     def _stitch_global_ts(self, start: float, end: float) -> Tuple[float, float]:
         if self._prev_raw_start is not None and start + 0.2 < self._prev_raw_start:
@@ -190,7 +202,11 @@ class SymASR(SymASRBase):
         if self.asr_pipe is None:
             raise RuntimeError("ASR 模型未初始化")
 
-        ret = self.asr_pipe(audio_data.audio, return_timestamps=True)
+        ret = self.asr_pipe(
+            audio_data.audio,
+            return_timestamps=True,
+            generate_kwargs=self._build_generate_kwargs(),
+        )
         chunks = ret.get("chunks", [])
         output: List[ASRSegment] = []
 
