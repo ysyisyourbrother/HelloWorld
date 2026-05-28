@@ -10,7 +10,7 @@ import sys
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from src.config import SYSTEM_MODE_VLM_QA, SymConfig
+from src.config import SYSTEM_MODE_VLM_QA, SymConfig, normalize_system_mode
 from src.system.symphony.v5.benchmark import SymphonySystemBenchV5
 
 
@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
     config = SymConfig(args.config)
     if args.system_mode is not None:
-        config.system_mode = int(args.system_mode)
+        config.system_mode = normalize_system_mode(args.system_mode)
     # v5 编排与 v3/v4 一致：GOP 扫描走 ffprobe（V1），避免误走 GStreamer 路径。
     config.video_input_version = "V1"
     if args.subset:

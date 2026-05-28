@@ -71,7 +71,9 @@ if __name__ == "__main__":
 
     config = SymConfig(config_path=args.config)
     if args.system_mode is not None:
-        config.system_mode = int(args.system_mode)
+        from src.config import normalize_system_mode
+
+        config.system_mode = normalize_system_mode(args.system_mode)
     moti = SymphonySystemMotiV5(config)
 
     result = moti.run_video_flow(

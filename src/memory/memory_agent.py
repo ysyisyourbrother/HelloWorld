@@ -618,12 +618,15 @@ class MemoryAgent(MemoryManagerBase):
                 for row in ocr_rows
                 if float(row[2]) >= self.ocr_conf_threshold and str(row[1]).strip()
             ]
-            if kept_texts:
-                text_line = "frame {idx}: ".format(idx=idx) + "; ".join(
-                    ['"{txt}"'.format(txt=txt) for txt in kept_texts]
-                )
+            if not kept_texts:
+                continue
+            text_line = "frame {idx}: ".format(idx=idx) + "; ".join(
+                ['"{txt}"'.format(txt=txt) for txt in kept_texts]
+            )
             per_frame_lines.append(text_line)
 
+        if not per_frame_lines:
+            return []
         merged_text = "\n".join(per_frame_lines)
         return [ocr_template.format(ocr_result=merged_text).strip()]
 

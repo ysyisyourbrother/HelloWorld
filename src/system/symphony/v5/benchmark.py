@@ -10,9 +10,11 @@ import cv2
 
 from src.config import (
     system_mode_is_inject_only_no_query,
-    system_mode_wants_new_plan,
+    system_mode_wants_any_plan_retrieval,
+    system_mode_wants_existing_plan,
     system_mode_wants_vlm_qa,
 )
+from src.system.symphony.v5.plan_retrieve import empty_retrieve_skip_result, run_agentic_retrieve
 from src.llm.reasoner import QueryRequest
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerForV3
 from src.memory.memory_agent import MemoryAgent
@@ -100,22 +102,23 @@ class SymphonySystemBenchV5(SymphonySystemBenchV4):
                 "total_time_sec": time.time() - t0,
             }
 
-        if system_mode_wants_new_plan(self.config.system_mode):
-            retrieve_pack = self.memory_manager.agentic_retrieve_pipeline(
-                question, options=options
-            )
-        else:
-            plan_path = self.memory_manager._resolve_plan_json_path()
-            if not plan_path or not os.path.isfile(plan_path):
-                raise ValueError(
-                    "system_mode 未启用新 plan，但未找到已有 plan 文件（期望与 databasemap 同名的 "
-                    "plan/*.json）: %r" % (plan_path,)
+        sm = int(self.config.system_mode)
+        retrieve_pack = run_agentic_retrieve(
+            self.memory_manager, sm, question, options=options
+        )
+        if retrieve_pack is None:
+            if not system_mode_wants_any_plan_retrieval(sm):
+                msg = "system_mode plan 位为 00（未启用复用已有 plan 也未启用新 plan），跳过检索"
+            elif system_mode_wants_existing_plan(sm):
+                plan_path = self.memory_manager._resolve_plan_json_path()
+                msg = (
+                    "system_mode 启用复用已有 plan，但未找到 plan 文件（期望 plan/*.json）: %r"
+                    % (plan_path,)
                 )
-            retrieve_pack = self.memory_manager.agentic_retrieve_pipeline_with_existing_plan(
-                question,
-                options=options,
-                existing_plan_json_path=plan_path,
-            )
+            else:
+                msg = "system_mode 未执行 plan 检索，跳过"
+            return empty_retrieve_skip_result(question, msg, t0)
+
         retrieve_time = time.time() - t0
 
         frames_metadata = retrieve_pack.get("metadata_list") or []
