@@ -1,4 +1,5 @@
 {
+  "system_mode": 1,
   "video_input": {
     "log_file": "logs/symphony_edge_orin_video.log",
     "version": "V2",

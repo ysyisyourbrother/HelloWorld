@@ -14,7 +14,7 @@ from src.benchmark.retrieve_clip_frames import (
     count_reported_frames_in_clip_info,
     decode_clip_info_all_frames_bgr,
 )
-from src.config import system_mode_wants_vlm_qa
+from src.config import system_mode_wants_asr_inject, system_mode_wants_vlm_qa
 from src.llm.reasoner import QueryRequest
 from src.memory.subtitle.asr import SymASR, SymStreamASR
 from src.system.symphony.v3.motivation import SymphonySystemMotiV3
@@ -105,6 +105,19 @@ class SymphonySystemMotiV4(SymphonySystemMotiV3):
             gathered_subtitles = gathered_subtitles + " ..."
         return gathered_subtitles
 
+    def _clear_srt_for_asr_inject(self) -> None:
+        srt_path = getattr(self.memory_manager, "srt_file_path", "") or getattr(
+            self.config, "memory_srt_file_path", ""
+        )
+        if srt_path and os.path.isfile(srt_path):
+            os.remove(srt_path)
+        if self.memory_manager.srt is not None:
+            self.memory_manager.srt.latest_idx = 0
+            self.memory_manager.srt.start_time = []
+            self.memory_manager.srt.end_time = []
+            self.memory_manager.srt.texts = []
+            self.memory_manager.srt.whole_texts = ""
+
     def _run_inject_phase(
         self,
         video_path: str,
@@ -123,20 +136,11 @@ class SymphonySystemMotiV4(SymphonySystemMotiV3):
         if result.get("skipped"):
             return result
 
-        srt_path = getattr(self.memory_manager, "srt_file_path", "") or getattr(
-            self.config, "memory_srt_file_path", ""
-        )
-        if srt_path and os.path.isfile(srt_path):
-            os.remove(srt_path)
-            if self.memory_manager.srt is not None:
-                self.memory_manager.srt.latest_idx = 0
-                self.memory_manager.srt.start_time = []
-                self.memory_manager.srt.end_time = []
-                self.memory_manager.srt.texts = []
-                self.memory_manager.srt.whole_texts = ""
-        subtitle_count = self._inject_srt_by_asr(video_path)
-        self.memory_manager.save_database_sync()
-        result["subtitle_count"] = subtitle_count
+        if system_mode_wants_asr_inject(self.config.system_mode):
+            self._clear_srt_for_asr_inject()
+            subtitle_count = self._inject_srt_by_asr(video_path)
+            self.memory_manager.save_database_sync()
+            result["subtitle_count"] = subtitle_count
         return result
 
     def _run_query_single(

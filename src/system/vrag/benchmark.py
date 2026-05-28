@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from src.config import (
     Config,
-    system_mode_wants_memory_reinject,
+    system_mode_wants_frame_inject,
     system_mode_wants_vlm_qa,
 )
 from src.video_input.video_input import VideoInputBase
@@ -216,10 +216,10 @@ class VragSystemBench:
         （若已有旧库文件则先删除再写入，避免在已加载索引上重复追加）。
         """
         faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
-        if not system_mode_wants_memory_reinject(self.config.system_mode):
+        if not system_mode_wants_frame_inject(self.config.system_mode):
             if os.path.isfile(faiss_path):
                 self.logger.info(
-                    "system_mode 未启用记忆重注入，加载已有向量库: %s",
+                    "system_mode 未启用帧注入，加载已有向量库: %s",
                     faiss_path,
                 )
                 self._init_components(
@@ -237,7 +237,7 @@ class VragSystemBench:
                     "skipped": True,
                 }
             self.logger.error(
-                "system_mode 未启用记忆重注入但本地无 faiss: %s",
+                "system_mode 未启用帧注入但本地无 faiss: %s",
                 faiss_path,
             )
             return {
@@ -271,11 +271,6 @@ class VragSystemBench:
             if os.path.isfile(map_path):
                 try:
                     os.remove(map_path)
-                except OSError:
-                    pass
-            if os.path.isfile(srt_path):
-                try:
-                    os.remove(srt_path)
                 except OSError:
                     pass
 

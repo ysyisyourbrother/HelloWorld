@@ -9,7 +9,7 @@ Vrag motivation：对指定视频仅做帧向量编码与入库（不写检索 /
 import argparse
 import os
 
-from src.config import Config, SYSTEM_MODE_REINJECT_MEMORY
+from src.config import Config, SYSTEM_MODE_FRAME_INJECT
 from src.system.vrag.motivation import VragSystemMoti
 
 
@@ -46,11 +46,11 @@ def parse_args():
     parser.add_argument(
         "--system_mode",
         type=int,
-        default=SYSTEM_MODE_REINJECT_MEMORY,
+        default=SYSTEM_MODE_FRAME_INJECT,
         help=(
-            "覆盖配置 system_mode 位掩码；默认 %d 表示仅记忆重注入，"
-            "不预加载 Query 文本编码器（仅帧编码）。见 src.config 中 SYSTEM_MODE_*"
-            % SYSTEM_MODE_REINJECT_MEMORY
+            "覆盖配置 system_mode 位掩码；默认 %d 表示仅帧注入（0b0001），"
+            "不预加载 Query 文本编码器。见 src.config 中 SYSTEM_MODE_*"
+            % SYSTEM_MODE_FRAME_INJECT
         ),
     )
     parser.add_argument(

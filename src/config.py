@@ -24,17 +24,39 @@ def _default_bge_vl_model_path():
 
 
 # system_mode 位掩码（与 Config.system_mode 约定一致，供其他模块引用）
-# bit0=1：重新注入记忆；0 表示依赖已有本地记忆、不做本轮注入流水线
-# bit1=2：通过云端 API 拉取新的检索 plan；0 表示使用已有 plan（如 agentic_retrieve_pipeline_with_existing_plan）
-# bit2=4：用 VLM 对问题与检索结果作答；0 表示仅检索、不跑 VLM 问答
-# 三 bit 全开 = 1+2+4 = 7（二进制 0b111）；注意 8 为 0b1000，不是三 bit 全开
-SYSTEM_MODE_REINJECT_MEMORY = 1
-SYSTEM_MODE_NEW_PLAN = 2
-SYSTEM_MODE_VLM_QA = 4
+# 低 2 位：记忆注入
+#   bit0=1：视频帧嵌入入库（faiss / databasemap）
+#   bit1=2：ASR 字幕入库（srt）
+#   00 无注入 | 01 仅帧 | 10 仅 ASR | 11 帧+ASR
+# 高 2 位：
+#   bit2=4：新生成 agentic 检索 plan
+#   bit3=8：VLM 问答
+# 四 bit 全开 = 1+2+4+8 = 15（0b1111）
+SYSTEM_MODE_FRAME_INJECT = 1
+SYSTEM_MODE_ASR_INJECT = 2
+SYSTEM_MODE_NEW_PLAN = 4
+SYSTEM_MODE_VLM_QA = 8
+SYSTEM_MODE_INJECT_MASK = SYSTEM_MODE_FRAME_INJECT | SYSTEM_MODE_ASR_INJECT
+
+# 兼容旧名（曾表示「帧+ASR 一起注入」）
+SYSTEM_MODE_REINJECT_MEMORY = SYSTEM_MODE_FRAME_INJECT
+
+
+def system_mode_wants_frame_inject(system_mode):
+    return (int(system_mode) & SYSTEM_MODE_FRAME_INJECT) != 0
+
+
+def system_mode_wants_asr_inject(system_mode):
+    return (int(system_mode) & SYSTEM_MODE_ASR_INJECT) != 0
+
+
+def system_mode_wants_any_memory_inject(system_mode):
+    return (int(system_mode) & SYSTEM_MODE_INJECT_MASK) != 0
 
 
 def system_mode_wants_memory_reinject(system_mode):
-    return (int(system_mode) & SYSTEM_MODE_REINJECT_MEMORY) != 0
+    """任一种记忆注入（帧或 ASR）。"""
+    return system_mode_wants_any_memory_inject(system_mode)
 
 
 def system_mode_wants_new_plan(system_mode):
@@ -45,9 +67,21 @@ def system_mode_wants_vlm_qa(system_mode):
     return (int(system_mode) & SYSTEM_MODE_VLM_QA) != 0
 
 
+def system_mode_is_inject_only_no_query(system_mode):
+    """仅帧+ASR 注入（值为 3），不跑 plan / VLM / 检索。"""
+    sm = int(system_mode)
+    high = SYSTEM_MODE_NEW_PLAN | SYSTEM_MODE_VLM_QA
+    return (sm & SYSTEM_MODE_INJECT_MASK) == SYSTEM_MODE_INJECT_MASK and (sm & high) == 0
+
+
 def system_mode_online_memory_needs_query_encoder(system_mode):
-    """在线 MemoryManager：仅 system_mode==1（仅注入位）时不初始化 QueryVectorizer。"""
-    return int(system_mode) != SYSTEM_MODE_REINJECT_MEMORY
+    """在线 MemoryManager：仅有注入位且无 plan/VLM 时不预加载 QueryVectorizer。"""
+    sm = int(system_mode)
+    if sm & (SYSTEM_MODE_NEW_PLAN | SYSTEM_MODE_VLM_QA):
+        return True
+    if sm & SYSTEM_MODE_INJECT_MASK:
+        return False
+    return True
 
 
 class Config:
@@ -65,9 +99,9 @@ class Config:
         self._set_attributes()
 
     def _parse_system_mode(self, raw):
-        """顶层 system_mode：十进制整型，由至多三 bit 组合，见模块级 SYSTEM_MODE_* 常量。"""
+        """顶层 system_mode：十进制整型，由 4 bit 组合，见模块级 SYSTEM_MODE_* 常量。"""
         if raw is None:
-            return 7
+            return 15
         return int(raw)
 
     def _load_config(self):
@@ -92,7 +126,7 @@ class Config:
                 return stream_config[key]
             return video_config.get(key, default)
 
-        # 系统运行模式：顶层 system_mode，三 bit 掩码见模块常量 SYSTEM_MODE_*
+        # 系统运行模式：顶层 system_mode，4 bit 掩码见模块常量 SYSTEM_MODE_*
         self.system_mode = self._parse_system_mode(self._config.get("system_mode"))
 
         # Video Input：仅 video_input 段（本地文件 / 离线解码等）

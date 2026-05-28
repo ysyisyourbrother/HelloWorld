@@ -35,7 +35,11 @@ from src.agent.prompts_for_symphony import (
     rag_prompt_with_clips,
     rag_prompt_with_frames,
 )
-from src.config import system_mode_wants_memory_reinject, system_mode_wants_vlm_qa
+from src.config import (
+    system_mode_wants_any_memory_inject,
+    system_mode_wants_frame_inject,
+    system_mode_wants_vlm_qa,
+)
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerForV3
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
@@ -103,10 +107,10 @@ class SymphonySystemBenchV3(SymphonySystemBench):
     ) -> Dict[str, Any]:
         """按媒体时间窗迭代，窗内策略已选好帧，直接编码入库。"""
         faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
-        if not system_mode_wants_memory_reinject(self.config.system_mode):
+        if not system_mode_wants_any_memory_inject(self.config.system_mode):
             if os.path.isfile(faiss_path):
                 self.logger.info(
-                    "system_mode 未启用记忆重注入，加载已有向量库: %s",
+                    "system_mode 未启用记忆注入，加载已有向量库: %s",
                     faiss_path,
                 )
                 self._init_components(
@@ -124,7 +128,7 @@ class SymphonySystemBenchV3(SymphonySystemBench):
                     "skipped": True,
                 }
             self.logger.error(
-                "system_mode 未启用记忆重注入但本地无 faiss: %s",
+                "system_mode 未启用记忆注入但本地无 faiss: %s",
                 faiss_path,
             )
             return {
@@ -135,6 +139,31 @@ class SymphonySystemBenchV3(SymphonySystemBench):
                 "skipped": False,
                 "error": "missing_faiss_for_local_only_mode",
             }
+
+        if not system_mode_wants_frame_inject(self.config.system_mode):
+            self._init_components(
+                video_path=video_path,
+                faiss_path=faiss_path,
+                map_path=map_path,
+                srt_path=srt_path,
+            )
+            ntotal = 0
+            if os.path.isfile(faiss_path):
+                idx = faiss.read_index(faiss_path)
+                ntotal = idx.ntotal
+            self.logger.info(
+                "system_mode 未启用帧注入，跳过帧编码（保留已有 faiss/srt）: %s",
+                faiss_path,
+            )
+            return {
+                "total_frames": ntotal,
+                "total_vectors": ntotal,
+                "elapsed_sec": 0.0,
+                "batch_size": self.batch_size,
+                "skipped": False,
+                "frame_inject_skipped": True,
+            }
+
         if skip_inject and os.path.isfile(faiss_path):
             self.logger.info("向量库已存在，跳过 inject: %s", faiss_path)
             self._init_components(
@@ -158,11 +187,6 @@ class SymphonySystemBenchV3(SymphonySystemBench):
             if os.path.isfile(map_path):
                 try:
                     os.remove(map_path)
-                except OSError:
-                    pass
-            if os.path.isfile(srt_path):
-                try:
-                    os.remove(srt_path)
                 except OSError:
                     pass
 

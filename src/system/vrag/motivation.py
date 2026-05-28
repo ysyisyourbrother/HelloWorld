@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 from src.config import (
     Config,
     system_mode_online_memory_needs_query_encoder,
-    system_mode_wants_memory_reinject,
+    system_mode_wants_frame_inject,
     system_mode_wants_vlm_qa,
 )
 from src.video_input.video_input import VideoInputBase
@@ -170,7 +170,7 @@ class VragSystemMoti:
         """
         初始化各组件（同步模式）。
         video_path 为 None 时不初始化解码与帧编码，常与已有 faiss 配合做检索；
-        system_mode 为仅记忆注入（bit0）时不在此预加载 QueryVectorizer。
+        system_mode 仅有注入位且无 plan/VLM 时不在此预加载 QueryVectorizer。
         """
         if faiss_path is not None:
             self.config.memory_faiss_file_path = faiss_path
@@ -180,7 +180,7 @@ class VragSystemMoti:
             self.config.memory_srt_file_path = srt_path
 
         self.memory_manager = MemoryManagerBase(self.config)
-        # system_mode 仅为「仅记忆注入」(bit0) 时不在此预加载 Query 编码器，避免与帧编码重复占显存；
+        # system_mode 仅有注入位且无 plan/VLM 时不在此预加载 Query 编码器，避免与帧编码重复占显存；
         # 若后续仍调用 query / run_video_flow 含问答，则在 _run_query_single 内惰性初始化。
         if system_mode_online_memory_needs_query_encoder(self.config.system_mode):
             self.query_vectorizer = QueryVectorizer(self.config)
@@ -216,10 +216,10 @@ class VragSystemMoti:
     ) -> Dict[str, Any]:
         """Inject 阶段：按 batch 读取、向量化、插入，按视频名保存"""
         faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
-        if not system_mode_wants_memory_reinject(self.config.system_mode):
+        if not system_mode_wants_frame_inject(self.config.system_mode):
             if os.path.isfile(faiss_path):
                 self.logger.info(
-                    "system_mode 未启用记忆重注入，加载已有向量库: %s",
+                    "system_mode 未启用帧注入，加载已有向量库: %s",
                     faiss_path,
                 )
                 self._init_components(
@@ -237,7 +237,7 @@ class VragSystemMoti:
                     "skipped": True,
                 }
             self.logger.error(
-                "system_mode 未启用记忆重注入但本地无 faiss: %s",
+                "system_mode 未启用帧注入但本地无 faiss: %s",
                 faiss_path,
             )
             return {
@@ -271,11 +271,6 @@ class VragSystemMoti:
             if os.path.isfile(map_path):
                 try:
                     os.remove(map_path)
-                except OSError:
-                    pass
-            if os.path.isfile(srt_path):
-                try:
-                    os.remove(srt_path)
                 except OSError:
                     pass
 

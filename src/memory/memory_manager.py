@@ -17,7 +17,7 @@ import multiprocessing as mp
 from src.config import (
     Config,
     system_mode_online_memory_needs_query_encoder,
-    system_mode_wants_memory_reinject,
+    system_mode_wants_frame_inject,
 )
 from src.memory.frame.frame_vectorizer import FrameVectorData, FrameVectorizer
 from src.memory.index.faiss import ThreadSafeFaiss
@@ -922,16 +922,16 @@ class MemoryManagerOnline(MemoryManagerBase):
 
         self._initialize_database()
         sm = self.system_mode
-        need_inject = system_mode_wants_memory_reinject(sm)
+        need_frame_inject = system_mode_wants_frame_inject(sm)
         need_query_encoder = system_mode_online_memory_needs_query_encoder(sm)
         self.logger.info(
-            "MemoryManager system_mode=%s inject=%s query_encoder=%s",
+            "MemoryManager system_mode=%s frame_inject=%s query_encoder=%s",
             sm,
-            need_inject,
+            need_frame_inject,
             need_query_encoder,
         )
 
-        if need_inject:
+        if need_frame_inject:
             self._frame_encoder = FrameVectorizer(self._config)
             self._frame_encoder._set_logger()
             self._frame_encoder._initialize_vectorizer()
@@ -945,7 +945,7 @@ class MemoryManagerOnline(MemoryManagerBase):
         self._ready_event.set()
         threads = []
 
-        if need_inject:
+        if need_frame_inject:
             frame_thread = threading.Thread(target=self._thread_frame_vectors, daemon=True)
             frame_thread.name = "FrameVectorThread"
             threads.append(frame_thread)

@@ -33,7 +33,7 @@ from src.agent.prompt_for_venus import (
     build_single_frame_inject_text,
     build_yolo_text,
 )
-from src.config import Config, system_mode_online_memory_needs_query_encoder, system_mode_wants_memory_reinject
+from src.config import Config, system_mode_online_memory_needs_query_encoder, system_mode_wants_frame_inject
 from src.memory.frame.frame_vectorizer import FrameVectorData
 from src.memory.frame.image_bge_vectorizer import ImageBGEVectorizer
 from src.memory.memory_manager import MemoryManagerBase
@@ -555,7 +555,7 @@ class VenusInjectRetrieveMixin:
         skip_if_exists: bool = False,
     ) -> Dict[str, Any]:
         faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
-        if not system_mode_wants_memory_reinject(self.config.system_mode):
+        if not system_mode_wants_frame_inject(self.config.system_mode):
             if os.path.isfile(faiss_path):
                 self._init_components(None, faiss_path, map_path, srt_path)
                 idx = faiss.read_index(faiss_path)

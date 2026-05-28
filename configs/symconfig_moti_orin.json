@@ -1,4 +1,5 @@
 {
+  "system_mode": 1,
   "video_input": {
     "version": "V2",
     "gop_scan_python": "/usr/bin/python3"

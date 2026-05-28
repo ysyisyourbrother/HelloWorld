@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import cv2
 
 from src.config import (
-    system_mode_wants_memory_reinject,
+    system_mode_is_inject_only_no_query,
     system_mode_wants_new_plan,
     system_mode_wants_vlm_qa,
 )
@@ -78,11 +78,7 @@ class SymphonySystemMotiV5(SymphonySystemMotiV4):
             elif maybe_options:
                 options = list(maybe_options)
 
-        if (
-            system_mode_wants_memory_reinject(self.config.system_mode)
-            and not system_mode_wants_new_plan(self.config.system_mode)
-            and not system_mode_wants_vlm_qa(self.config.system_mode)
-        ):
+        if system_mode_is_inject_only_no_query(self.config.system_mode):
             return {
                 "question": question,
                 "retrieve_time_sec": 0.0,
@@ -96,7 +92,7 @@ class SymphonySystemMotiV5(SymphonySystemMotiV4):
                 "reasoner_input_frame_count": 0,
                 "cloud_result": None,
                 "cloud_error": (
-                    "system_mode 为仅记忆重注入（未启用新 plan 与 VLM），跳过检索与推理"
+                    "system_mode 为仅帧+ASR 注入（值 3，未启用 plan 与 VLM），跳过检索与推理"
                 ),
                 "total_time_sec": time.time() - t0,
             }

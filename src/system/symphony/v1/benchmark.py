@@ -16,7 +16,7 @@ _project_root = os.path.abspath(
 )
 sys.path.insert(0, _project_root)
 
-from src.config import system_mode_wants_memory_reinject
+from src.config import system_mode_wants_frame_inject
 from src.memory.frame.frame_vectorizer import SymFrameVectorizerByGOP
 from src.memory.memory_manager import MemoryManagerBase
 from src.memory.query.query_vectorizer import QueryVectorizer
@@ -83,10 +83,10 @@ class SymphonySystemBench(VragSystemBench):
     ) -> Dict[str, Any]:
         """Inject 阶段：按 GOP 迭代、select_frame_in_gop 选帧、encode_frames_by_gop 编码、插入"""
         faiss_path, map_path, srt_path = self._get_db_paths(dataset_name, video_id, subset)
-        if not system_mode_wants_memory_reinject(self.config.system_mode):
+        if not system_mode_wants_frame_inject(self.config.system_mode):
             if os.path.isfile(faiss_path):
                 self.logger.info(
-                    "system_mode 未启用记忆重注入，加载已有向量库: %s",
+                    "system_mode 未启用帧注入，加载已有向量库: %s",
                     faiss_path,
                 )
                 self._init_components(
@@ -104,7 +104,7 @@ class SymphonySystemBench(VragSystemBench):
                     "skipped": True,
                 }
             self.logger.error(
-                "system_mode 未启用记忆重注入但本地无 faiss: %s",
+                "system_mode 未启用帧注入但本地无 faiss: %s",
                 faiss_path,
             )
             return {
@@ -140,12 +140,6 @@ class SymphonySystemBench(VragSystemBench):
                     os.remove(map_path)
                 except OSError:
                     pass
-            if os.path.isfile(srt_path):
-                try:
-                    os.remove(srt_path)
-                except OSError:
-                    pass
-
         self._init_components(
             video_path=video_path, faiss_path=faiss_path, map_path=map_path, srt_path=srt_path
         )
