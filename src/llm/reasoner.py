@@ -699,6 +699,22 @@ class ReasonerVLMAPI(BaseChatSession):
         self.messages.append({"role": "assistant", "content": content})
         return content
 
+    def generate_with_tools(
+        self, tools: List[Dict[str, Any]], reset: bool = True
+    ) -> Dict[str, Any]:
+        """追加一轮支持工具调用的 assistant 消息，并返回标准化后的消息字典。"""
+        self._apply_reset_if_needed(reset)
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=self._messages_for_api(),
+            tools=tools,
+        )
+        assistant_message = self._assistant_message_from_completion(
+            resp.choices[0].message
+        )
+        self.messages.append(assistant_message)
+        return assistant_message
+
     def _prepare_image_paths_from_memory_results(
         self, memory_results: Sequence[Any]
     ) -> Tuple[Optional[List[str]], Optional[str]]:
