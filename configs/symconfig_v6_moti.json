@@ -1,0 +1,23 @@
+{
+  "system_mode": 27,
+  "video_input": {
+    "original_fps": false,
+    "version": "V1"
+  },
+  "stream_input": {
+    "stream_window_duration_sec": 1.0,
+    "stream_target_decode_fps": 0.3,
+    "stream_trigger_ratio": 1.25,
+    "stream_baseline_ewma_alpha": 0.08,
+    "stream_warmup_windows": 3
+  },
+  "memory_manager": {
+    "retrieve_item_type": "frame"
+  },
+  "benchmark": {
+    "is_local_vlm": false,
+    "db_dir_egoschema": "database/egoschema/symphony_v6",
+    "db_dir_videomme": "database/videomme/symphony_v6",
+    "result_dir": "benchmark_results/symphony_v6"
+  }
+}
