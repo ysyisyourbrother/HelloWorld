@@ -919,6 +919,146 @@ class MemoryAgentV6(MemoryManagerBase):
             return "(no options provided)"
         return " ".join(items)
 
+    def _format_plan_flow_brief(self, steps: Sequence[str]) -> str:
+        labels: List[str] = []
+        for step in steps:
+            text = str(step).strip()
+            if text.startswith("[Scope]"):
+                labels.append("[Scope]")
+            elif text.startswith("[Search]"):
+                labels.append("[Search]")
+        if not labels:
+            return "(空)"
+        return "->".join(labels)
+
+    def _count_subtitle_sentences(
+        self, subtitle_rows: Optional[Sequence[Dict[str, Any]]]
+    ) -> int:
+        if not subtitle_rows:
+            return 0
+        total = 0
+        for row in subtitle_rows:
+            if not isinstance(row, dict):
+                continue
+            items = row.get("items")
+            if isinstance(items, list) and items:
+                total += len(items)
+            else:
+                total += 1
+        return total
+
+    def _describe_scope_tool(
+        self, tool_name: Optional[str], arguments: Dict[str, Any]
+    ) -> str:
+        if not tool_name:
+            return "定位失败"
+        if tool_name == "_get_subset_by_period":
+            return "时间段 %.1f-%.1fs" % (
+                float(arguments.get("start_time") or 0.0),
+                float(arguments.get("end_time") or 0.0),
+            )
+        if tool_name == "_get_subset_by_event_frame":
+            scope = arguments.get("scope") or []
+            left = scope[0] if len(scope) > 0 else 0
+            right = scope[1] if len(scope) > 1 else 0
+            return "事件'%s' 窗口[%s,%s]s" % (
+                arguments.get("event") or "",
+                left,
+                right,
+            )
+        if tool_name == "_get_subset_by_keyword":
+            keywords = arguments.get("keywords") or []
+            if isinstance(keywords, str):
+                keywords = [keywords]
+            return "关键词 %s" % ",".join(str(item) for item in keywords)
+        return str(tool_name)
+
+    def _describe_search_result(self, frame_count: int, subtitle_count: int) -> str:
+        if frame_count > 0 and subtitle_count > 0:
+            return "%d帧、%d句字幕" % (frame_count, subtitle_count)
+        if frame_count > 0:
+            return "%d帧" % frame_count
+        if subtitle_count > 0:
+            return "%d句字幕" % subtitle_count
+        return "无证据"
+
+    def _log_plan_received(
+        self, steps: Sequence[str], reused: bool = False
+    ) -> None:
+        flow = self._format_plan_flow_brief(steps)
+        if reused:
+            self.logger.info("Plan(复用): %s", flow)
+        else:
+            self.logger.info("Plan: %s", flow)
+
+    def _log_scope_step(
+        self,
+        is_replan: bool,
+        tool_name: Optional[str],
+        arguments: Dict[str, Any],
+    ) -> None:
+        prefix = "Replan Scope" if is_replan else "Scope"
+        self.logger.info(
+            "%s: %s", prefix, self._describe_scope_tool(tool_name, arguments)
+        )
+
+    def _log_search_step(
+        self,
+        is_replan: bool,
+        tool_name: Optional[str],
+        frame_part: Sequence[Dict[str, Any]],
+        subtitle_part: Sequence[Dict[str, Any]],
+    ) -> None:
+        prefix = "Replan Search" if is_replan else "Search"
+        frame_count = len(frame_part) if frame_part else 0
+        subtitle_count = self._count_subtitle_sentences(subtitle_part)
+        if tool_name == "_get_all_subtitles":
+            self.logger.info("%s: 全量字幕 %d句", prefix, subtitle_count)
+            return
+        self.logger.info(
+            "%s: %s",
+            prefix,
+            self._describe_search_result(frame_count, subtitle_count),
+        )
+
+    def _log_model_decision(
+        self,
+        budget: int,
+        parsed_response: Dict[str, Any],
+        loop_round: int = 0,
+        phase: str = "",
+    ) -> None:
+        outcome = str(parsed_response.get("outcome") or "")
+        round_text = "第%d轮 " % loop_round if loop_round > 0 else ""
+        phase_text = phase + " " if phase else ""
+        if outcome == "answer":
+            letter = str(parsed_response.get("answer_letter") or "").strip() or "?"
+            self.logger.info(
+                "%s%sbudget=%d 选择 Answer %s",
+                phase_text,
+                round_text,
+                budget,
+                letter,
+            )
+            return
+        if outcome == "replan":
+            replan_steps = parsed_response.get("replan_steps") or []
+            flow = self._format_plan_flow_brief(replan_steps)
+            self.logger.info(
+                "%s%sbudget=%d 选择 Replan %s",
+                phase_text,
+                round_text,
+                budget,
+                flow,
+            )
+            return
+        self.logger.info(
+            "%s%sbudget=%d 选择未识别",
+            phase_text,
+            round_text,
+            budget,
+        )
+
     def _extract_answer_text(self, text: str) -> str:
         match = re.search(r"\[Answer\]\s*(.+)", str(text or ""), flags=re.IGNORECASE | re.DOTALL)
         if match is None:
@@ -1165,6 +1305,7 @@ class MemoryAgentV6(MemoryManagerBase):
             "execution_pass": execution_pass,
             "scope_index": int(scope_index),
         }
+        self._log_scope_step(is_replan, tool_name, dict(arguments) if arguments else {})
         return out.get("faiss_subset"), trace
 
     def _execute_search_step(
@@ -1216,6 +1357,8 @@ class MemoryAgentV6(MemoryManagerBase):
         if tool_name:
             out = self._call_tool_by_name(tool_name, arguments, faiss_subset)
 
+        frame_part = out.get("frame_results") or []
+        subtitle_part = out.get("subtitle_results") or []
         trace = {
             "phase": "search",
             "plan_step": step_text,
@@ -1227,9 +1370,10 @@ class MemoryAgentV6(MemoryManagerBase):
             "execution_pass": execution_pass,
             "search_index": int(search_index),
         }
+        self._log_search_step(is_replan, tool_name, frame_part, subtitle_part)
         return (
-            out.get("frame_results") or [],
-            out.get("subtitle_results") or [],
+            frame_part,
+            subtitle_part,
             trace,
         )
 
@@ -1289,6 +1433,7 @@ class MemoryAgentV6(MemoryManagerBase):
     def agentic_retrieve_and_answer_pipeline( # _with_existing_plan
         self, user_query: str, options: Optional[Sequence[str]] = None
     ) -> Dict[str, Any]:
+        self.agentic_retriever.reset_session()
         with self.databasemap.acquire() as videos:
             if videos:
                 duration = float(videos[0].get("duration") or 0.0)
@@ -1333,6 +1478,7 @@ class MemoryAgentV6(MemoryManagerBase):
         steps = self._parse_plan_steps(plan_text)
         if not steps or not str(steps[0]).startswith("[Scope]"):
             steps = ["[Scope] Pay attention to the entire video"] + steps
+        self._log_plan_received(steps)
 
         faiss_subset: Optional[FaissSubset] = None
         frame_results: List[Dict[str, Any]] = []
@@ -1354,6 +1500,7 @@ class MemoryAgentV6(MemoryManagerBase):
         if not ran_second_search and not has_excessive_subtitle:
             all_subs = self._get_all_subtitles(faiss_subset=faiss_subset)
             self._append_evidence(frame_results, subtitle_results, [], all_subs)
+            self._log_search_step(False, "_get_all_subtitles", [], all_subs)
             tool_traces.append(
                 {
                     "phase": "search",
@@ -1407,6 +1554,9 @@ class MemoryAgentV6(MemoryManagerBase):
             self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
             answer_or_replan = self.agentic_retriever.generate(reset=False)
             parsed_response = self._split_answer_or_replan_response(answer_or_replan)
+            self._log_model_decision(
+                budget_at_start, parsed_response, loop_round=loop_round
+            )
 
             round_record: Dict[str, Any] = {
                 "round": loop_round,
@@ -1514,6 +1664,9 @@ class MemoryAgentV6(MemoryManagerBase):
             self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
             answer_now_text = self.agentic_retriever.generate(reset=False)
             parsed_final = self._split_answer_or_replan_response(answer_now_text)
+            self._log_model_decision(
+                int(self.replan_budget), parsed_final, phase="AnswerNow"
+            )
             final_answer = parsed_final["answer_letter"] or self._extract_answer_text(
                 answer_now_text
             )
@@ -1589,6 +1742,7 @@ class MemoryAgentV6(MemoryManagerBase):
     ) -> Dict[str, Any]:
         """Replay tool_calls from an existing plan JSON, then run answer-or-replan like
         agentic_retrieve_and_answer_pipeline without cloud planning or plan trace writes."""
+        self.agentic_retriever.reset_session()
         path = str(existing_plan_json_path or "").strip()
         if not path:
             raise ValueError("existing_plan_json_path 为空")
@@ -1655,13 +1809,8 @@ class MemoryAgentV6(MemoryManagerBase):
         )
         topk = int(self.memory_topk)
         options_text = self._format_options_text(options)
-
-        self.logger.info(
-            "MemoryAgentV6 agentic 检索作答(复用 plan)开始: 视频时长 %.2fs, 问题长度 %d, plan=%s",
-            duration,
-            len(user_query or ""),
-            path,
-        )
+        if plan_steps:
+            self._log_plan_received(plan_steps, reused=True)
 
         faiss_subset: Optional[FaissSubset] = None
         frame_results: List[Dict[str, Any]] = []
@@ -1689,6 +1838,7 @@ class MemoryAgentV6(MemoryManagerBase):
                 if tool_name:
                     out = self._call_tool_by_name(tool_name, arguments, faiss_subset)
                     faiss_subset = out.get("faiss_subset", faiss_subset)
+                    self._log_scope_step(False, tool_name, arguments)
                 continue
 
             if phase == "search":
@@ -1700,6 +1850,7 @@ class MemoryAgentV6(MemoryManagerBase):
                 if tool_name == "_get_all_subtitles":
                     all_subs = self._get_all_subtitles(faiss_subset=faiss_subset)
                     self._append_evidence(frame_results, subtitle_results, [], all_subs)
+                    self._log_search_step(False, tool_name, [], all_subs)
                 elif tool_name:
                     out = self._call_tool_by_name(tool_name, arguments, faiss_subset)
                     frame_part = out.get("frame_results") or []
@@ -1707,6 +1858,7 @@ class MemoryAgentV6(MemoryManagerBase):
                     self._append_evidence(
                         frame_results, subtitle_results, frame_part, subtitle_part
                     )
+                    self._log_search_step(False, tool_name, frame_part, subtitle_part)
                 continue
 
             if phase == "enhance":
@@ -1752,6 +1904,9 @@ class MemoryAgentV6(MemoryManagerBase):
             self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
             answer_or_replan = self.agentic_retriever.generate(reset=False)
             parsed_response = self._split_answer_or_replan_response(answer_or_replan)
+            self._log_model_decision(
+                budget_at_start, parsed_response, loop_round=loop_round
+            )
 
             round_record: Dict[str, Any] = {
                 "round": loop_round,
@@ -1853,19 +2008,15 @@ class MemoryAgentV6(MemoryManagerBase):
             self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
             answer_now_text = self.agentic_retriever.generate(reset=False)
             parsed_final = self._split_answer_or_replan_response(answer_now_text)
+            self._log_model_decision(
+                int(self.replan_budget), parsed_final, phase="AnswerNow"
+            )
             final_answer = parsed_final["answer_letter"] or self._extract_answer_text(
                 answer_now_text
             )
 
         final_retrieval_context = self._format_retrieval_context(
             new_frame_results, new_subtitle_results
-        )
-
-        self.logger.info(
-            "MemoryAgentV6 agentic 检索作答(复用 plan)结束: 帧证据 %d 条, 字幕 %d 段, 答案=%r",
-            len(frame_results),
-            len(subtitle_results),
-            final_answer,
         )
 
         return {
