@@ -1,3 +1,4 @@
+import base64
 import multiprocessing as mp
 import threading
 import numpy as np
@@ -60,9 +61,36 @@ def _uniform_subsample_image_list(images, max_n):
 
 _VIDEO_SUFFIX = (".mp4", ".mov", ".mkv", ".webm")
 
+_IMAGE_MIME_BY_SUFFIX = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
 
-def _file_url_for_path(path: str) -> str:
-    return "file://%s" % os.path.abspath(path)
+
+def _image_mime_for_path(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    return _IMAGE_MIME_BY_SUFFIX.get(ext, "image/jpeg")
+
+
+def _image_url_for_openai_compatible_api(path: str) -> Optional[str]:
+    """OpenAI 兼容 / DashScope HTTP：本地图转 data URL；http(s)/data 原样返回。"""
+    raw = str(path or "").strip()
+    if not raw:
+        return None
+    lower = raw.lower()
+    if lower.startswith("data:") or lower.startswith("http://") or lower.startswith("https://"):
+        return raw
+    abs_path = os.path.abspath(raw)
+    if not os.path.isfile(abs_path):
+        return None
+    with open(abs_path, "rb") as fp:
+        payload = base64.b64encode(fp.read()).decode("utf-8")
+    mime = _image_mime_for_path(abs_path)
+    return "data:%s;base64,%s" % (mime, payload)
 
 
 def _build_openai_multimodal_content(
@@ -70,13 +98,13 @@ def _build_openai_multimodal_content(
 ) -> List[Dict[str, Any]]:
     parts = []
     for raw_path in image_paths:
-        path = str(raw_path).strip()
-        if not path:
+        image_url = _image_url_for_openai_compatible_api(raw_path)
+        if not image_url:
             continue
         parts.append(
             {
                 "type": "image_url",
-                "image_url": {"url": _file_url_for_path(path)},
+                "image_url": {"url": image_url},
             }
         )
     parts.append({"type": "text", "text": text})
@@ -805,17 +833,22 @@ class AgenticRetrieverAPI(ReasonerLLMAPI):
 class AgenticMultimodalRetrieverAPI(ReasonerVLMAPI):
     """带默认 system 提示词的检索规划/工具调用 LLM API。"""
 
+    _DEFAULT_SYSTEM_MESSAGE = {
+        "role": "system",
+        "content": (
+            "You are a cloud-based remote video retrieval assistant. "
+            "You cannot directly see the user's video content, and you should "
+            "plan your actions or invoke tools based on the user's question. "
+            "You can only see the content provided by tools, and then collect "
+            "evidence and answer in the right direction as far as possible "
+        ),
+    }
+
     def __init__(self, config: Config = None):
         super(AgenticMultimodalRetrieverAPI, self).__init__(config=config)
-        self.messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a cloud-based remote video retrieval assistant. "
-                    "You cannot directly see the user's video content, and you should "
-                    "plan your actions or invoke tools based on the user's question. "
-                    "You can only see the content provided by tools, and then collect "
-                    "evidence and answer in the right direction as far as possible "
-                ),
-            }
-        ]
+        self.messages = [dict(self._DEFAULT_SYSTEM_MESSAGE)]
+        self._initial_messages = copy.deepcopy(self.messages)
+
+    def reset_session(self) -> None:
+        """Clear multi-turn history; keep only the default system prompt."""
+        self.messages = copy.deepcopy(self._initial_messages)
