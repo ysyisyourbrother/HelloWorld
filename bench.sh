@@ -20,16 +20,16 @@
 #     --resume benchmark_results/symphony_v3/benchmark_Video-MME_short_YYYYMMDD_HHMMSS.json \
 #     --config configs/symconfig_v3.json > symphony_v3_short_resume.out 2>&1 & echo $! > symphony_v3_short_resume.pid
 
-# V5
-echo "V5"
-export PYTHONWARNINGS="ignore::FutureWarning"
-export PYTHONWARNINGS="ignore::UserWarning"
-source export_api_key.sh
+# # V5
+# echo "V5"
+# export PYTHONWARNINGS="ignore::FutureWarning"
+# export PYTHONWARNINGS="ignore::UserWarning"
+# source export_api_key.sh
 
-nohup python launch_benchmark_symphony_v5.py \
-    --subset short \
-    --system_mode 2 \
-    --config configs/symconfig_v5.json > symphony_v5_short.out 2>&1 & echo $! > symphony_v5_short.pid
+# nohup python launch_benchmark_symphony_v5.py \
+#     --subset short \
+#     --system_mode 2 \
+#     --config configs/symconfig_v5.json > symphony_v5_short.out 2>&1 & echo $! > symphony_v5_short.pid
 
 # nohup python launch_benchmark_symphony_v5.py \
 #     --subset medium \
@@ -40,3 +40,25 @@ nohup python launch_benchmark_symphony_v5.py \
 #     --subset long \
 #     --system_mode 2 \
 #     --config configs/symconfig_v5.json > symphony_v5_long.out 2>&1 & echo $! > symphony_v5_long.pid
+
+# V6
+echo "V6"
+export PYTHONWARNINGS="ignore::FutureWarning"
+export PYTHONWARNINGS="ignore::UserWarning"
+source export_api_key.sh
+
+nohup python launch_benchmark_symphony_v6.py \
+    --subset short \
+    --max-videos 3 \
+    --system_mode 24 \
+    --config configs/symconfig_v6.json > symphony_v6_short.out 2>&1 & echo $! > symphony_v6_short.pid
+
+# nohup python launch_benchmark_symphony_v6.py \
+#     --subset medium \
+#     --system_mode 24 \
+#     --config configs/symconfig_v6.json > symphony_v6_medium.out 2>&1 & echo $! > symphony_v6_medium.pid
+
+# nohup python launch_benchmark_symphony_v6.py \
+#     --subset long \
+#     --system_mode 24 \
+#     --config configs/symconfig_v6.json > symphony_v6_long.out 2>&1 & echo $! > symphony_v6_long.pid

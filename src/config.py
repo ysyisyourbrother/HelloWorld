@@ -33,7 +33,6 @@ def _default_bge_vl_model_path():
 #   x00xx：不做 plan 检索 | x01xx：仅复用已有 | x10xx/x11xx：生成新 plan
 #   bit4=16：VLM 问答
 # 五 bit 全开 = 1+2+4+8+16 = 31（0b11111）
-# 旧 4-bit 值（≤31 且 bit4=0 的旧布局）在 _migrate_system_mode_from_4bit 中自动映射。
 SYSTEM_MODE_FRAME_INJECT = 1
 SYSTEM_MODE_ASR_INJECT = 2
 SYSTEM_MODE_EXISTING_PLAN = 4
@@ -45,32 +44,10 @@ SYSTEM_MODE_PLAN_MASK = SYSTEM_MODE_EXISTING_PLAN | SYSTEM_MODE_NEW_PLAN
 # 兼容旧名（曾表示「帧+ASR 一起注入」）
 SYSTEM_MODE_REINJECT_MEMORY = SYSTEM_MODE_FRAME_INJECT
 
-# 旧 4-bit 常量名（仅 migrate 使用）
-_LEGACY_SYSTEM_MODE_NEW_PLAN = 4
-_LEGACY_SYSTEM_MODE_VLM_QA = 8
-
-
-def _migrate_system_mode_from_4bit(system_mode):
-    """将旧 4-bit system_mode 映射为 5-bit（inject 位不变，plan/VLM 位右移并补「复用 plan」）。"""
-    sm = int(system_mode)
-    if sm > 31:
-        return sm
-    inject = sm & SYSTEM_MODE_INJECT_MASK
-    old_new_plan = bool(sm & _LEGACY_SYSTEM_MODE_NEW_PLAN)
-    old_vlm = bool(sm & _LEGACY_SYSTEM_MODE_VLM_QA)
-    out = inject
-    if old_new_plan:
-        out |= SYSTEM_MODE_NEW_PLAN
-    elif old_vlm or sm not in (0, 1, 2, 3):
-        # 旧版「未开新 plan」时 v5 benchmark 默认复用已有 plan
-        out |= SYSTEM_MODE_EXISTING_PLAN
-    if old_vlm:
-        out |= SYSTEM_MODE_VLM_QA
-    return out
-
 
 def normalize_system_mode(system_mode):
-    return _migrate_system_mode_from_4bit(system_mode)
+    """将 system_mode 规范为 5 bit 十进制整型（配置文件与 CLI 语义一致）。"""
+    return int(system_mode)
 
 
 def system_mode_wants_frame_inject(system_mode):
