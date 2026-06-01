@@ -117,6 +117,23 @@ class SymphonySystemBenchV6(SymphonySystemBenchV5):
             }
 
         retrieve_pack = self._call_agentic_retrieve_and_answer(question, options)
+        if retrieve_pack and retrieve_pack.get("agent_failed"):
+            phase = str(retrieve_pack.get("failure_phase") or "unknown")
+            return {
+                "question": question,
+                "retrieve_time_sec": time.time() - t0,
+                "scores": [],
+                "retrieved_frames": [],
+                "retrieved_frames_metadata": [],
+                "rag_question": question,
+                "retrieve_item_type": "frame",
+                "select_frame_num": 0,
+                "select_clip_num": 0,
+                "reasoner_input_frame_count": 0,
+                "cloud_result": None,
+                "cloud_error": "Agent 任务失败: 云端输出解析失败 (%s)" % phase,
+                "total_time_sec": time.time() - t0,
+            }
         if retrieve_pack is None:
             sm = int(self.config.system_mode)
             if not system_mode_wants_any_plan_retrieval(sm):

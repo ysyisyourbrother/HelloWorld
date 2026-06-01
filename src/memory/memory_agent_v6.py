@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """MemoryAgentV6: disjoint faiss subsets, scoped tools, retrieval context formatting."""
 
+import ast
 import json
 import math
 import os
@@ -774,15 +775,140 @@ class MemoryAgentV6(MemoryManagerBase):
 
         return "\n".join(parts)
 
-    def _parse_plan_steps(self, raw_plan: str) -> List[str]:
-        text = str(raw_plan or "").strip()
+    @staticmethod
+    def _extract_step_list(raw: str) -> Tuple[List[str], bool]:
+        """从云端文本容错抽取 [Scope]/[Search] 步骤列表；(steps, ok)，ok 为 False 表示无法解析。"""
+        text = str(raw or "").strip()
         if not text:
+            return [], False
+
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].lstrip().startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+            if not text:
+                return [], False
+
+        collected: List[str] = []
+
+        def keep_plan_steps(items: Sequence[Any]) -> List[str]:
+            out: List[str] = []
+            for item in items:
+                step = str(item).strip()
+                if step.startswith("[Scope]") or step.startswith("[Search]"):
+                    out.append(step)
+            return out
+
+        def load_list_from_array_text(array_text: str) -> List[str]:
+            for loader in (json.loads, ast.literal_eval):
+                try:
+                    parsed = loader(array_text)
+                except (ValueError, SyntaxError, json.JSONDecodeError):
+                    continue
+                if isinstance(parsed, list):
+                    steps = keep_plan_steps(parsed)
+                    if steps:
+                        return steps
             return []
+
+        start = text.find("[")
+        if start >= 0:
+            depth = 0
+            for pos in range(start, len(text)):
+                ch = text[pos]
+                if ch == "[":
+                    depth += 1
+                elif ch == "]":
+                    depth -= 1
+                    if depth == 0:
+                        array_text = text[start : pos + 1]
+                        collected = load_list_from_array_text(array_text)
+                        if collected:
+                            return collected, True
+                        break
+
         if text.startswith("[") and text.endswith("]"):
-            parsed = json.loads(text)
-            if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
-        return [line.strip() for line in text.splitlines() if line.strip()]
+            collected = load_list_from_array_text(text)
+            if collected:
+                return collected, True
+
+        line_steps: List[str] = []
+        for line in text.splitlines():
+            step = line.strip()
+            if step.startswith("[Scope]") or step.startswith("[Search]"):
+                line_steps.append(step)
+        if line_steps:
+            return line_steps, True
+
+        quoted = LocalPlanParser.extract_quoted_strings(text)
+        plan_like = [
+            item
+            for item in quoted
+            if item.startswith("[Scope]") or item.startswith("[Search]")
+        ]
+        if plan_like:
+            return plan_like, True
+
+        return [], False
+
+    def _agent_failure_return(
+        self,
+        user_query: str,
+        options: Optional[Sequence[str]],
+        duration: float,
+        failure_phase: str,
+        failure_raw: str,
+        run_extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        option_list = None
+        if options:
+            option_list = [str(item).strip() for item in options if str(item).strip()]
+            if not option_list:
+                option_list = None
+
+        token_usage = self.agentic_retriever.get_token_usage()
+        run_record: Dict[str, Any] = {
+            "ts": time.time(),
+            "schema_version": "v6",
+            "agent_failed": True,
+            "failure_phase": str(failure_phase),
+            "failure_raw": str(failure_raw or ""),
+            "question": user_query,
+            "options": option_list,
+            "video_duration_sec": duration,
+            "prompt_tokens": token_usage["prompt_tokens"],
+            "completion_tokens": token_usage["completion_tokens"],
+            "final_answer": "",
+        }
+        if run_extra:
+            run_record.update(run_extra)
+
+        plan_json_path = self._resolve_plan_json_path()
+        if plan_json_path:
+            self._append_plan_trace_json(plan_json_path, run_record)
+            self.logger.warning(
+                "MemoryAgentV6 Agent 任务失败 phase=%s plan=%s",
+                failure_phase,
+                plan_json_path,
+            )
+
+        return {
+            "agent_failed": True,
+            "failure_phase": failure_phase,
+            "final_answer": "",
+            "frame_results": [],
+            "subtitle_results": [],
+            "retrieval_context": "",
+            "tool_traces": [],
+            "plan_steps": [],
+            "answer_loop": [],
+            "replan_budget_log": [],
+            "prompt_tokens": token_usage["prompt_tokens"],
+            "completion_tokens": token_usage["completion_tokens"],
+        }
 
     def _resolve_plan_json_path(self) -> Optional[str]:
         map_path = getattr(self, "databasemap_file_path", None) or ""
@@ -881,10 +1007,11 @@ class MemoryAgentV6(MemoryManagerBase):
         reasoning = raw[:tag_pos].strip() if tag_pos >= 0 else raw.strip()
         answer_letter = ""
         replan_steps: List[str] = []
+        replan_parse_ok = True
         if outcome == "answer":
             answer_letter = self._extract_answer_text(raw)
         elif outcome == "replan":
-            replan_steps = self._parse_replan_steps(raw)
+            replan_steps, replan_parse_ok = self._parse_replan_steps(raw)
 
         return {
             "raw": raw,
@@ -892,6 +1019,7 @@ class MemoryAgentV6(MemoryManagerBase):
             "outcome": outcome,
             "answer_letter": answer_letter,
             "replan_steps": replan_steps,
+            "replan_parse_ok": replan_parse_ok,
         }
 
     def _extract_tool_selection(
@@ -1066,26 +1194,14 @@ class MemoryAgentV6(MemoryManagerBase):
         first_line = match.group(1).strip().splitlines()[0].strip()
         return first_line
 
-    def _parse_replan_steps(self, answer_or_replan: str) -> List[str]:
+    def _parse_replan_steps(self, answer_or_replan: str) -> Tuple[List[str], bool]:
         text = str(answer_or_replan or "")
-        idx = text.upper().find("[REPLAN]")
-        if idx < 0:
-            return []
-        tail = text[idx + len("[Replan]") :].strip()
-        if tail.startswith("["):
-            parsed = json.loads(tail)
-            if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
-        steps = self._parse_plan_steps(tail)
-        if steps:
-            return steps
-        quoted = LocalPlanParser.extract_quoted_strings(tail)
-        plan_like = [
-            item
-            for item in quoted
-            if item.startswith("[Scope]") or item.startswith("[Search]")
-        ]
-        return plan_like
+        replan_match = re.search(r"\[Replan\]", text, flags=re.IGNORECASE)
+        if replan_match is None:
+            return [], False
+        tail = text[replan_match.end() :].strip()
+        self.logger.debug("云端大模型返回的重检索计划：%s", tail)
+        return self._extract_step_list(tail)
 
     def _call_tool_by_name(
         self,
@@ -1475,8 +1591,25 @@ class MemoryAgentV6(MemoryManagerBase):
 
         self.agentic_retriever.append_user(plan_prompt)
         plan_text = self.agentic_retriever.generate(reset=False)
-        steps = self._parse_plan_steps(plan_text)
-        if not steps or not str(steps[0]).startswith("[Scope]"):
+        self.logger.debug(f"云端大模型返回的检索计划：{plan_text}")
+        steps, plan_parse_ok = self._extract_step_list(plan_text)
+        if not plan_parse_ok:
+            return self._agent_failure_return(
+                user_query,
+                options,
+                duration,
+                "plan",
+                plan_text,
+                run_extra={
+                    "planning": {
+                        "raw": plan_text,
+                        "steps": [],
+                        "prompt_variant": plan_variant,
+                        "parse_ok": False,
+                    },
+                },
+            )
+        if not str(steps[0]).startswith("[Scope]"):
             steps = ["[Scope] Pay attention to the entire video"] + steps
         self._log_plan_received(steps)
 
@@ -1589,6 +1722,30 @@ class MemoryAgentV6(MemoryManagerBase):
                 break
 
             if parsed_response["outcome"] == "replan":
+                if not parsed_response.get("replan_parse_ok"):
+                    answer_loop_records.append(round_record)
+                    return self._agent_failure_return(
+                        user_query,
+                        options,
+                        duration,
+                        "replan",
+                        answer_or_replan,
+                        run_extra={
+                            "planning": {
+                                "raw": plan_text,
+                                "steps": steps,
+                                "prompt_variant": plan_variant,
+                                "parse_ok": True,
+                            },
+                            "replan_budget": {
+                                "initial": initial_replan_budget,
+                                "final": int(self.replan_budget),
+                                "log": replan_budget_log,
+                            },
+                            "tool_calls": tool_traces,
+                            "answer_loop": answer_loop_records,
+                        },
+                    )
                 replan_steps = parsed_response["replan_steps"]
                 new_frame_results = []
                 new_subtitle_results = []
@@ -1689,12 +1846,16 @@ class MemoryAgentV6(MemoryManagerBase):
             if not option_list:
                 option_list = None
 
+        token_usage = self.agentic_retriever.get_token_usage()
+
         run_record: Dict[str, Any] = {
             "ts": time.time(),
             "schema_version": "v6",
             "question": user_query,
             "options": option_list,
             "video_duration_sec": duration,
+            "prompt_tokens": token_usage["prompt_tokens"],
+            "completion_tokens": token_usage["completion_tokens"],
             "flags": {
                 "is_long_video": is_long_video,
                 "has_excessive_subtitle": has_excessive_subtitle,
@@ -1731,6 +1892,8 @@ class MemoryAgentV6(MemoryManagerBase):
             "plan_steps": steps,
             "answer_loop": answer_loop_records,
             "replan_budget_log": replan_budget_log,
+            "prompt_tokens": token_usage["prompt_tokens"],
+            "completion_tokens": token_usage["completion_tokens"],
         }
 
     def agentic_retrieve_and_answer_pipeline_with_existing_plan(
@@ -1937,6 +2100,26 @@ class MemoryAgentV6(MemoryManagerBase):
                 break
 
             if parsed_response["outcome"] == "replan":
+                if not parsed_response.get("replan_parse_ok"):
+                    token_usage = self.agentic_retriever.get_token_usage()
+                    return {
+                        "agent_failed": True,
+                        "failure_phase": "replan",
+                        "final_answer": "",
+                        "frame_results": frame_results,
+                        "subtitle_results": subtitle_results,
+                        "retrieval_context": self._format_retrieval_context(
+                            new_frame_results, new_subtitle_results
+                        ),
+                        "tool_traces": [],
+                        "plan_steps": plan_steps,
+                        "answer_loop": answer_loop_records,
+                        "replan_budget_log": replan_budget_log,
+                        "existing_plan_json_path": path,
+                        "failure_raw": answer_or_replan,
+                        "prompt_tokens": token_usage["prompt_tokens"],
+                        "completion_tokens": token_usage["completion_tokens"],
+                    }
                 replan_steps = parsed_response["replan_steps"]
                 new_frame_results = []
                 new_subtitle_results = []
@@ -2019,6 +2202,8 @@ class MemoryAgentV6(MemoryManagerBase):
             new_frame_results, new_subtitle_results
         )
 
+        token_usage = self.agentic_retriever.get_token_usage()
+
         return {
             "final_answer": final_answer,
             "frame_results": frame_results,
@@ -2029,4 +2214,6 @@ class MemoryAgentV6(MemoryManagerBase):
             "answer_loop": answer_loop_records,
             "replan_budget_log": replan_budget_log,
             "existing_plan_json_path": path,
+            "prompt_tokens": token_usage["prompt_tokens"],
+            "completion_tokens": token_usage["completion_tokens"],
         }
