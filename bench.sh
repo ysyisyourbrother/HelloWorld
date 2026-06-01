@@ -49,7 +49,8 @@ source export_api_key.sh
 
 nohup python launch_benchmark_symphony_v6.py \
     --subset short \
-    --max-videos 3 \
+    --max-videos 2 \
+    --resume benchmark_results/symphony_v6/benchmark_Video-MME_short_20260601_201208.json \
     --system_mode 24 \
     --config configs/symconfig_v6.json > symphony_v6_short.out 2>&1 & echo $! > symphony_v6_short.pid
 

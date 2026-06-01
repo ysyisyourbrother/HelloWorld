@@ -551,10 +551,29 @@ class BaseChatSession(object):
         self.messages = []  # type: List[Dict[str, Any]]
         self._usage_prompt_tokens = 0
         self._usage_completion_tokens = 0
+        self._last_thinking = ""
 
     def reset_token_usage(self) -> None:
         self._usage_prompt_tokens = 0
         self._usage_completion_tokens = 0
+        self._last_thinking = ""
+
+    def get_last_thinking(self) -> str:
+        return str(self._last_thinking or "")
+
+    @staticmethod
+    def _thinking_from_completion_message(message: Any) -> str:
+        reasoning_content = getattr(message, "reasoning_content", None)
+        if reasoning_content is None and hasattr(message, "model_dump"):
+            dumped = message.model_dump()
+            if isinstance(dumped, dict):
+                reasoning_content = dumped.get("reasoning_content")
+        if not reasoning_content:
+            return ""
+        return str(reasoning_content).strip()
+
+    def _set_last_thinking_from_message(self, message: Any) -> None:
+        self._last_thinking = self._thinking_from_completion_message(message)
 
     def get_token_usage(self) -> Dict[str, int]:
         return {
@@ -659,7 +678,9 @@ class ReasonerLLMAPI(BaseChatSession):
             extra_body={"enable_thinking": enable_thinking},
         )
         self._accumulate_usage_from_response(resp)
-        content = (resp.choices[0].message.content or "").strip()
+        completion_message = resp.choices[0].message
+        self._set_last_thinking_from_message(completion_message)
+        content = (completion_message.content or "").strip()
         self.messages.append({"role": "assistant", "content": content})
         return content
 
@@ -682,9 +703,9 @@ class ReasonerLLMAPI(BaseChatSession):
             extra_body={"enable_thinking": enable_thinking},
         )
         self._accumulate_usage_from_response(resp)
-        assistant_message = self._assistant_message_from_completion(
-            resp.choices[0].message
-        )
+        completion_message = resp.choices[0].message
+        self._set_last_thinking_from_message(completion_message)
+        assistant_message = self._assistant_message_from_completion(completion_message)
         self.messages.append(assistant_message)
         return assistant_message
 
@@ -763,7 +784,9 @@ class ReasonerVLMAPI(BaseChatSession):
             extra_body={"enable_thinking": enable_thinking},
         )
         self._accumulate_usage_from_response(resp)
-        content = (resp.choices[0].message.content or "").strip()
+        completion_message = resp.choices[0].message
+        self._set_last_thinking_from_message(completion_message)
+        content = (completion_message.content or "").strip()
         self.messages.append({"role": "assistant", "content": content})
         return content
 
@@ -784,9 +807,9 @@ class ReasonerVLMAPI(BaseChatSession):
             extra_body={"enable_thinking": enable_thinking},
         )
         self._accumulate_usage_from_response(resp)
-        assistant_message = self._assistant_message_from_completion(
-            resp.choices[0].message
-        )
+        completion_message = resp.choices[0].message
+        self._set_last_thinking_from_message(completion_message)
+        assistant_message = self._assistant_message_from_completion(completion_message)
         self.messages.append(assistant_message)
         return assistant_message
 

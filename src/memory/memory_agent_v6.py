@@ -1457,6 +1457,7 @@ class MemoryAgentV6(MemoryManagerBase):
         parse_source = "none"
         step_prompt_tokens = 0
         step_completion_tokens = 0
+        step_thinking = ""
 
         if is_replan or scope_index == 0:
             if is_replan:
@@ -1481,6 +1482,7 @@ class MemoryAgentV6(MemoryManagerBase):
             tool_name, arguments, assistant_msg = self._resolve_tool_via_cloud(
                 prompt_tpl, tools, user_query, duration, step_text
             )
+            step_thinking = self.agentic_retriever.get_last_thinking()
             step_prompt_tokens, step_completion_tokens = self._take_step_tokens()
             if tool_name:
                 parse_source = "cloud"
@@ -1502,6 +1504,7 @@ class MemoryAgentV6(MemoryManagerBase):
             "arguments": dict(arguments) if arguments else {},
             "result": self._serialize_tool_result_for_plan(out if tool_name else None),
             "parse_source": parse_source,
+            "thinking": step_thinking,
         }
         self._log_scope_step(
             is_replan,
@@ -1528,6 +1531,7 @@ class MemoryAgentV6(MemoryManagerBase):
         parse_source = "none"
         step_prompt_tokens = 0
         step_completion_tokens = 0
+        step_thinking = ""
 
         if is_replan or search_index == 0:
             if is_replan:
@@ -1552,6 +1556,7 @@ class MemoryAgentV6(MemoryManagerBase):
             tool_name, arguments, assistant_msg = self._resolve_tool_via_cloud(
                 prompt_tpl, tools, user_query, duration, step_text
             )
+            step_thinking = self.agentic_retriever.get_last_thinking()
             step_prompt_tokens, step_completion_tokens = self._take_step_tokens()
             if tool_name:
                 parse_source = "cloud"
@@ -1574,6 +1579,7 @@ class MemoryAgentV6(MemoryManagerBase):
             "arguments": dict(arguments) if arguments else {},
             "result": self._serialize_tool_result_for_plan(out if tool_name else None),
             "parse_source": parse_source,
+            "thinking": step_thinking,
         }
         self._log_search_step(
             is_replan,
@@ -1693,6 +1699,7 @@ class MemoryAgentV6(MemoryManagerBase):
 
         self.agentic_retriever.append_user(plan_prompt)
         plan_text = self.agentic_retriever.generate(reset=False)
+        plan_thinking = self.agentic_retriever.get_last_thinking()
         plan_prompt_tokens, plan_completion_tokens = self._take_step_tokens()
         self.logger.debug(f"云端大模型返回的检索计划：{plan_text}")
         steps, plan_parse_ok = self._extract_step_list(plan_text)
@@ -1708,6 +1715,8 @@ class MemoryAgentV6(MemoryManagerBase):
                         "steps": [],
                         "prompt_variant": plan_variant,
                         "parse_ok": False,
+                        "thinking": plan_thinking,
+                        "raw": plan_text,
                     },
                 },
             )
@@ -1786,6 +1795,7 @@ class MemoryAgentV6(MemoryManagerBase):
             image_paths = self._frame_results_to_image_paths(new_frame_results)
             self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
             answer_or_replan = self.agentic_retriever.generate(reset=False)
+            answer_thinking = self.agentic_retriever.get_last_thinking()
             answer_prompt_tokens, answer_completion_tokens = self._take_step_tokens()
             parsed_response = self._split_answer_or_replan_response(answer_or_replan)
             self._log_model_decision(
@@ -1804,6 +1814,7 @@ class MemoryAgentV6(MemoryManagerBase):
                 "model": {
                     "raw": parsed_response["raw"],
                     "reasoning": parsed_response["reasoning"],
+                    "thinking": answer_thinking,
                     "outcome": parsed_response["outcome"],
                     "answer_letter": parsed_response["answer_letter"],
                     "replan_steps": parsed_response["replan_steps"],
@@ -1840,6 +1851,8 @@ class MemoryAgentV6(MemoryManagerBase):
                                 "steps": steps,
                                 "prompt_variant": plan_variant,
                                 "parse_ok": True,
+                                "thinking": plan_thinking,
+                                "raw": plan_text,
                             },
                             "replan_budget": {
                                 "initial": initial_replan_budget,
@@ -1911,6 +1924,7 @@ class MemoryAgentV6(MemoryManagerBase):
             note="before answer_now" if not final_answer else "answered in loop",
         )
 
+        answer_now_record = None
         if not final_answer:
             retrieval_context = self._format_retrieval_context(
                 new_frame_results, new_subtitle_results
@@ -1924,6 +1938,7 @@ class MemoryAgentV6(MemoryManagerBase):
             image_paths = self._frame_results_to_image_paths(new_frame_results)
             self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
             answer_now_text = self.agentic_retriever.generate(reset=False)
+            answer_now_thinking = self.agentic_retriever.get_last_thinking()
             answer_now_prompt_tokens, answer_now_completion_tokens = self._take_step_tokens()
             parsed_final = self._split_answer_or_replan_response(answer_now_text)
             self._log_model_decision(
@@ -1936,6 +1951,16 @@ class MemoryAgentV6(MemoryManagerBase):
             final_answer = parsed_final["answer_letter"] or self._extract_answer_text(
                 answer_now_text
             )
+            answer_now_record = {
+                "model": {
+                    "raw": parsed_final["raw"],
+                    "reasoning": parsed_final["reasoning"],
+                    "thinking": answer_now_thinking,
+                    "outcome": parsed_final["outcome"],
+                    "answer_letter": parsed_final["answer_letter"],
+                    "replan_steps": parsed_final["replan_steps"],
+                },
+            }
 
         final_retrieval_context = self._format_retrieval_context(
             new_frame_results, new_subtitle_results
@@ -1968,12 +1993,16 @@ class MemoryAgentV6(MemoryManagerBase):
             "planning": {
                 "steps": steps,
                 "prompt_variant": plan_variant,
+                "thinking": plan_thinking,
+                "raw": plan_text,
             },
             "tool_calls": tool_traces,
             "answer_loop": answer_loop_records,
             "final_answer": final_answer,
             "retrieval_context": final_retrieval_context,
         }
+        if answer_now_record is not None:
+            run_record["answer_now"] = answer_now_record
 
         plan_json_path = self._resolve_plan_json_path()
         if plan_json_path:
