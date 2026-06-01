@@ -549,6 +549,29 @@ class BaseChatSession(object):
 
     def __init__(self):
         self.messages = []  # type: List[Dict[str, Any]]
+        self._usage_prompt_tokens = 0
+        self._usage_completion_tokens = 0
+
+    def reset_token_usage(self) -> None:
+        self._usage_prompt_tokens = 0
+        self._usage_completion_tokens = 0
+
+    def get_token_usage(self) -> Dict[str, int]:
+        return {
+            "prompt_tokens": int(self._usage_prompt_tokens),
+            "completion_tokens": int(self._usage_completion_tokens),
+        }
+
+    def _accumulate_usage_from_response(self, resp: Any) -> None:
+        usage = getattr(resp, "usage", None)
+        if usage is None:
+            return
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        if prompt_tokens is not None:
+            self._usage_prompt_tokens += int(prompt_tokens)
+        if completion_tokens is not None:
+            self._usage_completion_tokens += int(completion_tokens)
 
     def append_assistant(self, text: str) -> None:
         self.messages.append({"role": "assistant", "content": text})
@@ -631,6 +654,7 @@ class ReasonerLLMAPI(BaseChatSession):
             model=self._model,
             messages=self.messages,
         )
+        self._accumulate_usage_from_response(resp)
         content = (resp.choices[0].message.content or "").strip()
         self.messages.append({"role": "assistant", "content": content})
         return content
@@ -647,6 +671,7 @@ class ReasonerLLMAPI(BaseChatSession):
             messages=self.messages,
             tools=tools,
         )
+        self._accumulate_usage_from_response(resp)
         assistant_message = self._assistant_message_from_completion(
             resp.choices[0].message
         )
@@ -723,6 +748,7 @@ class ReasonerVLMAPI(BaseChatSession):
             model=self._model,
             messages=self._messages_for_api(),
         )
+        self._accumulate_usage_from_response(resp)
         content = (resp.choices[0].message.content or "").strip()
         self.messages.append({"role": "assistant", "content": content})
         return content
@@ -737,6 +763,7 @@ class ReasonerVLMAPI(BaseChatSession):
             messages=self._messages_for_api(),
             tools=tools,
         )
+        self._accumulate_usage_from_response(resp)
         assistant_message = self._assistant_message_from_completion(
             resp.choices[0].message
         )
@@ -852,3 +879,4 @@ class AgenticMultimodalRetrieverAPI(ReasonerVLMAPI):
     def reset_session(self) -> None:
         """Clear multi-turn history; keep only the default system prompt."""
         self.messages = copy.deepcopy(self._initial_messages)
+        self.reset_token_usage()
