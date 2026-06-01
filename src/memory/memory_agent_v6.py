@@ -1059,7 +1059,10 @@ class MemoryAgentV6(MemoryManagerBase):
         arg_text = str(func.get("arguments") or "").strip()
         if not tool_name or not arg_text:
             return None, {}
-        arguments = json.loads(arg_text)
+        try:
+            arguments = json.loads(arg_text)
+        except json.JSONDecodeError:
+            return None, {}
         if not isinstance(arguments, dict):
             return None, {}
         return tool_name, arguments
@@ -1443,6 +1446,8 @@ class MemoryAgentV6(MemoryManagerBase):
             )
             if tool_name:
                 parse_source = "cloud"
+            elif assistant_msg.get("tool_calls"):
+                parse_source = "cloud_failed"
 
         out = {
             "faiss_subset": faiss_subset,
@@ -1503,6 +1508,8 @@ class MemoryAgentV6(MemoryManagerBase):
             )
             if tool_name:
                 parse_source = "cloud"
+            elif assistant_msg.get("tool_calls"):
+                parse_source = "cloud_failed"
 
         out = {
             "frame_results": [],
