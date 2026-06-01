@@ -1316,6 +1316,24 @@ class MemoryAgentV6(MemoryManagerBase):
         tool_name, arguments = self._extract_tool_selection(msg)
         return tool_name, arguments, msg
 
+    def _clear_retrieve_save_dir(self) -> None:
+        """清空 logs/memory/retrieve 目录下的检索帧图片（pipeline 开始前调用）。"""
+        d = self.memory_retrieve_save_dir
+        if not os.path.isdir(d):
+            return
+        for name in os.listdir(d):
+            lower_name = name.lower()
+            if not lower_name.endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp")):
+                continue
+            file_path = os.path.join(d, name)
+            if os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                except OSError as e:
+                    self.logger.warning(
+                        "删除旧检索帧失败: %s, err=%s", file_path, e
+                    )
+
     def _frame_results_to_image_paths(
         self, frame_results: Sequence[Dict[str, Any]]
     ) -> List[str]:
@@ -1549,6 +1567,7 @@ class MemoryAgentV6(MemoryManagerBase):
     def agentic_retrieve_and_answer_pipeline( # _with_existing_plan
         self, user_query: str, options: Optional[Sequence[str]] = None
     ) -> Dict[str, Any]:
+        self._clear_retrieve_save_dir()
         self.agentic_retriever.reset_session()
         with self.databasemap.acquire() as videos:
             if videos:
@@ -1905,6 +1924,7 @@ class MemoryAgentV6(MemoryManagerBase):
     ) -> Dict[str, Any]:
         """Replay tool_calls from an existing plan JSON, then run answer-or-replan like
         agentic_retrieve_and_answer_pipeline without cloud planning or plan trace writes."""
+        self._clear_retrieve_save_dir()
         self.agentic_retriever.reset_session()
         path = str(existing_plan_json_path or "").strip()
         if not path:

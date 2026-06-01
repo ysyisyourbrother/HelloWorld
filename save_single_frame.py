@@ -6,9 +6,10 @@ import glob
 
 if __name__ == "__main__":
     # video_path = "/mnt/share/cache/datasets/Video-MME/data/_cZXyj6rYVg.mp4"
-    video_path = "/mnt/share/cache/datasets/Video-MME/data/0ay2Qy3wBe8.mp4"
+    # video_path = "/mnt/share/cache/datasets/Video-MME/data/0ay2Qy3wBe8.mp4"
+    video_path = "/mnt/share/cache/datasets/Video-MME/data/fFjv93ACGo8.mp4"
     # frame_id = list(range(500, 616, 5))
-    frame_id = [375,312,298,255,437,]
+    frame_id = [1088,1121,1453,729,1451,]
 
 
     # 删除当前目录下所有rgb_frame_*.png文件
