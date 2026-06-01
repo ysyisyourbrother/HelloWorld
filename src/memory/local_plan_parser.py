@@ -131,7 +131,7 @@ class LocalPlanParser:
     def try_parse_scope2_locally(step_text: str) -> ToolSelection:
         quoted = LocalPlanParser.extract_quoted_strings(step_text)
         keywords = LocalPlanParser._clamp_keywords(quoted, limit=4)
-        if len(keywords) < 2:
+        if len(keywords) < 1:
             return LocalPlanParser._empty()
         return ("_get_subset_by_keyword", {"keywords": keywords})
 
