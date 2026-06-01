@@ -643,16 +643,20 @@ class ReasonerLLMAPI(BaseChatSession):
             base_url=config.api_llm_base_url,
         )
         self._model = config.api_llm_model_name
+        self._enable_thinking = config.api_enable_thinking
 
     def append_user(self, text: str) -> None:
         self.messages.append({"role": "user", "content": text})
 
-    def generate(self, reset: bool = True) -> str:
+    def generate(self, reset: bool = True, enable_thinking: Optional[bool] = None) -> str:
         """追加一轮 assistant 回复到 ``messages`` 并返回该回复文本。"""
         self._apply_reset_if_needed(reset)
+        if enable_thinking is None:
+            enable_thinking = self._enable_thinking
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=self.messages,
+            extra_body={"enable_thinking": enable_thinking},
         )
         self._accumulate_usage_from_response(resp)
         content = (resp.choices[0].message.content or "").strip()
@@ -660,16 +664,22 @@ class ReasonerLLMAPI(BaseChatSession):
         return content
 
     def generate_with_tools(
-        self, tools: List[Dict[str, Any]], reset: bool = True
+        self,
+        tools: List[Dict[str, Any]],
+        reset: bool = True,
+        enable_thinking: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         追加一轮支持工具调用的 assistant 消息，并返回标准化后的消息字典。
         """
         self._apply_reset_if_needed(reset)
+        if enable_thinking is None:
+            enable_thinking = self._enable_thinking
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=self.messages,
             tools=tools,
+            extra_body={"enable_thinking": enable_thinking},
         )
         self._accumulate_usage_from_response(resp)
         assistant_message = self._assistant_message_from_completion(
@@ -701,6 +711,7 @@ class ReasonerVLMAPI(BaseChatSession):
         )
         self._model = config.api_vlm_model_name
         self._max_media = config.reasoner_local_max_img_num
+        self._enable_thinking = bool(config.api_enable_thinking)
         self.keep_images_in_history = bool(keep_images_in_history)
         self._dialog_messages = {}  # type: Dict[int, List[Dict[str, Any]]]
 
@@ -742,11 +753,14 @@ class ReasonerVLMAPI(BaseChatSession):
             api_messages.append(row)
         return api_messages
 
-    def generate(self, reset: bool = True) -> str:
+    def generate(self, reset: bool = True, enable_thinking: Optional[bool] = None) -> str:
         self._apply_reset_if_needed(reset)
+        if enable_thinking is None:
+            enable_thinking = self._enable_thinking
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=self._messages_for_api(),
+            extra_body={"enable_thinking": enable_thinking},
         )
         self._accumulate_usage_from_response(resp)
         content = (resp.choices[0].message.content or "").strip()
@@ -754,14 +768,20 @@ class ReasonerVLMAPI(BaseChatSession):
         return content
 
     def generate_with_tools(
-        self, tools: List[Dict[str, Any]], reset: bool = True
+        self,
+        tools: List[Dict[str, Any]],
+        reset: bool = True,
+        enable_thinking: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """追加一轮支持工具调用的 assistant 消息，并返回标准化后的消息字典。"""
         self._apply_reset_if_needed(reset)
+        if enable_thinking is None:
+            enable_thinking = self._enable_thinking
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=self._messages_for_api(),
             tools=tools,
+            extra_body={"enable_thinking": enable_thinking},
         )
         self._accumulate_usage_from_response(resp)
         assistant_message = self._assistant_message_from_completion(

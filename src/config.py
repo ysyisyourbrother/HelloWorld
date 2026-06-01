@@ -361,6 +361,7 @@ class Config:
         self.api_llm_model_name = api_config.get("llm_model_name", "deepseek-v4-flash") # deepseek-v4-flash, deepseek-v4-pro
         self.api_llm_key = api_config.get("llm_key", "")
         self.api_llm_base_url = api_config.get("llm_base_url", "https://api.deepseek.com")
+        self.api_enable_thinking = bool(api_config.get("enable_thinking", True))
 
     def reload(self):
         """重新加载配置"""
