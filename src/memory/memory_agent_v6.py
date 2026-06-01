@@ -871,8 +871,6 @@ class MemoryAgentV6(MemoryManagerBase):
 
         token_usage = self.agentic_retriever.get_token_usage()
         run_record: Dict[str, Any] = {
-            "ts": time.time(),
-            "schema_version": "v6",
             "agent_failed": True,
             "failure_phase": str(failure_phase),
             "failure_raw": str(failure_raw or ""),
@@ -921,6 +919,35 @@ class MemoryAgentV6(MemoryManagerBase):
         basename = os.path.basename(map_path)
         return os.path.join(plan_dir, basename)
 
+    def _plan_frame_ids_from_results(
+        self, frame_results: Sequence[Any]
+    ) -> List[int]:
+        ids: List[int] = []
+        for row in frame_results:
+            if isinstance(row, dict):
+                frame_id = row.get("frame_id")
+                if frame_id is not None:
+                    ids.append(int(frame_id))
+            elif isinstance(row, int):
+                ids.append(int(row))
+        return ids
+
+    def _plan_subtitle_texts_from_results(
+        self, subtitle_results: Sequence[Any]
+    ) -> List[str]:
+        texts: List[str] = []
+        for row in subtitle_results:
+            if isinstance(row, str):
+                text = row.strip()
+                if text:
+                    texts.append(text)
+                continue
+            if isinstance(row, dict):
+                text = str(row.get("text") or "").strip()
+                if text:
+                    texts.append(text)
+        return texts
+
     def _serialize_tool_result_for_plan(
         self, result: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
@@ -928,22 +955,20 @@ class MemoryAgentV6(MemoryManagerBase):
             return None
         out: Dict[str, Any] = {}
         for key, val in result.items():
-            if key == "faiss_subset" and isinstance(val, FaissSubset):
-                out[key] = {
-                    "segments": val.segments,
-                    "total_count": val.total_count(),
-                }
+            if key == "faiss_subset":
+                if isinstance(val, FaissSubset):
+                    out[key] = {
+                        "segments": val.segments,
+                        "total_count": val.total_count(),
+                    }
+                elif isinstance(val, dict):
+                    out[key] = val
                 continue
             if key == "frame_results" and isinstance(val, list):
-                stripped: List[Any] = []
-                for row in val:
-                    if isinstance(row, dict) and "i_frames" in row:
-                        stripped.append(
-                            {k: v for k, v in row.items() if k != "i_frames"}
-                        )
-                    else:
-                        stripped.append(row)
-                out[key] = stripped
+                out[key] = self._plan_frame_ids_from_results(val)
+                continue
+            if key == "subtitle_results" and isinstance(val, list):
+                out[key] = self._plan_subtitle_texts_from_results(val)
                 continue
             out[key] = val
         return out
@@ -962,7 +987,7 @@ class MemoryAgentV6(MemoryManagerBase):
                 data = json.loads(text)
         if "runs" not in data or not isinstance(data["runs"], list):
             data["runs"] = []
-        data["databasemap_file_path"] = self.databasemap_file_path
+        data.pop("databasemap_file_path", None)
         data["runs"].append(run_record)
         with open(plan_json_path, "w", encoding="utf-8") as fp:
             json.dump(data, fp, ensure_ascii=False, indent=2)
@@ -1392,7 +1417,6 @@ class MemoryAgentV6(MemoryManagerBase):
         arguments: Dict[str, Any] = {}
         assistant_msg: Dict[str, Any] = {}
         parse_source = "none"
-        execution_pass = "replan" if is_replan else "initial"
 
         if is_replan or scope_index == 0:
             if is_replan:
@@ -1434,10 +1458,7 @@ class MemoryAgentV6(MemoryManagerBase):
             "tool_name": tool_name,
             "arguments": dict(arguments) if arguments else {},
             "result": self._serialize_tool_result_for_plan(out if tool_name else None),
-            "assistant_content": (assistant_msg.get("content") or "").strip(),
             "parse_source": parse_source,
-            "execution_pass": execution_pass,
-            "scope_index": int(scope_index),
         }
         self._log_scope_step(is_replan, tool_name, dict(arguments) if arguments else {})
         return out.get("faiss_subset"), trace
@@ -1456,7 +1477,6 @@ class MemoryAgentV6(MemoryManagerBase):
         arguments: Dict[str, Any] = {}
         assistant_msg: Dict[str, Any] = {}
         parse_source = "none"
-        execution_pass = "replan" if is_replan else "initial"
 
         if is_replan or search_index == 0:
             if is_replan:
@@ -1499,10 +1519,7 @@ class MemoryAgentV6(MemoryManagerBase):
             "tool_name": tool_name,
             "arguments": dict(arguments) if arguments else {},
             "result": self._serialize_tool_result_for_plan(out if tool_name else None),
-            "assistant_content": (assistant_msg.get("content") or "").strip(),
             "parse_source": parse_source,
-            "execution_pass": execution_pass,
-            "search_index": int(search_index),
         }
         self._log_search_step(is_replan, tool_name, frame_part, subtitle_part)
         return (
@@ -1621,7 +1638,6 @@ class MemoryAgentV6(MemoryManagerBase):
                 plan_text,
                 run_extra={
                     "planning": {
-                        "raw": plan_text,
                         "steps": [],
                         "prompt_variant": plan_variant,
                         "parse_ok": False,
@@ -1668,10 +1684,7 @@ class MemoryAgentV6(MemoryManagerBase):
                             "subtitle_results": all_subs,
                         }
                     ),
-                    "assistant_content": "",
                     "parse_source": "builtin",
-                    "execution_pass": "initial",
-                    "search_index": -1,
                 }
             )
 
@@ -1679,7 +1692,6 @@ class MemoryAgentV6(MemoryManagerBase):
         new_subtitle_results = list(subtitle_results)
         final_answer = ""
         answer_loop_records: List[Dict[str, Any]] = []
-        answer_final_record: Optional[Dict[str, Any]] = None
         loop_round = 0
 
         while self.replan_budget > 1:
@@ -1751,7 +1763,6 @@ class MemoryAgentV6(MemoryManagerBase):
                         answer_or_replan,
                         run_extra={
                             "planning": {
-                                "raw": plan_text,
                                 "steps": steps,
                                 "prompt_variant": plan_variant,
                                 "parse_ok": True,
@@ -1846,14 +1857,6 @@ class MemoryAgentV6(MemoryManagerBase):
             final_answer = parsed_final["answer_letter"] or self._extract_answer_text(
                 answer_now_text
             )
-            answer_final_record = {
-                "raw": parsed_final["raw"],
-                "reasoning": parsed_final["reasoning"],
-                "outcome": parsed_final["outcome"],
-                "answer_letter": final_answer,
-                "frame_image_count": len(image_paths),
-                "retrieval_context": retrieval_context,
-            }
 
         final_retrieval_context = self._format_retrieval_context(
             new_frame_results, new_subtitle_results
@@ -1868,8 +1871,6 @@ class MemoryAgentV6(MemoryManagerBase):
         token_usage = self.agentic_retriever.get_token_usage()
 
         run_record: Dict[str, Any] = {
-            "ts": time.time(),
-            "schema_version": "v6",
             "question": user_query,
             "options": option_list,
             "video_duration_sec": duration,
@@ -1886,13 +1887,11 @@ class MemoryAgentV6(MemoryManagerBase):
                 "log": replan_budget_log,
             },
             "planning": {
-                "raw": plan_text,
                 "steps": steps,
                 "prompt_variant": plan_variant,
             },
             "tool_calls": tool_traces,
             "answer_loop": answer_loop_records,
-            "answer_final": answer_final_record,
             "final_answer": final_answer,
             "retrieval_context": final_retrieval_context,
         }
