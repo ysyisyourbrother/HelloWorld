@@ -60,14 +60,14 @@ class SymphonySystemBenchV6(SymphonySystemBenchV5):
             self.frame_vectorizer = None
 
     def _call_agentic_retrieve_and_answer(
-        self, question: str, options: List[str]
+        self, question: str, options: List[str], question_id: str = ""
     ) -> Optional[Dict[str, Any]]:
         sm = int(self.config.system_mode)
         if not system_mode_wants_any_plan_retrieval(sm):
             return None
         if system_mode_wants_new_plan(sm):
             return self.memory_manager.agentic_retrieve_and_answer_pipeline(
-                question, options=options
+                question, options=options, question_id=question_id
             )
         plan_path = self.memory_manager._resolve_plan_json_path()
         if plan_path and os.path.isfile(plan_path):
@@ -75,6 +75,7 @@ class SymphonySystemBenchV6(SymphonySystemBenchV5):
                 self.memory_manager.agentic_retrieve_and_answer_pipeline_with_existing_plan(
                     question,
                     options=options,
+                    question_id=question_id,
                     existing_plan_json_path=plan_path,
                 )
             )
@@ -116,7 +117,9 @@ class SymphonySystemBenchV6(SymphonySystemBenchV5):
                 "total_time_sec": time.time() - t0,
             }
 
-        retrieve_pack = self._call_agentic_retrieve_and_answer(question, options)
+        retrieve_pack = self._call_agentic_retrieve_and_answer(
+            question, options, question_id=str(sample_id)
+        )
         if retrieve_pack and retrieve_pack.get("agent_failed"):
             phase = str(retrieve_pack.get("failure_phase") or "unknown")
             return {

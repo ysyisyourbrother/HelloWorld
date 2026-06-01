@@ -869,7 +869,7 @@ class MemoryAgentV6(MemoryManagerBase):
             if not option_list:
                 option_list = None
 
-        token_usage = self.agentic_retriever.get_token_usage()
+        token_usage = self._get_session_token_usage()
         run_record: Dict[str, Any] = {
             "agent_failed": True,
             "failure_phase": str(failure_phase),
@@ -1138,24 +1138,62 @@ class MemoryAgentV6(MemoryManagerBase):
             return "%d句字幕" % subtitle_count
         return "无证据"
 
+    def _token_tag(self, prompt_tokens: int, completion_tokens: int) -> str:
+        return "(%d; %d)" % (int(prompt_tokens), int(completion_tokens))
+
+    def _begin_session_token_accounting(self) -> None:
+        self._session_prompt_tokens = 0
+        self._session_completion_tokens = 0
+
+    def _take_step_tokens(self) -> Tuple[int, int]:
+        usage = self.agentic_retriever.get_token_usage()
+        prompt_tokens = int(usage["prompt_tokens"])
+        completion_tokens = int(usage["completion_tokens"])
+        self._session_prompt_tokens += prompt_tokens
+        self._session_completion_tokens += completion_tokens
+        self.agentic_retriever.reset_token_usage()
+        return prompt_tokens, completion_tokens
+
+    def _get_session_token_usage(self) -> Dict[str, int]:
+        usage = self.agentic_retriever.get_token_usage()
+        return {
+            "prompt_tokens": self._session_prompt_tokens + int(usage["prompt_tokens"]),
+            "completion_tokens": self._session_completion_tokens
+            + int(usage["completion_tokens"]),
+        }
+
+    def _log_question_start(self, question_id: str) -> None:
+        label = str(question_id or "").strip() or "?"
+        self.logger.info("Question %s", label)
+
     def _log_plan_received(
-        self, steps: Sequence[str], reused: bool = False
+        self,
+        steps: Sequence[str],
+        reused: bool = False,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
     ) -> None:
         flow = self._format_plan_flow_brief(steps)
+        tag = self._token_tag(prompt_tokens, completion_tokens)
         if reused:
-            self.logger.info("Plan(复用): %s", flow)
+            self.logger.info("Plan(复用)%s: %s", tag, flow)
         else:
-            self.logger.info("Plan: %s", flow)
+            self.logger.info("Plan%s: %s", tag, flow)
 
     def _log_scope_step(
         self,
         is_replan: bool,
         tool_name: Optional[str],
         arguments: Dict[str, Any],
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
     ) -> None:
         prefix = "Replan Scope" if is_replan else "Scope"
         self.logger.info(
-            "%s: %s", prefix, self._describe_scope_tool(tool_name, arguments)
+            "%s%s: %s",
+            prefix,
+            self._token_tag(prompt_tokens, completion_tokens),
+            self._describe_scope_tool(tool_name, arguments),
         )
 
     def _log_search_step(
@@ -1164,16 +1202,20 @@ class MemoryAgentV6(MemoryManagerBase):
         tool_name: Optional[str],
         frame_part: Sequence[Dict[str, Any]],
         subtitle_part: Sequence[Dict[str, Any]],
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
     ) -> None:
         prefix = "Replan Search" if is_replan else "Search"
+        tag = self._token_tag(prompt_tokens, completion_tokens)
         frame_count = len(frame_part) if frame_part else 0
         subtitle_count = self._count_subtitle_sentences(subtitle_part)
         if tool_name == "_get_all_subtitles":
-            self.logger.info("%s: 全量字幕 %d句", prefix, subtitle_count)
+            self.logger.info("%s%s: 全量字幕 %d句", prefix, tag, subtitle_count)
             return
         self.logger.info(
-            "%s: %s",
+            "%s%s: %s",
             prefix,
+            tag,
             self._describe_search_result(frame_count, subtitle_count),
         )
 
@@ -1183,37 +1225,30 @@ class MemoryAgentV6(MemoryManagerBase):
         parsed_response: Dict[str, Any],
         loop_round: int = 0,
         phase: str = "",
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
     ) -> None:
         outcome = str(parsed_response.get("outcome") or "")
         round_text = "第%d轮 " % loop_round if loop_round > 0 else ""
         phase_text = phase + " " if phase else ""
+        body_prefix = "%s%sbudget=%d 选择" % (phase_text, round_text, budget)
         if outcome == "answer":
             letter = str(parsed_response.get("answer_letter") or "").strip() or "?"
+            tag = self._token_tag(prompt_tokens, completion_tokens)
             self.logger.info(
-                "%s%sbudget=%d 选择 Answer %s",
-                phase_text,
-                round_text,
-                budget,
-                letter,
+                "Answer%s: %s Answer %s", tag, body_prefix, letter
             )
             return
         if outcome == "replan":
             replan_steps = parsed_response.get("replan_steps") or []
             flow = self._format_plan_flow_brief(replan_steps)
+            tag = self._token_tag(prompt_tokens, completion_tokens)
             self.logger.info(
-                "%s%sbudget=%d 选择 Replan %s",
-                phase_text,
-                round_text,
-                budget,
-                flow,
+                "Replan%s: %s Replan %s", tag, body_prefix, flow
             )
             return
-        self.logger.info(
-            "%s%sbudget=%d 选择未识别",
-            phase_text,
-            round_text,
-            budget,
-        )
+        tag = self._token_tag(prompt_tokens, completion_tokens)
+        self.logger.info("Answer%s: %s未识别", tag, body_prefix)
 
     def _extract_answer_text(self, text: str) -> str:
         match = re.search(r"\[Answer\]\s*(.+)", str(text or ""), flags=re.IGNORECASE | re.DOTALL)
@@ -1420,6 +1455,8 @@ class MemoryAgentV6(MemoryManagerBase):
         arguments: Dict[str, Any] = {}
         assistant_msg: Dict[str, Any] = {}
         parse_source = "none"
+        step_prompt_tokens = 0
+        step_completion_tokens = 0
 
         if is_replan or scope_index == 0:
             if is_replan:
@@ -1444,6 +1481,7 @@ class MemoryAgentV6(MemoryManagerBase):
             tool_name, arguments, assistant_msg = self._resolve_tool_via_cloud(
                 prompt_tpl, tools, user_query, duration, step_text
             )
+            step_prompt_tokens, step_completion_tokens = self._take_step_tokens()
             if tool_name:
                 parse_source = "cloud"
             elif assistant_msg.get("tool_calls"):
@@ -1465,7 +1503,13 @@ class MemoryAgentV6(MemoryManagerBase):
             "result": self._serialize_tool_result_for_plan(out if tool_name else None),
             "parse_source": parse_source,
         }
-        self._log_scope_step(is_replan, tool_name, dict(arguments) if arguments else {})
+        self._log_scope_step(
+            is_replan,
+            tool_name,
+            dict(arguments) if arguments else {},
+            step_prompt_tokens,
+            step_completion_tokens,
+        )
         return out.get("faiss_subset"), trace
 
     def _execute_search_step(
@@ -1482,6 +1526,8 @@ class MemoryAgentV6(MemoryManagerBase):
         arguments: Dict[str, Any] = {}
         assistant_msg: Dict[str, Any] = {}
         parse_source = "none"
+        step_prompt_tokens = 0
+        step_completion_tokens = 0
 
         if is_replan or search_index == 0:
             if is_replan:
@@ -1506,6 +1552,7 @@ class MemoryAgentV6(MemoryManagerBase):
             tool_name, arguments, assistant_msg = self._resolve_tool_via_cloud(
                 prompt_tpl, tools, user_query, duration, step_text
             )
+            step_prompt_tokens, step_completion_tokens = self._take_step_tokens()
             if tool_name:
                 parse_source = "cloud"
             elif assistant_msg.get("tool_calls"):
@@ -1528,7 +1575,14 @@ class MemoryAgentV6(MemoryManagerBase):
             "result": self._serialize_tool_result_for_plan(out if tool_name else None),
             "parse_source": parse_source,
         }
-        self._log_search_step(is_replan, tool_name, frame_part, subtitle_part)
+        self._log_search_step(
+            is_replan,
+            tool_name,
+            frame_part,
+            subtitle_part,
+            step_prompt_tokens,
+            step_completion_tokens,
+        )
         return (
             frame_part,
             subtitle_part,
@@ -1589,10 +1643,15 @@ class MemoryAgentV6(MemoryManagerBase):
         return faiss_subset, ran_second_search
 
     def agentic_retrieve_and_answer_pipeline( # _with_existing_plan
-        self, user_query: str, options: Optional[Sequence[str]] = None
+        self,
+        user_query: str,
+        options: Optional[Sequence[str]] = None,
+        question_id: str = "",
     ) -> Dict[str, Any]:
         self._clear_retrieve_save_dir()
         self.agentic_retriever.reset_session()
+        self._begin_session_token_accounting()
+        self._log_question_start(question_id)
         with self.databasemap.acquire() as videos:
             if videos:
                 duration = float(videos[0].get("duration") or 0.0)
@@ -1634,6 +1693,7 @@ class MemoryAgentV6(MemoryManagerBase):
 
         self.agentic_retriever.append_user(plan_prompt)
         plan_text = self.agentic_retriever.generate(reset=False)
+        plan_prompt_tokens, plan_completion_tokens = self._take_step_tokens()
         self.logger.debug(f"云端大模型返回的检索计划：{plan_text}")
         steps, plan_parse_ok = self._extract_step_list(plan_text)
         if not plan_parse_ok:
@@ -1653,7 +1713,9 @@ class MemoryAgentV6(MemoryManagerBase):
             )
         if not str(steps[0]).startswith("[Scope]"):
             steps = ["[Scope] Pay attention to the entire video"] + steps
-        self._log_plan_received(steps)
+        self._log_plan_received(
+            steps, prompt_tokens=plan_prompt_tokens, completion_tokens=plan_completion_tokens
+        )
 
         faiss_subset: Optional[FaissSubset] = None
         frame_results: List[Dict[str, Any]] = []
@@ -1724,9 +1786,14 @@ class MemoryAgentV6(MemoryManagerBase):
             image_paths = self._frame_results_to_image_paths(new_frame_results)
             self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
             answer_or_replan = self.agentic_retriever.generate(reset=False)
+            answer_prompt_tokens, answer_completion_tokens = self._take_step_tokens()
             parsed_response = self._split_answer_or_replan_response(answer_or_replan)
             self._log_model_decision(
-                budget_at_start, parsed_response, loop_round=loop_round
+                budget_at_start,
+                parsed_response,
+                loop_round=loop_round,
+                prompt_tokens=answer_prompt_tokens,
+                completion_tokens=answer_completion_tokens,
             )
 
             round_record: Dict[str, Any] = {
@@ -1857,9 +1924,14 @@ class MemoryAgentV6(MemoryManagerBase):
             image_paths = self._frame_results_to_image_paths(new_frame_results)
             self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
             answer_now_text = self.agentic_retriever.generate(reset=False)
+            answer_now_prompt_tokens, answer_now_completion_tokens = self._take_step_tokens()
             parsed_final = self._split_answer_or_replan_response(answer_now_text)
             self._log_model_decision(
-                int(self.replan_budget), parsed_final, phase="AnswerNow"
+                int(self.replan_budget),
+                parsed_final,
+                phase="AnswerNow",
+                prompt_tokens=answer_now_prompt_tokens,
+                completion_tokens=answer_now_completion_tokens,
             )
             final_answer = parsed_final["answer_letter"] or self._extract_answer_text(
                 answer_now_text
@@ -1875,7 +1947,7 @@ class MemoryAgentV6(MemoryManagerBase):
             if not option_list:
                 option_list = None
 
-        token_usage = self.agentic_retriever.get_token_usage()
+        token_usage = self._get_session_token_usage()
 
         run_record: Dict[str, Any] = {
             "question": user_query,
@@ -1925,6 +1997,7 @@ class MemoryAgentV6(MemoryManagerBase):
         self,
         user_query: str,
         options: Optional[Sequence[str]] = None,
+        question_id: str = "",
         *,
         existing_plan_json_path: str,
     ) -> Dict[str, Any]:
@@ -1932,6 +2005,8 @@ class MemoryAgentV6(MemoryManagerBase):
         agentic_retrieve_and_answer_pipeline without cloud planning or plan trace writes."""
         self._clear_retrieve_save_dir()
         self.agentic_retriever.reset_session()
+        self._begin_session_token_accounting()
+        self._log_question_start(question_id)
         path = str(existing_plan_json_path or "").strip()
         if not path:
             raise ValueError("existing_plan_json_path 为空")
@@ -2092,9 +2167,14 @@ class MemoryAgentV6(MemoryManagerBase):
             image_paths = self._frame_results_to_image_paths(new_frame_results)
             self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
             answer_or_replan = self.agentic_retriever.generate(reset=False)
+            answer_prompt_tokens, answer_completion_tokens = self._take_step_tokens()
             parsed_response = self._split_answer_or_replan_response(answer_or_replan)
             self._log_model_decision(
-                budget_at_start, parsed_response, loop_round=loop_round
+                budget_at_start,
+                parsed_response,
+                loop_round=loop_round,
+                prompt_tokens=answer_prompt_tokens,
+                completion_tokens=answer_completion_tokens,
             )
 
             round_record: Dict[str, Any] = {
@@ -2127,7 +2207,7 @@ class MemoryAgentV6(MemoryManagerBase):
 
             if parsed_response["outcome"] == "replan":
                 if not parsed_response.get("replan_parse_ok"):
-                    token_usage = self.agentic_retriever.get_token_usage()
+                    token_usage = self._get_session_token_usage()
                     return {
                         "agent_failed": True,
                         "failure_phase": "replan",
@@ -2216,9 +2296,14 @@ class MemoryAgentV6(MemoryManagerBase):
             image_paths = self._frame_results_to_image_paths(new_frame_results)
             self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
             answer_now_text = self.agentic_retriever.generate(reset=False)
+            answer_now_prompt_tokens, answer_now_completion_tokens = self._take_step_tokens()
             parsed_final = self._split_answer_or_replan_response(answer_now_text)
             self._log_model_decision(
-                int(self.replan_budget), parsed_final, phase="AnswerNow"
+                int(self.replan_budget),
+                parsed_final,
+                phase="AnswerNow",
+                prompt_tokens=answer_now_prompt_tokens,
+                completion_tokens=answer_now_completion_tokens,
             )
             final_answer = parsed_final["answer_letter"] or self._extract_answer_text(
                 answer_now_text
@@ -2228,7 +2313,7 @@ class MemoryAgentV6(MemoryManagerBase):
             new_frame_results, new_subtitle_results
         )
 
-        token_usage = self.agentic_retriever.get_token_usage()
+        token_usage = self._get_session_token_usage()
 
         return {
             "final_answer": final_answer,
