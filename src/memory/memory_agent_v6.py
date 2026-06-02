@@ -23,6 +23,8 @@ from src.agent.prompts_for_symphony_v6 import (
     prompt_search_funccall_1,
     prompt_search_funccall_2,
 )
+from openai import BadRequestError
+
 from src.config import Config
 from src.llm.reasoner import AgenticMultimodalRetrieverAPI
 from src.memory.local_plan_parser import LocalPlanParser
@@ -606,9 +608,9 @@ class MemoryAgentV6(MemoryManagerBase):
     ) -> List[Dict[str, Any]]:
         start_t, end_t = self._subset_to_time_range(faiss_subset)
         if start_t is None or end_t is None:
-            return []
-
-        rows = self.retrieve_segment_by_period(start_t=start_t, end_t=end_t)
+            rows = self._get_all_subtitles(faiss_subset=None)
+        else:
+            rows = self.retrieve_segment_by_period(start_t=start_t, end_t=end_t)
         if not rows:
             return []
 
@@ -1375,7 +1377,9 @@ class MemoryAgentV6(MemoryManagerBase):
             search_plan_step=plan_step,
         )
         self.agentic_retriever.append_user(prompt)
-        msg = self.agentic_retriever.generate_with_tools(list(tools), reset=False)
+        msg = self.agentic_retriever.generate_with_tools(
+            list(tools), reset=False, enable_thinking=False
+        )
         tool_name, arguments = self._extract_tool_selection(msg)
         return tool_name, arguments, msg
 
@@ -1684,17 +1688,23 @@ class MemoryAgentV6(MemoryManagerBase):
         if is_long_video and has_excessive_subtitle:
             plan_variant = "long_with_srt"
             plan_prompt = prompt_generate_plan_with_faiss_and_srt_of_long_video.format(
-                video_duration=duration, question=user_query
+                video_duration=duration,
+                question=user_query,
+                options_text=options_text,
             )
         elif is_long_video:
             plan_variant = "long_faiss_only"
             plan_prompt = prompt_generate_plan_with_faiss_of_long_video.format(
-                video_duration=duration, question=user_query
+                video_duration=duration,
+                question=user_query,
+                options_text=options_text,
             )
         else:
             plan_variant = "short"
             plan_prompt = prompt_generate_plan_with_faiss_of_short_video.format(
-                video_duration=duration, question=user_query
+                video_duration=duration,
+                question=user_query,
+                options_text=options_text,
             )
 
         self.agentic_retriever.append_user(plan_prompt)
@@ -1793,8 +1803,33 @@ class MemoryAgentV6(MemoryManagerBase):
                 retrieval_context=retrieval_context,
             )
             image_paths = self._frame_results_to_image_paths(new_frame_results)
-            self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
-            answer_or_replan = self.agentic_retriever.generate(reset=False)
+            try:
+                self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
+                answer_or_replan = self.agentic_retriever.generate(reset=False)
+            except BadRequestError as exc:
+                return self._agent_failure_return(
+                    user_query,
+                    options,
+                    duration,
+                    "image_upload",
+                    str(exc),
+                    run_extra={
+                        "planning": {
+                            "steps": steps,
+                            "prompt_variant": plan_variant,
+                            "parse_ok": True,
+                            "thinking": plan_thinking,
+                            "raw": plan_text,
+                        },
+                        "replan_budget": {
+                            "initial": initial_replan_budget,
+                            "final": int(self.replan_budget),
+                            "log": replan_budget_log,
+                        },
+                        "tool_calls": tool_traces,
+                        "answer_loop": answer_loop_records,
+                    },
+                )
             answer_thinking = self.agentic_retriever.get_last_thinking()
             answer_prompt_tokens, answer_completion_tokens = self._take_step_tokens()
             parsed_response = self._split_answer_or_replan_response(answer_or_replan)
@@ -1936,8 +1971,33 @@ class MemoryAgentV6(MemoryManagerBase):
                 retrieval_context=retrieval_context,
             )
             image_paths = self._frame_results_to_image_paths(new_frame_results)
-            self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
-            answer_now_text = self.agentic_retriever.generate(reset=False)
+            try:
+                self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
+                answer_now_text = self.agentic_retriever.generate(reset=False)
+            except BadRequestError as exc:
+                return self._agent_failure_return(
+                    user_query,
+                    options,
+                    duration,
+                    "image_upload",
+                    str(exc),
+                    run_extra={
+                        "planning": {
+                            "steps": steps,
+                            "prompt_variant": plan_variant,
+                            "parse_ok": True,
+                            "thinking": plan_thinking,
+                            "raw": plan_text,
+                        },
+                        "replan_budget": {
+                            "initial": initial_replan_budget,
+                            "final": int(self.replan_budget),
+                            "log": replan_budget_log,
+                        },
+                        "tool_calls": tool_traces,
+                        "answer_loop": answer_loop_records,
+                    },
+                )
             answer_now_thinking = self.agentic_retriever.get_last_thinking()
             answer_now_prompt_tokens, answer_now_completion_tokens = self._take_step_tokens()
             parsed_final = self._split_answer_or_replan_response(answer_now_text)
@@ -2194,8 +2254,27 @@ class MemoryAgentV6(MemoryManagerBase):
                 retrieval_context=retrieval_context,
             )
             image_paths = self._frame_results_to_image_paths(new_frame_results)
-            self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
-            answer_or_replan = self.agentic_retriever.generate(reset=False)
+            try:
+                self.agentic_retriever.append_user(answer_prompt, image_paths=image_paths)
+                answer_or_replan = self.agentic_retriever.generate(reset=False)
+            except BadRequestError as exc:
+                token_usage = self._get_session_token_usage()
+                return {
+                    "agent_failed": True,
+                    "failure_phase": "image_upload",
+                    "final_answer": "",
+                    "frame_results": frame_results,
+                    "subtitle_results": subtitle_results,
+                    "retrieval_context": retrieval_context,
+                    "tool_traces": [],
+                    "plan_steps": plan_steps,
+                    "answer_loop": answer_loop_records,
+                    "replan_budget_log": replan_budget_log,
+                    "existing_plan_json_path": path,
+                    "failure_raw": str(exc),
+                    "prompt_tokens": token_usage["prompt_tokens"],
+                    "completion_tokens": token_usage["completion_tokens"],
+                }
             answer_prompt_tokens, answer_completion_tokens = self._take_step_tokens()
             parsed_response = self._split_answer_or_replan_response(answer_or_replan)
             self._log_model_decision(
@@ -2323,8 +2402,27 @@ class MemoryAgentV6(MemoryManagerBase):
                 retrieval_context=retrieval_context,
             )
             image_paths = self._frame_results_to_image_paths(new_frame_results)
-            self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
-            answer_now_text = self.agentic_retriever.generate(reset=False)
+            try:
+                self.agentic_retriever.append_user(answer_now_prompt, image_paths=image_paths)
+                answer_now_text = self.agentic_retriever.generate(reset=False)
+            except BadRequestError as exc:
+                token_usage = self._get_session_token_usage()
+                return {
+                    "agent_failed": True,
+                    "failure_phase": "image_upload",
+                    "final_answer": "",
+                    "frame_results": frame_results,
+                    "subtitle_results": subtitle_results,
+                    "retrieval_context": retrieval_context,
+                    "tool_traces": [],
+                    "plan_steps": plan_steps,
+                    "answer_loop": answer_loop_records,
+                    "replan_budget_log": replan_budget_log,
+                    "existing_plan_json_path": path,
+                    "failure_raw": str(exc),
+                    "prompt_tokens": token_usage["prompt_tokens"],
+                    "completion_tokens": token_usage["completion_tokens"],
+                }
             answer_now_prompt_tokens, answer_now_completion_tokens = self._take_step_tokens()
             parsed_final = self._split_answer_or_replan_response(answer_now_text)
             self._log_model_decision(

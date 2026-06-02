@@ -25,6 +25,8 @@ _RE_FROM_TO = re.compile(
 )
 _RE_UNIFORM_SAMPLE = re.compile(r"\b(uniform(?:ly)?|sample(?:d|s)?)\b", re.IGNORECASE)
 _RE_SUBTITLE_SCOPE = re.compile(r"\b(within|scope)\b", re.IGNORECASE)
+_RE_CONTENT_ABOUT = re.compile(r"\bcontent about\b", re.IGNORECASE)
+_DEFAULT_EVENT_SCOPE = [-60, 60]
 
 
 class LocalPlanParser:
@@ -85,10 +87,63 @@ class LocalPlanParser:
         return start_t, end_t
 
     @staticmethod
+    def _extract_content_about_event(text: str) -> Optional[str]:
+        text = str(text or "")
+        match = _RE_CONTENT_ABOUT.search(text)
+        if match is None:
+            return None
+        tail = str(text[match.end() :]).strip()
+        if not tail:
+            return None
+        pairs = (
+            ("'", "'"),
+            ('"', '"'),
+            ("\u2018", "\u2019"),
+            ("\u201c", "\u201d"),
+        )
+        opener = tail[0]
+        closer = None
+        for open_ch, close_ch in pairs:
+            if opener == open_ch:
+                closer = close_ch
+                break
+        if closer is None:
+            return None
+        if opener in ("'", "\u2018"):
+            body = tail[1:]
+            close_idx = body.rfind(closer)
+            if close_idx < 0:
+                return None
+            phrase = body[:close_idx].strip()
+        else:
+            close_idx = tail.find(closer, 1)
+            if close_idx < 0:
+                return None
+            phrase = tail[1:close_idx].strip()
+        return phrase or None
+
+    @staticmethod
+    def _try_parse_scope_event(step_text: str) -> ToolSelection:
+        text = str(step_text or "")
+        if _RE_CONTENT_ABOUT.search(text) is None:
+            return LocalPlanParser._empty()
+        event = LocalPlanParser._extract_content_about_event(text)
+        if not event:
+            return LocalPlanParser._empty()
+        return (
+            "_get_subset_by_event_frame",
+            {"event": event, "scope": list(_DEFAULT_EVENT_SCOPE)},
+        )
+
+    @staticmethod
     def _try_parse_scope_period(
         step_text: str, duration: float
     ) -> ToolSelection:
         text = str(step_text or "")
+        event_tool = LocalPlanParser._try_parse_scope_event(step_text)
+        if event_tool[0]:
+            return event_tool
+
         if LocalPlanParser.has_any_quote(text):
             return LocalPlanParser._empty()
 
@@ -185,6 +240,7 @@ class LocalPlanParser:
 if __name__ == "__main__":
     scope_plan1 = "[Scope] Pay attention to the entire video content."
     scope_plan2 = "[Scope] Pay attention to the content from 20 to 30 second."
+    scope_plan3 = "[Scope] Pay attention to the content about 'Whitehead's first motorized flight'."
     search_plan1 = "[Search] Uniformly sample frames within this scope."
     search_plan2 = "[Search] Get subtitles related to 'sponsored', 'competition', 'presented'."
     search_plan3 = "[Search] Get frames about 'white team jersey number 13'."
@@ -193,6 +249,7 @@ if __name__ == "__main__":
     print("*"*6+"Origin"+"*"*6)
     print(scope_plan1)
     print(scope_plan2)
+    print(scope_plan3)
     print(search_plan1)
     print(search_plan2)
     print(search_plan3)
@@ -200,6 +257,7 @@ if __name__ == "__main__":
     print("*"*6+"After Parse"+"*"*6)
     print(LocalPlanParser.try_parse_scope1_locally(scope_plan1, 1120.6))
     print(LocalPlanParser.try_parse_scope1_locally(scope_plan2, 1120.6))
+    print(LocalPlanParser.try_parse_scope1_locally(scope_plan3, 3169.0))
     print(LocalPlanParser.try_parse_search1_locally(search_plan1))
     print(LocalPlanParser.try_parse_search2_locally(search_plan2))
     print(LocalPlanParser.try_parse_search1_locally(search_plan3))

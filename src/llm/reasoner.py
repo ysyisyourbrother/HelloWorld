@@ -675,7 +675,10 @@ class ReasonerLLMAPI(BaseChatSession):
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=self.messages,
-            extra_body={"enable_thinking": enable_thinking},
+            extra_body={
+                "enable_thinking": enable_thinking,
+                "thinking_budget": 4096
+                },
         )
         self._accumulate_usage_from_response(resp)
         completion_message = resp.choices[0].message
@@ -700,7 +703,10 @@ class ReasonerLLMAPI(BaseChatSession):
             model=self._model,
             messages=self.messages,
             tools=tools,
-            extra_body={"enable_thinking": enable_thinking},
+            extra_body={
+                "enable_thinking": enable_thinking,
+                "thinking_budget": 4096
+                },
         )
         self._accumulate_usage_from_response(resp)
         completion_message = resp.choices[0].message
@@ -781,7 +787,10 @@ class ReasonerVLMAPI(BaseChatSession):
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=self._messages_for_api(),
-            extra_body={"enable_thinking": enable_thinking},
+            extra_body={
+                "enable_thinking": enable_thinking,
+                "thinking_budget": 4096
+                },
         )
         self._accumulate_usage_from_response(resp)
         completion_message = resp.choices[0].message
@@ -804,7 +813,10 @@ class ReasonerVLMAPI(BaseChatSession):
             model=self._model,
             messages=self._messages_for_api(),
             tools=tools,
-            extra_body={"enable_thinking": enable_thinking},
+            extra_body={
+                "enable_thinking": enable_thinking,
+                "thinking_budget": 4096
+                },
         )
         self._accumulate_usage_from_response(resp)
         completion_message = resp.choices[0].message
